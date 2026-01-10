@@ -1,0 +1,22 @@
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.Python
+env/
+venv/
+.env
+.venv
+*.log
+.mypy_cache
+.pytest_cache
+.ipynb_checkpoints
+# Project specific large directories
+cpu_out*/
+cpu_pools*/
+*_logs/
+modal_logs/
+hf_upload_logs/
+training_logs/
+cpu_logs/
+reports/
