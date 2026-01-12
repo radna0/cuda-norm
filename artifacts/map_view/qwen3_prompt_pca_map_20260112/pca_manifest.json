@@ -1,0 +1,24 @@
+{
+  "dim": 256,
+  "eigenvalues": [
+    11527.6630859375,
+    7228.8330078125,
+    4744.0615234375,
+    4104.6220703125,
+    3518.897705078125,
+    2983.84228515625,
+    2586.081298828125,
+    2419.52587890625
+  ],
+  "eigenvalues_sum": 149900.7437505722,
+  "elapsed_s": 0.45149755477905273,
+  "faiss_threads": 180,
+  "filter_mix_group": "",
+  "generated_at": "2026-01-12 21:21:13 +0000",
+  "in_dir": "/dev/shm/hf_qwen3_prompt_embed_20260112/runs/qwen3_bf16_prompt_dp8_trtllm_mha_kvbf16_m1024_bs1024_2m_20260112",
+  "max_samples": 200000,
+  "out_dir": "artifacts/map_view/qwen3_prompt_pca_map_20260112",
+  "out_parquet": "artifacts/map_view/qwen3_prompt_pca_map_20260112/pca_2d_sample.parquet",
+  "rows": 200000,
+  "sample_per_file": 25000
+}

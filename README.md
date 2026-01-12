@@ -102,6 +102,52 @@ Scans normalized output and organizes it into semantic pools for downstream task
 
 The Modal scripts consume the artifacts produced by the CPU pipeline.
 
+### Embedding-Based Curation (Qwen3 + SGLang)
+
+For conversion calibration and coverage-driven filtering (agentic/tool-calling + deep reasoning), embeddings are often a better first pass than full NLL scoring.
+
+This repo includes:
+- `cpu_make_embedding_candidates.py`: CPU-side extraction of embedding views from Harmony `text` (writes Parquet with `id` + `embed_text` + metadata).
+- `cpu_analyze_behavior_signatures.py`: cheap CPU sanity checks to ensure the behavior view is not collapsed (tool-call coverage + uniqueness).
+- `modal/qwen_embedding_sglang_scoring.py`: GPU embedding job using SGLang `Engine.encode()` (supports TRTLLM/FlashInfer backends and strict fail-fast on NaNs).
+
+Recommended workflow:
+
+```bash
+# 1) Build behavior-view candidates (agentic/tool signature)
+python cpu_make_embedding_candidates.py \
+  --in_dir cpu_out/<dataset_tag> \
+  --out_dir cpu_candidates_behavior \
+  --view behavior \
+  --require_valid_harmony --require_completion_nonempty
+
+# 2) Verify behavior signatures are diverse (sample-based scan)
+python cpu_analyze_behavior_signatures.py --in_dir cpu_candidates_behavior --max_rows 200000
+
+# 3) Run embeddings on Modal (set CANDIDATE_DATASET_ID / OUT_DATASET_ID, etc.)
+modal run modal/qwen_embedding_sglang_scoring.py
+```
+
+Notes:
+- Hugging Face uploads are private-by-default in `upload_folder_to_hf_dataset_repo.sh` / `upload_folder_to_hf_model_repo.sh`. Pass `--public` to override.
+- For dev, you can skip HF entirely by mounting local candidate Parquet into Modal:
+  set `CANDIDATE_LOCAL_DIR=/path/to/candidates` before `modal run`, and leave `CANDIDATE_DATASET_ID` unset.
+
+### Parallel Modal Runs (Max 4)
+
+To run multiple Modal CLI jobs concurrently (and always capture a per-run `.log`), use `run_modal_parallel.sh`:
+
+```bash
+cat > modal_cmds.txt <<'EOF'
+# Optional tags: <tag>: <command>
+embed_shard00: modal run modal/qwen_embedding_sglang_scoring.py
+embed_shard01: modal run modal/qwen_embedding_sglang_scoring.py
+EOF
+
+MAX_PARALLEL=4 ./run_modal_parallel.sh modal_cmds.txt
+ls -la modal_parallel_logs/
+```
+
 ### Training Benchmark
 Run a distributed training benchmark (FSDP + Unsloth) on the processed data.
 

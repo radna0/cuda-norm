@@ -1,0 +1,7 @@
+{
+  "base_model": "openai/gpt-oss-20b",
+  "variants": {
+    "general_50pct_experts": "/root/model/artifacts/20b_pruned_models/general_50pct_experts",
+    "math_25pct_experts": "/root/model/artifacts/20b_pruned_models/math_25pct_experts"
+  }
+}

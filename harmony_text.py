@@ -1,9 +1,10 @@
 from __future__ import annotations
 
 import json
+import re
 from dataclasses import dataclass
 from hashlib import sha1
-from typing import Any, Iterable
+from typing import Any, Iterable, Iterator
 
 
 START_TAG = "<|start|>"
@@ -223,3 +224,254 @@ def basic_quality_flags_from_text(
         "num_messages": len(msgs),
         "num_assistant_messages": len(assistant_msgs),
     }
+
+
+def iter_messages_by_role(
+    messages: list[HarmonyMessage], *, role: str
+) -> Iterator[HarmonyMessage]:
+    role = role.strip()
+    for m in messages:
+        if m.role == role:
+            yield m
+
+
+def extract_user_prompt_text(text: str) -> str:
+    """Extract a prompt-only text view for embedding/clustering.
+
+    Default policy: include only user messages (no system/developer/tool/assistant) to avoid
+    generic system prompts dominating embeddings and causing truncation.
+    """
+    parts: list[str] = []
+    try:
+        msgs = parse_harmony(text)
+    except Exception:
+        return ""
+    for m in msgs:
+        if m.role == "user":
+            s = m.content.strip()
+            if s:
+                parts.append(s)
+    return "\n\n".join(parts).strip()
+
+
+_ANSWER_TYPE_NUM_RE = re.compile(r"^\s*[-+]?\d+(?:\.\d+)?\s*$")
+
+
+def infer_answer_type(text: str) -> str:
+    s = (text or "").strip()
+    if not s:
+        return "empty"
+    if "\\boxed" in s:
+        return "boxed"
+    if "```" in s:
+        return "code"
+    if _ANSWER_TYPE_NUM_RE.match(s):
+        return "numeric"
+    if s.startswith("{") or s.startswith("["):
+        try:
+            json.loads(s)
+            return "json"
+        except Exception:
+            pass
+    return "text"
+
+
+def _maybe_json_load(s: str, *, max_chars: int = 50_000) -> Any | None:
+    if not isinstance(s, str):
+        return None
+    t = s.strip()
+    if not t:
+        return None
+    if len(t) > max_chars:
+        return None
+    if not (t.startswith("{") or t.startswith("[")):
+        return None
+    try:
+        return json.loads(t)
+    except Exception:
+        return None
+
+
+def _extract_tool_names_from_obj(obj: Any) -> list[str]:
+    names: list[str] = []
+    if isinstance(obj, dict):
+        # Common patterns.
+        for k in ("tool_name", "name", "tool", "function_name"):
+            v = obj.get(k)
+            if isinstance(v, str) and v.strip():
+                names.append(v.strip())
+                break
+        fn = obj.get("function")
+        if isinstance(fn, dict):
+            v = fn.get("name")
+            if isinstance(v, str) and v.strip():
+                names.append(v.strip())
+        # Search nested call containers.
+        for k in ("tool_calls", "calls", "call", "function_call", "tool_call"):
+            v = obj.get(k)
+            if isinstance(v, (list, dict)):
+                names.extend(_extract_tool_names_from_obj(v))
+    elif isinstance(obj, list):
+        for item in obj:
+            names.extend(_extract_tool_names_from_obj(item))
+    return names
+
+
+def _extract_tool_arg_keys_from_obj(obj: Any) -> list[str]:
+    keys: set[str] = set()
+
+    def add_from_args(args_obj: Any) -> None:
+        if isinstance(args_obj, dict):
+            for k in args_obj.keys():
+                if isinstance(k, str) and k.strip():
+                    keys.add(k.strip())
+        elif isinstance(args_obj, str):
+            parsed = _maybe_json_load(args_obj, max_chars=10_000)
+            if isinstance(parsed, dict):
+                add_from_args(parsed)
+
+    if isinstance(obj, dict):
+        if "arguments" in obj:
+            add_from_args(obj.get("arguments"))
+        fn = obj.get("function")
+        if isinstance(fn, dict) and "arguments" in fn:
+            add_from_args(fn.get("arguments"))
+        for k in ("tool_calls", "calls", "call", "function_call", "tool_call"):
+            v = obj.get(k)
+            if isinstance(v, (list, dict)):
+                keys.update(_extract_tool_arg_keys_from_obj(v))
+    elif isinstance(obj, list):
+        for item in obj:
+            keys.update(_extract_tool_arg_keys_from_obj(item))
+    return sorted(keys)
+
+
+def extract_tool_call_sequence(text: str) -> list[str]:
+    """Return a best-effort tool call name sequence in invocation order."""
+    try:
+        msgs = parse_harmony(text)
+    except Exception:
+        return []
+    return tool_call_sequence_from_messages(msgs)
+
+
+def extract_tool_output_role_sequence(text: str) -> list[str]:
+    """Return tool output roles (role field) in order, excluding generic roles."""
+    try:
+        msgs = parse_harmony(text)
+    except Exception:
+        return []
+    return tool_output_role_sequence_from_messages(msgs)
+
+
+def tool_call_sequence_from_messages(messages: list[HarmonyMessage]) -> list[str]:
+    seq: list[str] = []
+    for m in messages:
+        if m.end_tag != CALL_TAG:
+            continue
+        obj = _maybe_json_load(m.content, max_chars=20_000)
+        if obj is None:
+            continue
+        for name in _extract_tool_names_from_obj(obj):
+            if name:
+                seq.append(name)
+    return seq
+
+
+def tool_output_role_sequence_from_messages(messages: list[HarmonyMessage]) -> list[str]:
+    seq: list[str] = []
+    for m in messages:
+        role = m.role.strip()
+        if not role:
+            continue
+        if role in {"system", "developer", "user"} or role.startswith("assistant"):
+            continue
+        # Some datasets use role="tool"; some use role="<tool_name>".
+        if role == "tool":
+            obj = _maybe_json_load(m.content, max_chars=20_000)
+            if obj is not None:
+                names = _extract_tool_names_from_obj(obj)
+                if names:
+                    seq.append(names[0])
+                    continue
+        seq.append(role)
+    return seq
+
+
+def tool_output_keysets_from_messages(
+    messages: list[HarmonyMessage], *, max_keys_per_msg: int = 16
+) -> list[str]:
+    """Return compact tool-output schema keysets for messages that look like tool outputs.
+
+    This is a fallback when tool identity is not present (e.g., role="tool" with JSON payload
+    that doesn't include a name). We only record *keys*, never values.
+    """
+    out: list[str] = []
+    for m in messages:
+        role = m.role.strip()
+        if not role:
+            continue
+        if role in {"system", "developer", "user"} or role.startswith("assistant"):
+            continue
+        obj = _maybe_json_load(m.content, max_chars=50_000)
+        if isinstance(obj, dict):
+            keys = [k for k in obj.keys() if isinstance(k, str) and k.strip()]
+            keys = sorted(keys)[:max_keys_per_msg]
+            out.append(",".join(keys) if keys else "dict_empty")
+        elif isinstance(obj, list):
+            out.append("list")
+        elif obj is None:
+            out.append("nonjson")
+        else:
+            out.append(type(obj).__name__)
+    return out
+
+
+def build_behavior_signature(text: str, *, max_tools: int = 16, max_arg_keys: int = 16) -> str:
+    """Build a compact, tool-aware behavior signature string for embedding.
+
+    This is intentionally *not* the full Harmony text. It aims to capture:
+    - tool identity + sequence (agentic behavior)
+    - argument schema (keys only; no payloads/tool outputs)
+    - conversation shape (assistant turns)
+    - final answer type
+    """
+    try:
+        msgs = parse_harmony(text)
+    except Exception:
+        return ""
+
+    tool_calls = tool_call_sequence_from_messages(msgs)[:max_tools]
+    tool_roles = tool_output_role_sequence_from_messages(msgs)[:max_tools]
+    tool_keysets = tool_output_keysets_from_messages(msgs)[:max_tools]
+
+    # Arg keys are extracted from CALL payloads only (cheap and avoids tool output pollution).
+    arg_keys: list[str] = []
+    for m in msgs:
+        if m.end_tag != CALL_TAG:
+            continue
+        obj = _maybe_json_load(m.content, max_chars=20_000)
+        if obj is None:
+            continue
+        arg_keys.extend(_extract_tool_arg_keys_from_obj(obj))
+        if len(arg_keys) >= max_arg_keys:
+            arg_keys = arg_keys[:max_arg_keys]
+            break
+
+    assistant_msgs = extract_assistant_messages(msgs)
+    assistant_turns = len(assistant_msgs)
+    assistant_chars = sum(len(m.content or "") for m in assistant_msgs)
+
+    final = last_assistant_final(msgs)
+    final_type = infer_answer_type(final.content if final else "")
+
+    parts: list[str] = []
+    parts.append(f"assistant_turns={assistant_turns}")
+    parts.append(f"assistant_chars={assistant_chars}")
+    parts.append(f"tool_call_count={len(tool_calls)}")
+    parts.append(f"tool_call_seq={'->'.join(tool_calls) if tool_calls else 'none'}")
+    parts.append(f"tool_output_roles={'->'.join(tool_roles) if tool_roles else 'none'}")
+    parts.append(f"tool_output_keysets={'|'.join(tool_keysets) if tool_keysets else 'none'}")
+    parts.append(f"tool_arg_keys={','.join(arg_keys) if arg_keys else 'none'}")
+    parts.append(f"final_type={final_type}")
+    return "\n".join(parts).strip()
