@@ -147,6 +147,12 @@ def main() -> None:
     )
     ap.add_argument("--in_dir", type=str, required=True, help="Directory containing embedding *.parquet")
     ap.add_argument("--out_dir", type=str, required=True)
+    ap.add_argument(
+        "--name",
+        type=str,
+        default="reasoning",
+        help="Output name prefix (e.g., reasoning, reasoning_style).",
+    )
     ap.add_argument("--target_k", type=int, default=10_000)
     ap.add_argument("--mix_group", type=str, default="reasoning")
     ap.add_argument("--bits", type=int, default=24, help="LSH bits (<=63). 20–32 recommended.")
@@ -589,10 +595,13 @@ def main() -> None:
     if len(selected_rows) != target_k:
         raise RuntimeError(f"selected {len(selected_rows)} rows, expected {target_k}")
 
-    out_parquet = out_dir / "reasoning_selected_meta.parquet"
+    name = (args.name or "reasoning").strip() or "reasoning"
+    safe_name = "".join(c if (c.isalnum() or c in {"_", "-"} ) else "_" for c in name)
+
+    out_parquet = out_dir / f"{safe_name}_selected_meta.parquet"
     pq.write_table(pa.Table.from_pylist(selected_rows), out_parquet, compression="zstd")
 
-    out_ids = out_dir / "reasoning_ids_10000.txt"
+    out_ids = out_dir / f"{safe_name}_ids_{target_k}.txt"
     out_ids.write_text("\n".join([r["id"] for r in selected_rows]) + "\n", encoding="utf-8")
 
     # Summaries.

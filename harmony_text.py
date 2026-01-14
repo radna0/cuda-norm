@@ -254,6 +254,50 @@ def extract_user_prompt_text(text: str) -> str:
     return "\n\n".join(parts).strip()
 
 
+def extract_assistant_reasoning_excerpt_text(
+    text: str, *, max_chars: int = 50_000, prefer_analysis: bool = True
+) -> str:
+    """Extract an assistant-only reasoning excerpt for embedding/clustering.
+
+    Goals:
+    - Capture "reasoning style" diversity without embedding full Harmony text.
+    - Exclude tool-call payloads (`<|call|>`) and tool outputs (role != assistant).
+    - Prefer assistant channel="analysis" when present, else fall back to assistant final/None.
+    """
+    try:
+        msgs = parse_harmony(text)
+    except Exception:
+        return ""
+
+    assistant_noncall: list[HarmonyMessage] = []
+    assistant_analysis: list[HarmonyMessage] = []
+    assistant_finalish: list[HarmonyMessage] = []
+    for m in msgs:
+        if not (m.role == "assistant" or m.role.startswith("assistant ")):
+            continue
+        if m.end_tag == CALL_TAG:
+            continue
+        content = (m.content or "").strip()
+        if not content:
+            continue
+        assistant_noncall.append(m)
+        if (m.channel or "").strip().lower() == "analysis":
+            assistant_analysis.append(m)
+        elif (m.channel or "").strip().lower() in {"final", ""} or m.channel is None:
+            assistant_finalish.append(m)
+
+    chosen = assistant_analysis if (prefer_analysis and assistant_analysis) else assistant_finalish
+    if not chosen:
+        chosen = assistant_noncall
+    if not chosen:
+        return ""
+
+    out = "\n\n".join((m.content or "").strip() for m in chosen if (m.content or "").strip()).strip()
+    if max_chars > 0 and len(out) > max_chars:
+        out = out[:max_chars].rstrip()
+    return out
+
+
 _ANSWER_TYPE_NUM_RE = re.compile(r"^\s*[-+]?\d+(?:\.\d+)?\s*$")
 
 
@@ -340,10 +384,114 @@ def _extract_tool_arg_keys_from_obj(obj: Any) -> list[str]:
             v = obj.get(k)
             if isinstance(v, (list, dict)):
                 keys.update(_extract_tool_arg_keys_from_obj(v))
+        # Some Harmony tool-call payloads are *just* a JSON args object (no nested "arguments").
+        # In that case, treat top-level keys as argument keys (we never record values).
+        if not keys and not any(
+            k in obj for k in ("tool_calls", "calls", "call", "function_call", "tool_call", "function")
+        ):
+            for k in obj.keys():
+                if isinstance(k, str) and k.strip():
+                    keys.add(k.strip())
     elif isinstance(obj, list):
         for item in obj:
             keys.update(_extract_tool_arg_keys_from_obj(item))
     return sorted(keys)
+
+
+def _iter_tool_call_dicts(obj: Any) -> list[dict[str, Any]]:
+    """Best-effort extraction of tool-call dicts in order."""
+    out: list[dict[str, Any]] = []
+    if isinstance(obj, dict):
+        # Most common: {"tool_calls": [ ... ]}.
+        v = obj.get("tool_calls")
+        if isinstance(v, list):
+            for item in v:
+                if isinstance(item, dict):
+                    out.append(item)
+        # Some variants: {"calls": [...]} or {"call": {...}}.
+        v = obj.get("calls")
+        if isinstance(v, list):
+            for item in v:
+                if isinstance(item, dict):
+                    out.append(item)
+        v = obj.get("call")
+        if isinstance(v, dict):
+            out.append(v)
+        # OpenAI-like: {"function_call": {...}}
+        v = obj.get("function_call")
+        if isinstance(v, dict):
+            out.append(v)
+        # Some single-call shapes are the dict itself.
+        if any(k in obj for k in ("tool_name", "tool", "name", "function", "function_name", "arguments")):
+            out.append(obj)
+    elif isinstance(obj, list):
+        for item in obj:
+            out.extend(_iter_tool_call_dicts(item))
+    return out
+
+
+def _tool_name_from_call_dict(d: dict[str, Any]) -> str:
+    for k in ("tool_name", "name", "tool", "function_name"):
+        v = d.get(k)
+        if isinstance(v, str) and v.strip():
+            return v.strip()
+    fn = d.get("function")
+    if isinstance(fn, dict):
+        v = fn.get("name")
+        if isinstance(v, str) and v.strip():
+            return v.strip()
+    return ""
+
+
+def _tool_name_from_assistant_role(role: str) -> str:
+    # Common Harmony pattern: role="assistant to=<tool_name>".
+    s = (role or "").strip()
+    m = re.match(r"^assistant\s+to=([^\s]+)", s)
+    if not m:
+        return ""
+    return m.group(1).strip()
+
+
+def _tool_arg_keys_from_call_dict(d: dict[str, Any], *, max_keys: int) -> list[str]:
+    keys = _extract_tool_arg_keys_from_obj(d)
+    if max_keys > 0:
+        keys = keys[:max_keys]
+    return keys
+
+
+def _classify_tool_return(content: str) -> str:
+    s = (content or "").strip()
+    if not s:
+        return "empty"
+    if "traceback" in s.lower() or "error" in s.lower() or "exception" in s.lower():
+        # Keep as 'error' even when it is JSON (common in tool errors).
+        return "error"
+    obj = _maybe_json_load(s, max_chars=50_000)
+    if obj is None:
+        return "ok"
+    if isinstance(obj, dict):
+        if not obj:
+            return "empty"
+        for k in ("error", "exception", "traceback", "stderr"):
+            if k in obj:
+                return "error"
+        return "ok"
+    if isinstance(obj, list):
+        return "empty" if len(obj) == 0 else "ok"
+    return "ok"
+
+
+def _tool_return_keyset(content: str, *, max_keys: int = 16) -> str:
+    obj = _maybe_json_load(content or "", max_chars=50_000)
+    if isinstance(obj, dict):
+        keys = [k for k in obj.keys() if isinstance(k, str) and k.strip()]
+        keys = sorted(keys)[:max_keys]
+        return ",".join(keys) if keys else "dict_empty"
+    if isinstance(obj, list):
+        return "list"
+    if obj is None:
+        return "nonjson"
+    return type(obj).__name__
 
 
 def extract_tool_call_sequence(text: str) -> list[str]:
@@ -372,9 +520,16 @@ def tool_call_sequence_from_messages(messages: list[HarmonyMessage]) -> list[str
         obj = _maybe_json_load(m.content, max_chars=20_000)
         if obj is None:
             continue
-        for name in _extract_tool_names_from_obj(obj):
-            if name:
-                seq.append(name)
+        calls = _iter_tool_call_dicts(obj)
+        if calls:
+            for d in calls:
+                name = _tool_name_from_call_dict(d)
+                if name:
+                    seq.append(name)
+        else:
+            for name in _extract_tool_names_from_obj(obj):
+                if name:
+                    seq.append(name)
     return seq
 
 
@@ -428,50 +583,154 @@ def tool_output_keysets_from_messages(
 
 
 def build_behavior_signature(text: str, *, max_tools: int = 16, max_arg_keys: int = 16) -> str:
-    """Build a compact, tool-aware behavior signature string for embedding.
+    """Build a compact, tool-aware behavior trace sketch string for embedding.
 
-    This is intentionally *not* the full Harmony text. It aims to capture:
-    - tool identity + sequence (agentic behavior)
-    - argument schema (keys only; no payloads/tool outputs)
-    - conversation shape (assistant turns)
-    - final answer type
+    This is intentionally *not* the full Harmony text. It aims to encode tool-policy shape
+    (sequence + schema keys + return status) without including raw tool payloads/outputs.
     """
     try:
         msgs = parse_harmony(text)
     except Exception:
         return ""
 
-    tool_calls = tool_call_sequence_from_messages(msgs)[:max_tools]
-    tool_roles = tool_output_role_sequence_from_messages(msgs)[:max_tools]
-    tool_keysets = tool_output_keysets_from_messages(msgs)[:max_tools]
-
-    # Arg keys are extracted from CALL payloads only (cheap and avoids tool output pollution).
-    arg_keys: list[str] = []
+    # Extract ordered tool calls with per-call arg keysets.
+    calls: list[tuple[str, list[str]]] = []
     for m in msgs:
         if m.end_tag != CALL_TAG:
             continue
+        role_tool = _tool_name_from_assistant_role(m.role)
         obj = _maybe_json_load(m.content, max_chars=20_000)
         if obj is None:
+            if role_tool:
+                calls.append((role_tool, []))
             continue
-        arg_keys.extend(_extract_tool_arg_keys_from_obj(obj))
-        if len(arg_keys) >= max_arg_keys:
-            arg_keys = arg_keys[:max_arg_keys]
+        call_dicts = _iter_tool_call_dicts(obj)
+        if not call_dicts:
+            name = (_extract_tool_names_from_obj(obj) or [""])[0] or role_tool
+            if name:
+                calls.append((name, _extract_tool_arg_keys_from_obj(obj)[:max_arg_keys]))
+            continue
+        for d in call_dicts:
+            name = _tool_name_from_call_dict(d) or role_tool
+            if not name:
+                continue
+            calls.append((name, _tool_arg_keys_from_call_dict(d, max_keys=max_arg_keys)))
+            if len(calls) >= max_tools:
+                break
+        if len(calls) >= max_tools:
             break
 
-    assistant_msgs = extract_assistant_messages(msgs)
-    assistant_turns = len(assistant_msgs)
-    assistant_chars = sum(len(m.content or "") for m in assistant_msgs)
+    # Fallback: some datasets (e.g., Nemotron-Agentic tool_calling) emit tool *outputs* without
+    # explicit <|call|> boundaries. In that case, treat tool output messages as implicit calls.
+    tool_out_msgs: list[HarmonyMessage] = []
+    for m in msgs:
+        role = (m.role or "").strip()
+        if not role:
+            continue
+        if role in {"system", "developer", "user"} or role.startswith("assistant"):
+            continue
+        tool_out_msgs.append(m)
+
+    calls_from_tool_outputs = False
+    if not calls and tool_out_msgs:
+        calls_from_tool_outputs = True
+        for m in tool_out_msgs:
+            role = (m.role or "").strip()
+            keyset = _tool_return_keyset(m.content, max_keys=16)
+            # Preserve explicit tool name when present; otherwise synthesize from output schema.
+            name = role if role and role != "tool" else f"tool[{keyset}]"
+            calls.append((name, []))
+            if len(calls) >= max_tools:
+                break
+
+    call_names = [c[0] for c in calls]
+    call_count = len(call_names)
+
+    # Walk messages again to pair each call with the next tool-like output message.
+    returns_status: list[str] = []
+    returns_keys: list[str] = []
+    returns_roles: list[str] = []
+    if call_count:
+        if calls_from_tool_outputs:
+            for m, (name, _) in zip(tool_out_msgs, calls):
+                returns_roles.append(name)
+                returns_status.append(_classify_tool_return(m.content))
+                returns_keys.append(_tool_return_keyset(m.content, max_keys=16))
+        else:
+            call_seen = 0
+            expecting_return = False
+            for m in msgs:
+                if m.end_tag == CALL_TAG and call_seen < call_count:
+                    expecting_return = True
+                    call_seen += 1
+                    continue
+                if not expecting_return:
+                    continue
+                role = (m.role or "").strip()
+                if not role:
+                    continue
+                if role in {"system", "developer", "user"} or role.startswith("assistant"):
+                    continue
+                # This looks like a tool output / tool message.
+                if role == "tool" and len(returns_roles) < len(call_names) and call_names:
+                    returns_roles.append(call_names[len(returns_roles)])
+                else:
+                    returns_roles.append(role)
+                returns_status.append(_classify_tool_return(m.content))
+                returns_keys.append(_tool_return_keyset(m.content, max_keys=16))
+                expecting_return = False
+                if len(returns_status) >= call_count:
+                    break
+
+    while len(returns_status) < call_count:
+        returns_status.append("missing")
+        returns_keys.append("missing")
+        returns_roles.append("missing")
 
     final = last_assistant_final(msgs)
-    final_type = infer_answer_type(final.content if final else "")
+    final_text = final.content if final else ""
+    final_type = infer_answer_type(final_text)
+    used_tool_output = (
+        "yes"
+        if re.search(
+            r"\b(tool output|based on the tool|according to the tool)\b",
+            final_text,
+            flags=re.IGNORECASE,
+        )
+        else "no"
+    )
+
+    plan_excerpt = ""
+    for m in msgs:
+        if m.role == "assistant" and m.channel == "analysis" and (m.content or "").strip():
+            plan_excerpt = m.content.strip()
+            break
+    if not plan_excerpt:
+        for m in msgs:
+            if m.role == "assistant" and (m.content or "").strip():
+                plan_excerpt = m.content.strip()
+                break
+    if plan_excerpt:
+        # Keep this small; never embed the full completion.
+        words = [w for w in plan_excerpt.split() if w]
+        plan_excerpt = " ".join(words[:128]).strip()
+        if len(plan_excerpt) > 800:
+            plan_excerpt = plan_excerpt[:800].rstrip()
+
+    args_per_call: list[str] = []
+    for name, keys in calls:
+        ks = ",".join(keys) if keys else ""
+        args_per_call.append(f"{name}[{ks}]")
 
     parts: list[str] = []
-    parts.append(f"assistant_turns={assistant_turns}")
-    parts.append(f"assistant_chars={assistant_chars}")
-    parts.append(f"tool_call_count={len(tool_calls)}")
-    parts.append(f"tool_call_seq={'->'.join(tool_calls) if tool_calls else 'none'}")
-    parts.append(f"tool_output_roles={'->'.join(tool_roles) if tool_roles else 'none'}")
-    parts.append(f"tool_output_keysets={'|'.join(tool_keysets) if tool_keysets else 'none'}")
-    parts.append(f"tool_arg_keys={','.join(arg_keys) if arg_keys else 'none'}")
-    parts.append(f"final_type={final_type}")
+    parts.append(f"TOOL_SEQ: {' -> '.join(call_names) if call_names else 'none'}")
+    parts.append(f"CALLS: {call_count}")
+    parts.append(f"ARGS: {' | '.join(args_per_call) if args_per_call else 'none'}")
+    parts.append(f"RETURNS: {' | '.join(returns_status) if returns_status else 'none'}")
+    parts.append(f"RET_KEYS: {' | '.join(returns_keys) if returns_keys else 'none'}")
+    parts.append(f"RET_ROLES: {' | '.join(returns_roles) if returns_roles else 'none'}")
+    parts.append(f"USED_TOOL_OUTPUT: {used_tool_output}")
+    parts.append(f"ANSWER_TYPE: {final_type}")
+    if plan_excerpt:
+        parts.append(f"PLAN_EXCERPT: {plan_excerpt}")
     return "\n".join(parts).strip()

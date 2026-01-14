@@ -881,176 +881,200 @@ def embed_sglang() -> str:
     t_pack_s = 0.0
     t_write_s = 0.0
 
-    for file_i, pf in enumerate(parquet_files, start=1):
-        file_reported = False
-        t0_read = time.time()
-        parquet = pq.ParquetFile(pf)
-        t_read_s += time.time() - t0_read
-        # IMPORTANT: use the Arrow schema (top-level columns). Parquet "leaf" names for list
-        # columns include only the element field (e.g. "element"), which would incorrectly
-        # hide the presence of a list column like "input_ids".
-        cols = set(parquet.schema_arrow.names)
-        if "id" not in cols:
-            raise RuntimeError(f"missing required column 'id' in {pf}")
-        use_text_col = text_col if text_col in cols else "text"
-        if use_input_ids_column:
-            if input_ids_col not in cols:
-                raise RuntimeError(
-                    f"USE_INPUT_IDS_COLUMN=1 but missing required column {input_ids_col!r} in {pf}"
-                )
-        else:
-            if use_text_col not in cols:
-                raise RuntimeError(f"missing required text column {text_col!r} (or 'text') in {pf}")
-
-        passthrough_cols = [
-            c
-            for c in [
-                "dataset",
-                "split",
-                "loss_mode",
-                "meta_domain",
-                "meta_difficulty_bin",
-                "meta_correctness",
-                "quality_has_tool",
-                "quality_valid_tool_schema",
-                "stats_embed_word_count",
-                "mix_group",
-            ]
-            if c in cols
-        ]
-        if use_input_ids_column:
-            read_cols = ["id", input_ids_col] + passthrough_cols
-        else:
-            read_cols = ["id", use_text_col] + passthrough_cols
-
-        print(f"[file] idx={file_i}/{len(parquet_files)} path={pf}", flush=True)
-        for batch in parquet.iter_batches(columns=read_cols, batch_size=max(1024, batch_size * 4)):
+    run_status = "ok"
+    run_error: str | None = None
+    run_exc: BaseException | None = None
+    try:
+        for file_i, pf in enumerate(parquet_files, start=1):
+            file_reported = False
             t0_read = time.time()
-            table = pa.Table.from_batches([batch])
+            parquet = pq.ParquetFile(pf)
             t_read_s += time.time() - t0_read
-            ids = table["id"].to_pylist()
-            texts = table[use_text_col].to_pylist() if not use_input_ids_column else None
-            input_ids = table[input_ids_col].to_pylist() if use_input_ids_column else None
+            # IMPORTANT: use the Arrow schema (top-level columns). Parquet "leaf" names for list
+            # columns include only the element field (e.g. "element"), which would incorrectly
+            # hide the presence of a list column like "input_ids".
+            cols = set(parquet.schema_arrow.names)
+            if "id" not in cols:
+                raise RuntimeError(f"missing required column 'id' in {pf}")
+            use_text_col = text_col if text_col in cols else "text"
+            if use_input_ids_column:
+                if input_ids_col not in cols:
+                    raise RuntimeError(
+                        f"USE_INPUT_IDS_COLUMN=1 but missing required column {input_ids_col!r} in {pf}"
+                    )
+            else:
+                if use_text_col not in cols:
+                    raise RuntimeError(f"missing required text column {text_col!r} (or 'text') in {pf}")
 
-            n_rows = len(ids)
-            for start in range(0, n_rows, batch_size):
-                sub_ids = ids[start : start + batch_size]
-                if use_input_ids_column:
-                    sub_input_ids = input_ids[start : start + batch_size]
-                    sub_texts = None
-                else:
-                    sub_input_ids = None
-                    sub_texts = [
-                        (t if isinstance(t, str) else "").strip()
-                        for t in texts[start : start + batch_size]
-                    ]
+            passthrough_cols = [
+                c
+                for c in [
+                    "dataset",
+                    "split",
+                    "loss_mode",
+                    "meta_domain",
+                    "meta_difficulty_bin",
+                    "meta_correctness",
+                    "quality_has_tool",
+                    "quality_valid_tool_schema",
+                    "stats_embed_word_count",
+                    "mix_group",
+                ]
+                if c in cols
+            ]
+            if use_input_ids_column:
+                read_cols = ["id", input_ids_col] + passthrough_cols
+            else:
+                read_cols = ["id", use_text_col] + passthrough_cols
 
-                # SGLang returns either a dict (single) or list[dict] (batch) depending on input.
-                t0_encode = time.time()
-                if use_input_ids_column:
-                    ret_list = _encode_input_ids(sub_input_ids)  # type: ignore[arg-type]
-                    ret = ret_list
-                else:
-                    ret = engine.encode(prompt=sub_texts, dimensions=out_dim)
-                t_encode_s += time.time() - t0_encode
-                if isinstance(ret, dict):
-                    ret_list = [ret]
-                else:
-                    ret_list = list(ret)
-                if len(ret_list) != len(sub_ids):
-                    raise RuntimeError(f"sglang returned {len(ret_list)} embeddings for batch size {len(sub_ids)}")
+            print(f"[file] idx={file_i}/{len(parquet_files)} path={pf}", flush=True)
+            for batch in parquet.iter_batches(columns=read_cols, batch_size=max(1024, batch_size * 4)):
+                t0_read = time.time()
+                table = pa.Table.from_batches([batch])
+                t_read_s += time.time() - t0_read
+                ids = table["id"].to_pylist()
+                texts = table[use_text_col].to_pylist() if not use_input_ids_column else None
+                input_ids = table[input_ids_col].to_pylist() if use_input_ids_column else None
 
-                embs: list[list[float]] = []
-                prompt_tokens: list[int] = []
-                for item in ret_list:
-                    emb = item.get("embedding") if isinstance(item, dict) else None
-                    if emb is None:
-                        raise RuntimeError(f"sglang encode output missing 'embedding' field: keys={list(item.keys()) if isinstance(item, dict) else type(item)}")
-                    embs.append(emb)
-                    pt = 0
-                    if isinstance(item, dict):
-                        # Both formats appear in the wild (depending on code path).
-                        if "prompt_tokens" in item:
-                            pt = int(item["prompt_tokens"] or 0)
-                        elif "meta_info" in item and isinstance(item["meta_info"], dict):
-                            pt = int(item["meta_info"].get("prompt_tokens", 0) or 0)
-                    prompt_tokens.append(pt)
+                n_rows = len(ids)
+                for start in range(0, n_rows, batch_size):
+                    sub_ids = ids[start : start + batch_size]
+                    if use_input_ids_column:
+                        sub_input_ids = input_ids[start : start + batch_size]
+                        sub_texts = None
+                    else:
+                        sub_input_ids = None
+                        sub_texts = [
+                            (t if isinstance(t, str) else "").strip()
+                            for t in texts[start : start + batch_size]
+                        ]
 
-                # Metrics
-                tok_sum += int(sum(prompt_tokens))
-                if prompt_tokens and not file_reported:
-                    lens_arr = np.array(prompt_tokens, dtype=np.int32)
-                    est_p50 = float(np.quantile(lens_arr, 0.50))
-                    est_p90 = float(np.quantile(lens_arr, 0.90))
-                    est_p99 = float(np.quantile(lens_arr, 0.99))
-                    print(f"[file_est] idx={file_i}/{len(parquet_files)} p50={est_p50:.0f} p90={est_p90:.0f} p99={est_p99:.0f} (first batch)", flush=True)
-                    file_reported = True
-                if len(tok_lens_sample) < tok_lens_sample_cap:
-                    tok_lens_sample.extend(int(x) for x in prompt_tokens[: (tok_lens_sample_cap - len(tok_lens_sample))])
-
-                # Padding multiplier is not directly observable (SGLang handles tokenization internally).
-                # We leave tok_padded_sum as 0 and report only token-based throughput.
-
-                t0_pack = time.time()
-                emb_np = np.asarray(embs, dtype=np.float16)
-                if emb_np.ndim != 2 or emb_np.shape[1] != out_dim:
-                    raise RuntimeError(f"unexpected embedding shape {emb_np.shape}, expected (*,{out_dim})")
-                if fail_on_nonfinite:
-                    finite = np.isfinite(emb_np).all(axis=1)
-                    if not finite.all():
-                        bad = int((~finite).sum())
+                    # SGLang returns either a dict (single) or list[dict] (batch) depending on input.
+                    t0_encode = time.time()
+                    if use_input_ids_column:
+                        ret_list = _encode_input_ids(sub_input_ids)  # type: ignore[arg-type]
+                        ret = ret_list
+                    else:
+                        ret = engine.encode(prompt=sub_texts, dimensions=out_dim)
+                    t_encode_s += time.time() - t0_encode
+                    if isinstance(ret, dict):
+                        ret_list = [ret]
+                    else:
+                        ret_list = list(ret)
+                    if len(ret_list) != len(sub_ids):
                         raise RuntimeError(
-                            f"non-finite embeddings detected (bad_rows={bad}/{len(finite)}) "
-                            f"quantization={quantization!r} model={model_id!r} file={pf}"
+                            f"sglang returned {len(ret_list)} embeddings for batch size {len(sub_ids)}"
                         )
-                flat = emb_np.reshape(-1)
-                vec_values = pa.array(flat, type=pa.float16())
-                vec = pa.FixedSizeListArray.from_arrays(vec_values, out_dim)
 
-                out_cols: dict[str, Any] = {
-                    "id": pa.array([str(x) for x in sub_ids], type=pa.string()),
-                    "model_id": pa.array([model_id] * len(sub_ids), type=pa.string()),
-                    "out_dim": pa.array([out_dim] * len(sub_ids), type=pa.int32()),
-                    "max_tokens": pa.array([max_tokens] * len(sub_ids), type=pa.int32()),
-                    "embedding": vec,
-                    "prompt_tokens": pa.array(prompt_tokens, type=pa.int32()),
-                    "sglang_attention_backend": pa.array([attn_backend] * len(sub_ids), type=pa.string()),
-                    "sglang_quantization": pa.array([quantization or ""] * len(sub_ids), type=pa.string()),
-                }
-                for c in passthrough_cols:
-                    out_cols[c] = table[c].slice(start, len(sub_ids))
-                t_pack_s += time.time() - t0_pack
-                t0_write = time.time()
-                writer.write_table(pa.table(out_cols))
-                t_write_s += time.time() - t0_write
+                    embs: list[list[float]] = []
+                    prompt_tokens: list[int] = []
+                    for item in ret_list:
+                        emb = item.get("embedding") if isinstance(item, dict) else None
+                        if emb is None:
+                            raise RuntimeError(
+                                "sglang encode output missing 'embedding' field: "
+                                f"keys={list(item.keys()) if isinstance(item, dict) else type(item)}"
+                            )
+                        embs.append(emb)
+                        pt = 0
+                        if isinstance(item, dict):
+                            # Both formats appear in the wild (depending on code path).
+                            if "prompt_tokens" in item:
+                                pt = int(item["prompt_tokens"] or 0)
+                            elif "meta_info" in item and isinstance(item["meta_info"], dict):
+                                pt = int(item["meta_info"].get("prompt_tokens", 0) or 0)
+                        prompt_tokens.append(pt)
 
-                processed += len(sub_ids)
+                    # Metrics
+                    tok_sum += int(sum(prompt_tokens))
+                    if prompt_tokens and not file_reported:
+                        lens_arr = np.array(prompt_tokens, dtype=np.int32)
+                        est_p50 = float(np.quantile(lens_arr, 0.50))
+                        est_p90 = float(np.quantile(lens_arr, 0.90))
+                        est_p99 = float(np.quantile(lens_arr, 0.99))
+                        print(
+                            f"[file_est] idx={file_i}/{len(parquet_files)} p50={est_p50:.0f} "
+                            f"p90={est_p90:.0f} p99={est_p99:.0f} (first batch)",
+                            flush=True,
+                        )
+                        file_reported = True
+                    if len(tok_lens_sample) < tok_lens_sample_cap:
+                        tok_lens_sample.extend(
+                            int(x)
+                            for x in prompt_tokens[: (tok_lens_sample_cap - len(tok_lens_sample))]
+                        )
+
+                    # Padding multiplier is not directly observable (SGLang handles tokenization internally).
+                    # We leave tok_padded_sum as 0 and report only token-based throughput.
+
+                    t0_pack = time.time()
+                    emb_np = np.asarray(embs, dtype=np.float16)
+                    if emb_np.ndim != 2 or emb_np.shape[1] != out_dim:
+                        raise RuntimeError(f"unexpected embedding shape {emb_np.shape}, expected (*,{out_dim})")
+                    if fail_on_nonfinite:
+                        finite = np.isfinite(emb_np).all(axis=1)
+                        if not finite.all():
+                            bad = int((~finite).sum())
+                            raise RuntimeError(
+                                f"non-finite embeddings detected (bad_rows={bad}/{len(finite)}) "
+                                f"quantization={quantization!r} model={model_id!r} file={pf}"
+                            )
+                    flat = emb_np.reshape(-1)
+                    vec_values = pa.array(flat, type=pa.float16())
+                    vec = pa.FixedSizeListArray.from_arrays(vec_values, out_dim)
+
+                    out_cols: dict[str, Any] = {
+                        "id": pa.array([str(x) for x in sub_ids], type=pa.string()),
+                        "model_id": pa.array([model_id] * len(sub_ids), type=pa.string()),
+                        "out_dim": pa.array([out_dim] * len(sub_ids), type=pa.int32()),
+                        "max_tokens": pa.array([max_tokens] * len(sub_ids), type=pa.int32()),
+                        "embedding": vec,
+                        "prompt_tokens": pa.array(prompt_tokens, type=pa.int32()),
+                        "sglang_attention_backend": pa.array([attn_backend] * len(sub_ids), type=pa.string()),
+                        "sglang_quantization": pa.array([quantization or ""] * len(sub_ids), type=pa.string()),
+                    }
+                    for c in passthrough_cols:
+                        out_cols[c] = table[c].slice(start, len(sub_ids))
+                    t_pack_s += time.time() - t0_pack
+                    t0_write = time.time()
+                    writer.write_table(pa.table(out_cols))
+                    t_write_s += time.time() - t0_write
+
+                    processed += len(sub_ids)
+                    if max_records and processed >= max_records:
+                        break
+
+                    now = time.time()
+                    if now - last_log >= log_every_s:
+                        dt = now - t_start
+                        tok_s = tok_sum / max(dt, 1e-6)
+                        rows_s = processed / max(dt, 1e-6)
+                        avg_tok = (tok_sum / processed) if processed else 0.0
+                        stage = (
+                            f"read={t_read_s:.1f}s encode={t_encode_s:.1f}s "
+                            f"pack={t_pack_s:.1f}s write={t_write_s:.1f}s"
+                        )
+                        print(
+                            f"[prog] rows={processed} rows/s={rows_s:.2f} tok/s={tok_s:.0f} "
+                            f"avg_tok/row={avg_tok:.1f} {stage}",
+                            flush=True,
+                        )
+                        last_log = now
+
                 if max_records and processed >= max_records:
                     break
-
-                now = time.time()
-                if now - last_log >= log_every_s:
-                    dt = now - t_start
-                    tok_s = tok_sum / max(dt, 1e-6)
-                    rows_s = processed / max(dt, 1e-6)
-                    avg_tok = (tok_sum / processed) if processed else 0.0
-                    stage = (
-                        f"read={t_read_s:.1f}s encode={t_encode_s:.1f}s "
-                        f"pack={t_pack_s:.1f}s write={t_write_s:.1f}s"
-                    )
-                    print(
-                        f"[prog] rows={processed} rows/s={rows_s:.2f} tok/s={tok_s:.0f} "
-                        f"avg_tok/row={avg_tok:.1f} {stage}",
-                        flush=True,
-                    )
-                    last_log = now
-
             if max_records and processed >= max_records:
                 break
-        if max_records and processed >= max_records:
-            break
-
-    writer.flush()
+    except BaseException as e:
+        run_status = "failed"
+        run_error = f"{type(e).__name__}: {e}"
+        run_exc = e
+    finally:
+        # Always close the active ParquetWriter so we don't leave a corrupt tail shard behind.
+        try:
+            writer.flush()
+        except Exception as e:
+            print(f"[warn] failed to flush parquet writer: {e}", flush=True)
 
     tok_arr = np.array(tok_lens_sample, dtype=np.int32) if tok_lens_sample else np.array([], dtype=np.int32)
     p50 = float(np.quantile(tok_arr, 0.50)) if tok_arr.size else math.nan
@@ -1059,6 +1083,8 @@ def embed_sglang() -> str:
 
     manifest = {
         "generated_at": time.strftime("%Y-%m-%d %H:%M:%S %z"),
+        "status": run_status,
+        "error": run_error or "",
         "dataset_id": dataset_id,
         "subdir": subdir,
         "text_column": text_col,
@@ -1092,7 +1118,7 @@ def embed_sglang() -> str:
     (out_dir / "run_manifest.json").write_text(json.dumps(manifest, indent=2, sort_keys=True) + "\n", encoding="utf-8")
     print(f"[ok] wrote {out_dir}/run_manifest.json", flush=True)
 
-    if out_dataset_id:
+    if out_dataset_id and run_status == "ok":
         from huggingface_hub import HfApi
 
         api = HfApi()
@@ -1122,6 +1148,8 @@ def embed_sglang() -> str:
     hf_cache_volume.commit()
     flashinfer_cache_volume.commit()
     model_volume.commit()
+    if run_exc is not None:
+        raise run_exc
     return str(out_dir)
 
 

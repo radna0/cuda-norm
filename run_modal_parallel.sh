@@ -9,7 +9,7 @@ if [[ -z "$CMD_FILE" ]] || [[ "$CMD_FILE" == "-h" ]] || [[ "$CMD_FILE" == "--hel
   cat <<'EOF'
 usage: run_modal_parallel.sh <commands.txt>
 
-Runs up to 4 concurrent `modal run ...` CLI jobs, each via nohup and with a per-job .log + .pid under:
+Runs up to 6 concurrent `modal run ...` CLI jobs, each via nohup and with a per-job .log + .pid under:
   $LOG_DIR (default: ./modal_parallel_logs)
 
 commands.txt format (one per line):
@@ -19,7 +19,7 @@ commands.txt format (one per line):
     Otherwise the tag is derived from the command.
 
 Env:
-  MAX_PARALLEL  Max concurrent Modal CLI jobs (default: 4, hard-capped to 4).
+  MAX_PARALLEL  Max concurrent Modal CLI jobs (default: 6, hard-capped to 6).
   LOG_DIR       Log output directory (default: ./modal_parallel_logs).
 EOF
   exit 2
@@ -33,13 +33,13 @@ fi
 LOG_DIR="${LOG_DIR:-$ROOT_DIR/modal_parallel_logs}"
 mkdir -p "$LOG_DIR"
 
-MAX_PARALLEL="${MAX_PARALLEL:-4}"
+MAX_PARALLEL="${MAX_PARALLEL:-6}"
 if ! [[ "$MAX_PARALLEL" =~ ^[0-9]+$ ]]; then
   echo "[err] MAX_PARALLEL must be an integer, got: $MAX_PARALLEL" >&2
   exit 2
 fi
-if [[ "$MAX_PARALLEL" -gt 4 ]]; then
-  MAX_PARALLEL=4
+if [[ "$MAX_PARALLEL" -gt 6 ]]; then
+  MAX_PARALLEL=6
 fi
 if [[ "$MAX_PARALLEL" -le 0 ]]; then
   echo "[err] MAX_PARALLEL must be > 0" >&2
@@ -113,7 +113,7 @@ while IFS= read -r raw || [[ -n "$raw" ]]; do
     sleep 5
   done
 
-  rid="$(python - <<'PY'\nimport os\nprint(f\"{os.getpid()}_{os.urandom(3).hex()}\")\nPY\n)"
+  rid="$(python -c 'import os; print(f"{os.getpid()}_{os.urandom(3).hex()}")')"
   log_path="$LOG_DIR/${tag}_${ts}_${rid}.log"
   cmd_path="$LOG_DIR/${tag}_${ts}_${rid}.cmd"
 

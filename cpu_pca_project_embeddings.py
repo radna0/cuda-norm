@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import argparse
+import html
 import json
 import math
 import os
@@ -95,6 +96,12 @@ def main() -> None:
     )
     ap.add_argument("--html_max_points", type=int, default=100_000)
     ap.add_argument("--html_name", type=str, default="map_view.html")
+    ap.add_argument(
+        "--pca_dims",
+        type=int,
+        default=2,
+        help="PCA output dimensions for visualization (2 or 3).",
+    )
     args = ap.parse_args()
 
     in_dir = Path(args.in_dir)
@@ -202,19 +209,29 @@ def main() -> None:
     faiss.omp_set_num_threads(int(num_threads))
 
     dim = int(X.shape[1])
-    pca = faiss.PCAMatrix(dim, 2)
+    pca_dims = int(args.pca_dims)
+    if pca_dims not in {2, 3}:
+        raise SystemExit("--pca_dims must be 2 or 3")
+    pca = faiss.PCAMatrix(dim, pca_dims)
     t0 = time.time()
     pca.train(X)
     Y = pca.apply_py(X)
     elapsed = time.time() - t0
 
-    for r, xy in zip(rows, Y.tolist()):
-        r["pca_x"] = float(xy[0])
-        r["pca_y"] = float(xy[1])
+    for r, vec in zip(rows, Y.tolist()):
+        r["pca_x"] = float(vec[0])
+        r["pca_y"] = float(vec[1])
+        if pca_dims >= 3:
+            r["pca_z"] = float(vec[2])
         r["difficulty_bin"] = _canonical_difficulty(r.get("meta_difficulty_bin"))
         r["len_bucket"] = _assign_len_bucket(int(r.get("prompt_tokens") or 0), len_edges)
 
-    out_parquet = out_dir / "pca_2d_sample.parquet"
+    if pca_dims == 2:
+        out_parquet = out_dir / "pca_2d_sample.parquet"
+        manifest_path = out_dir / "pca_manifest.json"
+    else:
+        out_parquet = out_dir / f"pca_{pca_dims}d_sample.parquet"
+        manifest_path = out_dir / f"pca_{pca_dims}d_manifest.json"
     pq.write_table(pa.Table.from_pylist(rows), out_parquet, compression="zstd")
 
     ev = getattr(pca, "eigenvalues", None)
@@ -233,16 +250,18 @@ def main() -> None:
         "max_samples": int(max_samples),
         "rows": int(len(rows)),
         "dim": int(dim),
+        "pca_dims": int(pca_dims),
+        "len_bucket_edges": [0] + list(len_edges[1:]) + ["inf"],
         "faiss_threads": int(num_threads),
         "elapsed_s": float(elapsed),
         "eigenvalues": ev_list[:8],
         "eigenvalues_sum": ev_sum,
         "out_parquet": str(out_parquet),
     }
-    (out_dir / "pca_manifest.json").write_text(json.dumps(manifest, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    manifest_path.write_text(json.dumps(manifest, indent=2, sort_keys=True) + "\n", encoding="utf-8")
 
     print(f"[ok] wrote {out_parquet}", flush=True)
-    print(f"[ok] wrote {out_dir / 'pca_manifest.json'}", flush=True)
+    print(f"[ok] wrote {manifest_path}", flush=True)
 
     if args.write_html:
         html_max = int(args.html_max_points)
@@ -258,6 +277,7 @@ def main() -> None:
         payload = {
             "x": col("pca_x"),
             "y": col("pca_y"),
+            "z": col("pca_z") if pca_dims >= 3 else [],
             "id": col("id"),
             "dataset": col("dataset"),
             "meta_domain": col("meta_domain"),
@@ -279,30 +299,77 @@ def main() -> None:
 
 
 def _render_plotly_html(payload: dict[str, Any], *, title: str) -> str:
-    # Minimal Plotly.js HTML (CDN) for scattergl with a dropdown to color points by key.
+    # Minimal Plotly.js HTML (CDN) for 2D/3D scatter with a dropdown to color points by key.
     # This keeps dependencies out of the CPU environment.
     data_json = json.dumps(payload, ensure_ascii=False, separators=(",", ":"))
     title_json = json.dumps(title, ensure_ascii=False)
+    title_html = html.escape(title, quote=True)
+    is_3d = bool(payload.get("z")) and len(payload.get("z") or []) == len(payload.get("x") or [])
     return f"""<!doctype html>
 <html>
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>{title}</title>
+  <title>{title_html}</title>
   <script src="https://cdn.plot.ly/plotly-2.27.0.min.js"></script>
   <style>
-    body {{ font-family: system-ui, -apple-system, Segoe UI, Roboto, Helvetica, Arial, sans-serif; margin: 0; }}
-    #topbar {{ display: flex; gap: 12px; padding: 10px 12px; align-items: center; border-bottom: 1px solid #eee; }}
-    #legend {{ font-size: 12px; color: #333; max-height: 120px; overflow: auto; }}
-    #plot {{ width: 100%; height: calc(100vh - 64px); }}
-    select {{ padding: 4px 8px; }}
-    .chip {{ display: inline-block; padding: 2px 6px; margin: 2px 6px 2px 0; border-radius: 10px; border: 1px solid #ddd; }}
+    :root {{
+      --bg: #ffffff;
+      --fg: #0f172a;
+      --muted: #334155;
+      --border: #e2e8f0;
+      --chip_bg: rgba(148, 163, 184, 0.12);
+      --chip_border: rgba(148, 163, 184, 0.35);
+      --control_bg: #ffffff;
+    }}
+    :root[data-theme="dark"] {{
+      --bg: #0b1020;
+      --fg: #e2e8f0;
+      --muted: #cbd5e1;
+      --border: rgba(148, 163, 184, 0.25);
+      --chip_bg: rgba(148, 163, 184, 0.10);
+      --chip_border: rgba(148, 163, 184, 0.22);
+      --control_bg: rgba(15, 23, 42, 0.85);
+    }}
+    body {{
+      font-family: system-ui, -apple-system, Segoe UI, Roboto, Helvetica, Arial, sans-serif;
+      margin: 0;
+      background: var(--bg);
+      color: var(--fg);
+    }}
+    #topbar {{
+      display: flex;
+      gap: 12px;
+      padding: 10px 12px;
+      align-items: center;
+      border-bottom: 1px solid var(--border);
+      background: var(--bg);
+    }}
+    #legend {{ font-size: 12px; color: var(--muted); max-height: 120px; overflow: auto; }}
+    #plot {{ width: 100%; height: calc(100vh - 64px); background: var(--bg); }}
+    select {{
+      padding: 4px 8px;
+      background: var(--control_bg);
+      color: var(--fg);
+      border: 1px solid var(--border);
+      border-radius: 6px;
+    }}
+    label {{ user-select: none; }}
+    input[type="checkbox"] {{ accent-color: #38bdf8; }}
+    .chip {{
+      display: inline-block;
+      padding: 2px 6px;
+      margin: 2px 6px 2px 0;
+      border-radius: 10px;
+      border: 1px solid var(--chip_border);
+      background: var(--chip_bg);
+    }}
     .swatch {{ display: inline-block; width: 10px; height: 10px; margin-right: 6px; border-radius: 2px; vertical-align: middle; }}
   </style>
 </head>
 <body>
   <div id="topbar">
-    <div><strong>{title_json}</strong></div>
+    <div><strong>{title_html}</strong></div>
     <div>
       Color by:
       <select id="colorBy">
@@ -312,6 +379,9 @@ def _render_plotly_html(payload: dict[str, Any], *, title: str) -> str:
         <option value="difficulty_bin">difficulty</option>
         <option value="len_bucket">length bucket</option>
       </select>
+    </div>
+    <div>
+      <label><input id="darkMode" type="checkbox" checked /> dark</label>
     </div>
     <div id="legend"></div>
   </div>
@@ -371,39 +441,98 @@ def _render_plotly_html(payload: dict[str, Any], *, title: str) -> str:
     const diff = payload.difficulty_bin[i] || "";
     const lb = payload.len_bucket[i] || "";
     const pt = payload.prompt_tokens[i] || 0;
-    return `id=${{id}}<br>dataset=${{ds}}<br>domain=${{dom}}<br>mix_group=${{mg}}<br>difficulty=${{diff}}<br>len_bucket=${{lb}}<br>prompt_tokens=${{pt}}`;
+    const z = (payload.z && payload.z.length === N) ? payload.z[i] : null;
+    const zline = (z === null || z === undefined) ? "" : `<br>pca_z=${{z}}`;
+    return `id=${{id}}<br>dataset=${{ds}}<br>domain=${{dom}}<br>mix_group=${{mg}}<br>difficulty=${{diff}}<br>len_bucket=${{lb}}<br>prompt_tokens=${{pt}}${{zline}}`;
   }}
 
   const hover = new Array(N);
   for (let i = 0; i < N; i++) hover[i] = hoverText(i);
 
-  function render(colorByKey) {{
+  const is3d = {str(is_3d).lower()};
+  function render(colorByKey, dark) {{
+    document.documentElement.dataset.theme = dark ? "dark" : "light";
     const values = payload[colorByKey];
     const cats = unique(values);
     const cmap = colorMap(cats);
     const colors = buildColors(values, cmap);
     setLegend(cmap);
-    const trace = {{
+    const template = dark ? "plotly_dark" : "plotly_white";
+    const bg = dark ? "#0b1020" : "#ffffff";
+    const fg = dark ? "#e2e8f0" : "#0f172a";
+    const grid = dark ? "rgba(148,163,184,0.22)" : "rgba(15,23,42,0.12)";
+    const marker = {{ size: is3d ? 2 : 3, opacity: 0.75, color: colors }};
+    const trace = is3d ? {{
+      type: "scatter3d",
+      mode: "markers",
+      x: payload.x,
+      y: payload.y,
+      z: payload.z,
+      text: hover,
+      hoverinfo: "text",
+      marker,
+    }} : {{
       type: "scattergl",
       mode: "markers",
       x: payload.x,
       y: payload.y,
       text: hover,
       hoverinfo: "text",
-      marker: {{ size: 3, opacity: 0.75, color: colors }},
+      marker,
     }};
-    const layout = {{
+    const layout = is3d ? {{
       title: {title_json},
+      template,
+      paper_bgcolor: bg,
+      font: {{ color: fg }},
+      scene: {{
+        bgcolor: bg,
+        xaxis: {{ title: "PCA-1", zeroline: false, showbackground: true, backgroundcolor: bg }},
+        yaxis: {{ title: "PCA-2", zeroline: false, showbackground: true, backgroundcolor: bg }},
+        zaxis: {{ title: "PCA-3", zeroline: false, showbackground: true, backgroundcolor: bg }},
+        dragmode: "orbit",
+      }},
+      margin: {{ l: 0, r: 0, t: 40, b: 0 }},
+    }} : {{
+      title: {title_json},
+      template,
+      paper_bgcolor: bg,
+      plot_bgcolor: bg,
+      font: {{ color: fg }},
       xaxis: {{ title: "PCA-1", zeroline: false }},
       yaxis: {{ title: "PCA-2", zeroline: false }},
       margin: {{ l: 50, r: 10, t: 40, b: 50 }},
     }};
-    Plotly.react("plot", [trace], layout, {{displayModeBar: true}});
+    // Force dark/light axis/grid styling to avoid “dark chrome, white canvas” mismatch.
+    if (is3d) {{
+      layout.scene.xaxis.gridcolor = grid;
+      layout.scene.yaxis.gridcolor = grid;
+      layout.scene.zaxis.gridcolor = grid;
+      layout.scene.xaxis.color = fg;
+      layout.scene.yaxis.color = fg;
+      layout.scene.zaxis.color = fg;
+      layout.scene.xaxis.zerolinecolor = grid;
+      layout.scene.yaxis.zerolinecolor = grid;
+      layout.scene.zaxis.zerolinecolor = grid;
+    }} else {{
+      layout.xaxis.gridcolor = grid;
+      layout.yaxis.gridcolor = grid;
+      layout.xaxis.color = fg;
+      layout.yaxis.color = fg;
+      layout.xaxis.zerolinecolor = grid;
+      layout.yaxis.zerolinecolor = grid;
+    }}
+    Plotly.react("plot", [trace], layout, {{displayModeBar: true, scrollZoom: true, responsive: true, displaylogo: false}});
   }}
 
   const sel = document.getElementById("colorBy");
-  sel.addEventListener("change", () => render(sel.value));
-  render(sel.value);
+  const darkSel = document.getElementById("darkMode");
+  function rerender() {{
+    render(sel.value, darkSel.checked);
+  }}
+  sel.addEventListener("change", rerender);
+  darkSel.addEventListener("change", rerender);
+  rerender();
   </script>
 </body>
 </html>

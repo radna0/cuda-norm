@@ -75,6 +75,20 @@ def _process_task_star(args: tuple[Any, ...]) -> dict[str, Any]:
     return _process_task(task, **kwargs)  # type: ignore[arg-type]
 
 
+def _promote_strings_to_large(tbl: pa.Table) -> pa.Table:
+    fields: list[pa.Field] = []
+    changed = False
+    for f in tbl.schema:
+        if pa.types.is_string(f.type):
+            fields.append(pa.field(f.name, pa.large_string(), nullable=f.nullable, metadata=f.metadata))
+            changed = True
+        else:
+            fields.append(f)
+    if not changed:
+        return tbl
+    return tbl.cast(pa.schema(fields), safe=False)
+
+
 def main() -> None:
     ap = argparse.ArgumentParser(
         description="Export a Harmony-text calibration pack by joining selected ids back to normalized shards"
@@ -97,6 +111,11 @@ def main() -> None:
     ap.add_argument("--text_col", type=str, default="text")
     ap.add_argument("--num_workers", type=int, default=0, help="0=auto")
     ap.add_argument("--maxtasksperchild", type=int, default=16)
+    ap.add_argument(
+        "--keep_tmp_matches",
+        action="store_true",
+        help="Keep the intermediate _tmp_matches/*.parquet files (debug). Default deletes them on success.",
+    )
     args = ap.parse_args()
 
     normalized_root = Path(args.normalized_root)
@@ -158,7 +177,7 @@ def main() -> None:
 
     tables: list[pa.Table] = []
     for p in sorted(tmp_files):
-        tables.append(pq.read_table(p))
+        tables.append(_promote_strings_to_large(pq.read_table(p)))
     merged = pa.concat_tables(tables) if len(tables) > 1 else tables[0]
 
     # Dedup by id (safety). Keep first occurrence.
@@ -210,6 +229,18 @@ def main() -> None:
     print(f"[ok] wrote {out_parquet}", flush=True)
     print(f"[ok] wrote {out_jsonl}", flush=True)
     print(f"[ok] wrote {out_dir / 'export_manifest.json'}", flush=True)
+
+    if not args.keep_tmp_matches:
+        # Best-effort cleanup (these can be hundreds of tiny parquet files).
+        for p in tmp_files:
+            try:
+                p.unlink()
+            except Exception:
+                pass
+        try:
+            out_tmp.rmdir()
+        except Exception:
+            pass
 
 
 if __name__ == "__main__":

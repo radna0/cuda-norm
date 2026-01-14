@@ -18,6 +18,7 @@ def _now() -> str:
 
 
 _KV_RE = re.compile(r"^([a-zA-Z0-9_]+)=(.*)$")
+_COLON_RE = re.compile(r"^([A-Z0-9_]+):\s*(.*)$")
 
 
 def _parse_signature(sig: str) -> dict[str, str]:
@@ -25,10 +26,30 @@ def _parse_signature(sig: str) -> dict[str, str]:
     if not sig:
         return out
     for line in sig.splitlines():
-        m = _KV_RE.match(line.strip())
-        if not m:
+        s = line.strip()
+        if not s:
             continue
-        out[m.group(1)] = m.group(2)
+        m = _KV_RE.match(s)
+        if m:
+            out[m.group(1)] = m.group(2)
+            continue
+        m = _COLON_RE.match(s)
+        if m:
+            key = m.group(1)
+            val = m.group(2)
+            # Normalize newer trace-sketch keys into the old analysis names.
+            if key == "TOOL_SEQ":
+                out["tool_call_seq"] = val.replace(" -> ", "->").strip()
+            elif key == "CALLS":
+                out["tool_call_count"] = val.strip()
+            elif key == "RET_KEYS":
+                out["tool_output_keysets"] = val.strip()
+            elif key == "RET_ROLES":
+                out["tool_output_roles"] = val.strip()
+            elif key == "ANSWER_TYPE":
+                out["final_type"] = val.strip()
+            else:
+                out[key.lower()] = val.strip()
     return out
 
 
@@ -63,13 +84,22 @@ def main() -> None:
         raise SystemExit("missing required column embed_text")
 
     read_cols = ["id", "embed_text"]
-    for c in ("stats_embed_word_count", "dataset", "split", "meta_domain", "meta_difficulty_bin", "quality_has_tool"):
+    for c in (
+        "stats_embed_word_count",
+        "dataset",
+        "split",
+        "meta_domain",
+        "meta_difficulty_bin",
+        "quality_has_tool",
+        "mix_group",
+    ):
         if c in cols:
             read_cols.append(c)
 
     total = 0
     empty = 0
     unique_sig: set[str] = set()
+    unique_sig_struct: set[str] = set()
     unique_tool_seq: set[str] = set()
     unique_tool_keysets: set[str] = set()
     tool_calls_pos = 0
@@ -77,6 +107,7 @@ def main() -> None:
     final_type = Counter()
     tool_keysets_counter = Counter()
     tool_roles_counter = Counter()
+    mix_group_counter = Counter()
     tool_call_count_vals: list[int] = []
     word_count_vals: list[int] = []
     t0 = time.time()
@@ -88,6 +119,7 @@ def main() -> None:
         tbl = pa.Table.from_batches([batch])
         sigs = tbl["embed_text"].to_pylist()
         wc = tbl["stats_embed_word_count"].to_pylist() if "stats_embed_word_count" in tbl.column_names else None
+        mg = tbl["mix_group"].to_pylist() if "mix_group" in tbl.column_names else None
 
         for i, sig in enumerate(sigs):
             if args.max_rows and total >= args.max_rows:
@@ -99,6 +131,13 @@ def main() -> None:
                 continue
             if len(unique_sig) < 500_000:
                 unique_sig.add(sig)
+            if len(unique_sig_struct) < 500_000:
+                struct = "\n".join(
+                    [ln for ln in sig.splitlines() if not ln.strip().startswith("PLAN_EXCERPT:")]
+                )
+                unique_sig_struct.add(struct)
+            if mg is not None:
+                mix_group_counter[str(mg[i] or "unknown")] += 1
 
             fields = _parse_signature(sig)
             tc = fields.get("tool_call_count") or "0"
@@ -150,6 +189,7 @@ def main() -> None:
     report_lines.append("## Key Metrics\n")
     report_lines.append(f"- empty_signatures: `{empty}` ({(empty/total*100.0) if total else 0.0:.2f}%)")
     report_lines.append(f"- unique_signatures: `{len(unique_sig)}` (cap 500k)")
+    report_lines.append(f"- unique_struct_signatures: `{len(unique_sig_struct)}` (cap 500k; PLAN_EXCERPT stripped)")
     report_lines.append(f"- tool_call_count>0: `{tool_calls_pos}` ({(tool_calls_pos/total*100.0) if total else 0.0:.2f}%)")
     report_lines.append(f"- unique_tool_call_seq: `{len(unique_tool_seq)}` (cap 500k)\n")
     report_lines.append(f"- tool_output_keysets!=none: `{tool_keysets_pos}` ({(tool_keysets_pos/total*100.0) if total else 0.0:.2f}%)")
@@ -171,6 +211,11 @@ def main() -> None:
     report_lines.append("## Final Answer Types\n")
     for k, v in final_type.most_common():
         report_lines.append(f"- {k}: `{v}` ({(v/total*100.0) if total else 0.0:.2f}%)")
+
+    if mix_group_counter:
+        report_lines.append("\n## mix_group distribution\n")
+        for k, v in mix_group_counter.most_common():
+            report_lines.append(f"- {k}: `{v}` ({(v/total*100.0) if total else 0.0:.2f}%)")
 
     if tool_keysets_counter:
         report_lines.append("\n## Top Tool Output Keysets\n")

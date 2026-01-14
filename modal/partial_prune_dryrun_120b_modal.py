@@ -7,7 +7,7 @@ This is Task 2B (cost probe), not full pruning:
 - Measure download / load+slice / write timings and peak RSS
 
 Outputs:
-- Writes `reports/120b_partial_prune_dryrun.md` locally (entrypoint)
+- Writes a timestamped report under `reports/` (entrypoint)
 - Writes JSON + sliced safetensors into the mounted data volume
 
 Run (always log to unsloth_logs/):
@@ -253,39 +253,41 @@ def main(
         out_subdir=f"artifacts/120b_partial_prune_dryrun/{run_id}",
     )
 
-    md_path = Path("reports/120b_partial_prune_dryrun.md")
+    md_path = Path(f"reports/120b_partial_prune_dryrun_{run_id}_layer{int(layer)}.md")
+    md_latest = Path("reports/120b_partial_prune_dryrun_latest.md")
     md_path.parent.mkdir(parents=True, exist_ok=True)
-    md_path.write_text(
-        "\n".join(
-            [
-                "# 120B partial prune dry-run",
-                "",
-                f"- Model: `{res['model_id']}`",
-                f"- Layer: {res['layer']}",
-                f"- Keep: {res['keep_n']}/{res['num_experts']} ({res['keep_frac']:.2f})",
-                f"- Downloaded shards: {res['unique_shards_downloaded']} ({res['download_gib']:.2f} GiB)",
-                f"- Output file: `{res['output_file']}` ({res['output_gib']:.2f} GiB)",
-                "",
-                "## Timings",
-                "",
-                f"- download: {res['timings_s']['download']:.1f}s",
-                f"- load+slice: {res['timings_s']['load_slice']:.1f}s",
-                f"- write: {res['timings_s']['write']:.1f}s",
-                f"- total: {res['timings_s']['total']:.1f}s",
-                "",
-                "## Peak memory",
-                "",
-                f"- peak RSS: {res['peak_rss_gib']:.2f} GiB",
-                "",
-                "## Reproduce",
-                "",
-                "```bash",
-                "modal run modal/partial_prune_dryrun_120b_modal.py --layer 0 --keep-frac 0.5",
-                "```",
-                "",
-            ]
-        ),
-        encoding="utf-8",
+    md_text = "\n".join(
+        [
+            "# 120B partial prune dry-run",
+            "",
+            f"- run_id: `{run_id}`",
+            f"- Model: `{res['model_id']}`",
+            f"- Layer: {res['layer']}",
+            f"- Keep: {res['keep_n']}/{res['num_experts']} ({res['keep_frac']:.2f})",
+            f"- Downloaded shards: {res['unique_shards_downloaded']} ({res['download_gib']:.2f} GiB)",
+            f"- Output file: `{res['output_file']}` ({res['output_gib']:.2f} GiB)",
+            "",
+            "## Timings",
+            "",
+            f"- download: {res['timings_s']['download']:.1f}s",
+            f"- load+slice: {res['timings_s']['load_slice']:.1f}s",
+            f"- write: {res['timings_s']['write']:.1f}s",
+            f"- total: {res['timings_s']['total']:.1f}s",
+            "",
+            "## Peak memory",
+            "",
+            f"- peak RSS: {res['peak_rss_gib']:.2f} GiB",
+            "",
+            "## Reproduce",
+            "",
+            "```bash",
+            f"modal run modal/partial_prune_dryrun_120b_modal.py --layer {int(layer)} --keep-frac {float(keep_frac)}",
+            "```",
+            "",
+        ]
     )
+    md_path.write_text(md_text, encoding="utf-8")
+    md_latest.write_text(md_text, encoding="utf-8")
     print(f"[+] Wrote {md_path}")
+    print(f"[+] Wrote {md_latest}")
     print("[RESULT]", res)

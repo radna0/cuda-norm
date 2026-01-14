@@ -8,6 +8,7 @@ import multiprocessing as mp
 import os
 import time
 from dataclasses import dataclass
+from hashlib import sha1
 from pathlib import Path
 from typing import Any
 
@@ -15,7 +16,11 @@ import pyarrow as pa
 import pyarrow.compute as pc
 import pyarrow.parquet as pq
 
-from harmony_text import build_behavior_signature, extract_user_prompt_text
+from harmony_text import (
+    build_behavior_signature,
+    extract_assistant_reasoning_excerpt_text,
+    extract_user_prompt_text,
+)
 
 
 def _now() -> str:
@@ -33,14 +38,15 @@ def _word_count(text: str) -> int:
 
 
 def _stable_hash_int(hex_sha1: str) -> int:
-    # `id` is typically a sha1 hex string; use the first 8 hex chars as a stable 32-bit int.
+    # Deterministic sampling hash for ids.
+    #
+    # IMPORTANT: do NOT use `int(id[:8], 16)` here. Even when `id` looks like sha1 hex, upstream
+    # selection steps may have already biased the distribution of the leading digits, which makes
+    # modulo sampling non-uniform. Hashing the full id string avoids that bias.
     s = (hex_sha1 or "").strip().lower()
-    if len(s) < 8:
+    if not s:
         return 0
-    try:
-        return int(s[:8], 16)
-    except Exception:
-        return 0
+    return int(sha1(s.encode("utf-8")).hexdigest()[:8], 16)
 
 
 _IDS_SET: set[str] | None = None
@@ -118,6 +124,9 @@ def _init_worker_tokenizer(
 ) -> None:
     global _TOKENIZER, _TOKENIZER_MAX_TOKENS, _TOKENIZER_ADD_SPECIAL_TOKENS
     os.environ.setdefault("TOKENIZERS_PARALLELISM", "false")
+    # We use tokenizers only (no torch), so suppress the noisy framework advisory warning.
+    os.environ.setdefault("TRANSFORMERS_NO_ADVISORY_WARNINGS", "1")
+    os.environ.setdefault("TRANSFORMERS_VERBOSITY", "error")
     from transformers import AutoTokenizer
 
     tok = AutoTokenizer.from_pretrained(
@@ -167,6 +176,7 @@ def _process_task(
     require_has_tool: bool,
     require_domains: set[str] | None,
     require_difficulty_bins: set[str] | None,
+    require_mix_groups: set[str] | None,
     correctness_ge: float | None,
     hash_mod: int,
     hash_keep_lt: int,
@@ -174,6 +184,8 @@ def _process_task(
     attach_mix_group: bool,
     fail_on_missing_mix_group: bool,
     tokenize: bool,
+    min_tok_len: int | None,
+    max_tok_len: int | None,
 ) -> dict[str, Any]:
     t0 = time.time()
     pf = Path(task.parquet_path)
@@ -240,10 +252,16 @@ def _process_task(
     embed_texts: list[str] = []
     word_counts: list[int] = []
     keep_row_indices: list[int] = []
+    mix_groups: list[str] = []
 
     kept = 0
     dropped = 0
     ids_set = _IDS_SET
+    mix_map = _MIX_GROUP_MAP
+    need_mix = bool(attach_mix_group or require_mix_groups)
+    if need_mix and mix_map is None:
+        raise RuntimeError("mix_group filtering requested but mix_group_map is not loaded")
+
     for i, (row_id, raw_text) in enumerate(zip(ids, texts)):
         row_id = str(row_id or "")
         if not row_id:
@@ -252,6 +270,22 @@ def _process_task(
         if ids_set is not None and row_id not in ids_set:
             dropped += 1
             continue
+
+        mg = ""
+        if need_mix:
+            assert mix_map is not None
+            mg = str(mix_map.get(row_id, "") or "")
+            if not mg:
+                dropped += 1
+                if fail_on_missing_mix_group:
+                    raise RuntimeError(f"missing mix_group for id={row_id}")
+                continue
+            if require_mix_groups is not None and mg not in require_mix_groups:
+                dropped += 1
+                continue
+
+        # Apply sampling only after cheap membership filters (ids_set/mix_group), so the sampling
+        # rate is stable and we don't waste hashing work on rows that will be dropped anyway.
         if hash_mod > 0:
             if _stable_hash_int(row_id) % hash_mod >= hash_keep_lt:
                 dropped += 1
@@ -260,8 +294,12 @@ def _process_task(
         raw_text = raw_text if isinstance(raw_text, str) else ""
         if view == "prompt":
             embed = extract_user_prompt_text(raw_text)
-        else:
+        elif view == "behavior":
             embed = build_behavior_signature(raw_text)
+        elif view == "reasoning_excerpt":
+            embed = extract_assistant_reasoning_excerpt_text(raw_text)
+        else:
+            raise RuntimeError(f"unsupported view={view!r}")
         embed = (embed or "").strip()
         if not embed:
             dropped += 1
@@ -271,6 +309,8 @@ def _process_task(
         embed_texts.append(embed)
         word_counts.append(_word_count(embed))
         keep_row_indices.append(i)
+        if attach_mix_group:
+            mix_groups.append(mg)
         kept += 1
 
     # Avoid creating empty Parquet files (huge overhead at scale when filtering by IDs).
@@ -286,23 +326,6 @@ def _process_task(
             "elapsed_s": time.time() - t0,
             "wrote_file": False,
         }
-
-    mix_groups: list[str] = []
-    if attach_mix_group:
-        mix_map = _MIX_GROUP_MAP
-        if mix_map is None:
-            raise RuntimeError("attach_mix_group requested but mix_group_map is not loaded")
-        missing = 0
-        for rid in keep_ids:
-            mg = mix_map.get(rid, "")
-            if not mg:
-                missing += 1
-                if fail_on_missing_mix_group:
-                    raise RuntimeError(f"missing mix_group for id={rid}")
-            mix_groups.append(mg)
-        if missing:
-            # Don't spam; count is included in manifest via rows_dropped and the exception if strict.
-            pass
 
     input_ids: list[list[int]] = []
     tok_lens: list[int] = []
@@ -328,6 +351,51 @@ def _process_task(
             seq_i = [int(x) for x in (seq or [])]
             tok_lens.append(len(seq_i))
         input_ids = [[int(x) for x in (seq or [])] for seq in input_ids]
+
+    # Optional: enforce token-length bounds (requires tokenization).
+    if tokenize and (min_tok_len is not None or max_tok_len is not None):
+        lo = int(min_tok_len) if min_tok_len is not None else 0
+        hi = int(max_tok_len) if max_tok_len is not None else 0
+        if lo < 0:
+            lo = 0
+        if hi and hi < lo:
+            raise RuntimeError(f"invalid tok_len bounds: min_tok_len={lo} max_tok_len={hi}")
+
+        keep_mask: list[bool] = []
+        for tl in tok_lens:
+            if tl < lo:
+                keep_mask.append(False)
+            elif hi and tl > hi:
+                keep_mask.append(False)
+            else:
+                keep_mask.append(True)
+
+        if not any(keep_mask):
+            return {
+                "task_index": task.task_index,
+                "parquet_path": task.parquet_path,
+                "row_groups": list(task.row_groups),
+                "rows_in": len(ids),
+                "rows_out": 0,
+                "rows_dropped": len(ids),
+                "out_path": "",
+                "elapsed_s": time.time() - t0,
+                "wrote_file": False,
+            }
+
+        def _filter_list(xs: list[Any]) -> list[Any]:
+            return [x for x, keep in zip(xs, keep_mask) if keep]
+
+        keep_ids = [str(x) for x in _filter_list(keep_ids)]
+        embed_texts = [str(x) for x in _filter_list(embed_texts)]
+        word_counts = [int(x) for x in _filter_list(word_counts)]
+        keep_row_indices = [int(x) for x in _filter_list(keep_row_indices)]
+        input_ids = [[int(y) for y in (x or [])] for x in _filter_list(input_ids)]
+        tok_lens = [int(x) for x in _filter_list(tok_lens)]
+        if attach_mix_group:
+            mix_groups = [str(x) for x in _filter_list(mix_groups)]
+
+        kept = len(keep_ids)
 
     out_path = out_dir / f"part-{task.task_index:06d}.parquet"
     out_path.parent.mkdir(parents=True, exist_ok=True)
@@ -393,9 +461,9 @@ def main() -> None:
     ap.add_argument(
         "--view",
         type=str,
-        choices=["prompt", "behavior"],
+        choices=["prompt", "behavior", "reasoning_excerpt"],
         required=True,
-        help="Embedding view: prompt=user-only, behavior=tool/reasoning signature",
+        help="Embedding view: prompt=user-only, behavior=tool trace sketch, reasoning_excerpt=assistant reasoning excerpt",
     )
     ap.add_argument("--text_column", type=str, default="text", help="Input column containing Harmony text")
     ap.add_argument("--target_rows_per_task", type=int, default=100_000)
@@ -426,7 +494,12 @@ def main() -> None:
     ap.add_argument("--require_difficulty_bin", nargs="*", default=[])
     ap.add_argument("--correctness_ge", type=float, default=float("nan"))
     ap.add_argument("--hash_mod", type=int, default=0, help="Deterministic sampling modulus (0=off)")
-    ap.add_argument("--hash_keep_lt", type=int, default=0, help="Keep rows where (hash(id) % mod) < this")
+    ap.add_argument(
+        "--hash_keep_lt",
+        type=int,
+        default=0,
+        help="Keep rows where (hash(id) %% mod) < this",
+    )
     ap.add_argument(
         "--include_source_text",
         action="store_true",
@@ -437,6 +510,12 @@ def main() -> None:
         type=str,
         default="",
         help="Optional mapping file to attach mix_group (parquet with columns id,mix_group or TSV id<TAB>mix_group).",
+    )
+    ap.add_argument(
+        "--require_mix_group",
+        nargs="*",
+        default=[],
+        help="Optional filter on mix_group values (requires --mix_group_map). Example: --require_mix_group reasoning",
     )
     ap.add_argument(
         "--fail_on_missing_mix_group",
@@ -460,6 +539,18 @@ def main() -> None:
         type=int,
         default=0,
         help="Truncate tokenized input_ids to this length (required when tokenization is enabled).",
+    )
+    ap.add_argument(
+        "--min_tok_len",
+        type=int,
+        default=0,
+        help="Optional: drop rows with tokenized length < this (requires tokenization). 0=disabled.",
+    )
+    ap.add_argument(
+        "--max_tok_len",
+        type=int,
+        default=0,
+        help="Optional: drop rows with tokenized length > this (requires tokenization). 0=disabled.",
     )
     ap.add_argument(
         "--tokenize_add_special_tokens",
@@ -528,6 +619,11 @@ def main() -> None:
         _MIX_GROUP_MAP = mg
         print(f"[*] loaded mix_group_map: {mg_path} (n={len(mg)})", flush=True)
 
+    require_mix_groups = set([str(x) for x in (args.require_mix_group or []) if str(x).strip()])
+    require_mix_groups_set = require_mix_groups if require_mix_groups else None
+    if require_mix_groups_set and not mix_group_map_path:
+        raise SystemExit("--require_mix_group requires --mix_group_map")
+
     tokenize_model_path = (args.tokenize_model_path or "").strip() or None
     tokenize_model_id = (args.tokenize_model_id or "").strip() or None
     tokenize_enabled = bool(tokenize_model_path or tokenize_model_id)
@@ -548,6 +644,9 @@ def main() -> None:
             else:
                 tok_dir = out_dir / ".tokenizer_cache" / tokenize_model_id.replace("/", "__")
             tok_path = str(_snapshot_tokenizer(tokenize_model_id, local_dir=tok_dir))
+    else:
+        if int(args.min_tok_len) > 0 or int(args.max_tok_len) > 0:
+            raise SystemExit("--min_tok_len/--max_tok_len require tokenization (set --tokenize_model_id or --tokenize_model_path)")
 
     hash_mod = int(args.hash_mod)
     hash_keep_lt = int(args.hash_keep_lt)
@@ -609,6 +708,7 @@ def main() -> None:
             "require_has_tool": bool(args.require_has_tool),
             "require_domains": require_domains_set,
             "require_difficulty_bins": require_bins_set,
+            "require_mix_groups": require_mix_groups_set,
             "correctness_ge": correctness_ge,
             "hash_mod": hash_mod,
             "hash_keep_lt": hash_keep_lt,
@@ -616,6 +716,8 @@ def main() -> None:
             "attach_mix_group": bool(mix_group_map_path),
             "fail_on_missing_mix_group": bool(args.fail_on_missing_mix_group),
             "tokenize": bool(tokenize_enabled),
+            "min_tok_len": (int(args.min_tok_len) if int(args.min_tok_len) > 0 else None),
+            "max_tok_len": (int(args.max_tok_len) if int(args.max_tok_len) > 0 else None),
         }
         it = ((t, common_kwargs) for t in tasks)
         for res in pool.imap_unordered(_process_task_star, it, chunksize=1):
@@ -644,6 +746,7 @@ def main() -> None:
             "require_has_tool": bool(args.require_has_tool),
             "require_domain": sorted(require_domains),
             "require_difficulty_bin": sorted(require_bins),
+            "require_mix_group": sorted(require_mix_groups),
             "correctness_ge": correctness_ge,
             "ids_file": str(ids_file) if ids_file else "",
             "hash_mod": hash_mod,
@@ -653,6 +756,8 @@ def main() -> None:
             "tokenize_model_id": tokenize_model_id or "",
             "tokenize_model_path": tokenize_model_path or "",
             "tokenize_max_tokens": int(args.tokenize_max_tokens),
+            "min_tok_len": int(args.min_tok_len),
+            "max_tok_len": int(args.max_tok_len),
             "tokenize_add_special_tokens": bool(args.tokenize_add_special_tokens),
             "tokenize_trust_remote_code": bool(args.tokenize_trust_remote_code),
         },

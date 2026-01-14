@@ -53,6 +53,7 @@ DEFAULT_DATASET_ID = os.environ.get("DATASET_ID", "radna0/harmony-nemotron-cpu-a
 DEFAULT_DATASET_SPLIT = os.environ.get("DATASET_SPLIT", "train")
 DEFAULT_TEXT_COLUMN = os.environ.get("TEXT_COLUMN", "text")
 DEFAULT_DOMAIN = os.environ.get("DOMAIN", "")  # optional filter on `meta_domain`
+DEFAULT_DOMAIN_COLUMN = os.environ.get("DOMAIN_COLUMN", "meta_domain")
 
 # Domain-specific dataset defaults (used for math-targeted pruning without scanning `meta_domain`).
 DEFAULT_MATH_DATASET_ID = os.environ.get("MATH_DATASET_ID", "radna0/nemotron-math-v2-harmony-tools")
@@ -93,6 +94,30 @@ image = (
     )
 )
 
+# For REAP-lite saliency profiling we need access to plain PyTorch expert weights
+# to compute per-expert output norms. The `kernels` package can replace the MoE
+# MLP with a hub kernel (MegaBlocks) which hides/shims expert parameters.
+# Use a dedicated image without `kernels` so GPT-OSS falls back to the reference
+# PyTorch implementation.
+image_no_kernels = (
+    modal.Image.from_registry(BASE_IMAGE, add_python="3.12")
+    .apt_install("git", "python3-dev", "build-essential", "curl")
+    .run_commands("python -m pip install -U pip setuptools wheel")
+    .run_commands(
+        "python -m pip install "
+        "torch==2.9.0 "
+        "--extra-index-url https://download.pytorch.org/whl/cu128"
+    )
+    .run_commands(
+        "python -m pip install "
+        "numpy==2.2.0 datasets==3.2.0 accelerate==1.10.1 "
+        "transformers==4.56.2 tokenizers safetensors "
+        "pyarrow==21.0.0 pandas==2.2.3 "
+        "hf_transfer huggingface-hub==0.34.0"
+    )
+    .run_commands("python -m pip uninstall -y kernels || true")
+)
+
 app = modal.App(APP_NAME)
 
 
@@ -116,6 +141,15 @@ def _ensure_hf_env() -> None:
 def _get_hf_token() -> str | None:
     tok = os.environ.get("HF_TOKEN")
     return tok.strip() if tok else None
+
+
+def _parse_csv(s: str) -> list[str]:
+    out: list[str] = []
+    for part in (s or "").split(","):
+        p = part.strip()
+        if p:
+            out.append(p)
+    return out
 
 
 def _snapshot_download_model(model_id: str) -> Path:
@@ -144,6 +178,31 @@ def _snapshot_download_model(model_id: str) -> Path:
     except Exception:
         pass
     return Path(snap)
+
+
+@app.function(
+    image=image,
+    timeout=21600,
+    cpu=2.0,
+    memory=8192,
+    volumes={"/root/hf_cache": hf_cache_volume},
+    secrets=_secrets,
+)
+def read_model_cfg_meta(model_id: str) -> dict[str, int]:
+    """Remote helper: read minimal config metadata for a model."""
+    from huggingface_hub import hf_hub_download
+
+    _ensure_hf_env()
+    try:
+        hf_cache_volume.reload()
+    except Exception:
+        pass
+    token = _get_hf_token()
+    cfg_path = hf_hub_download(str(model_id), filename="config.json", token=token)
+    cfg = json.loads(Path(cfg_path).read_text(encoding="utf-8"))
+    num_layers = int(cfg.get("num_hidden_layers") or 0)
+    num_experts = int(cfg.get("num_local_experts") or 0)
+    return {"num_layers": num_layers, "num_experts": num_experts}
 
 
 def _stream_text_rows(
@@ -236,6 +295,113 @@ def _stream_rows_for_reap(
     if len(out) < int(limit):
         raise RuntimeError(f"Only got {len(out)} rows from dataset; expected {limit}.")
     return out
+
+
+def _load_rows_jsonl(path: str, *, limit: int | None = None) -> list[dict[str, Any]]:
+    out: list[dict[str, Any]] = []
+    p = Path(str(path))
+    if not p.exists():
+        raise FileNotFoundError(f"rows_jsonl_path not found: {p}")
+    for raw in p.read_text(encoding="utf-8", errors="ignore").splitlines():
+        line = raw.strip()
+        if not line:
+            continue
+        try:
+            row = json.loads(line)
+        except Exception:
+            continue
+        text = row.get("text")
+        if isinstance(text, str) and text.strip():
+            out.append(row)
+        if limit is not None and len(out) >= int(limit):
+            break
+    if not out:
+        raise RuntimeError(f"No usable rows loaded from {p}")
+    return out
+
+
+def _read_reap_saliency_mass_parquet(path: Path) -> dict[int, list[float]]:
+    import pyarrow.parquet as pq
+
+    table = pq.read_table(str(path), columns=["layer", "expert", "gate_norm_sum"])
+    layers = table.column("layer").to_pylist()
+    experts = table.column("expert").to_pylist()
+    masses = table.column("gate_norm_sum").to_pylist()
+    by_layer: dict[int, dict[int, float]] = {}
+    max_expert = 0
+    for li, ei, mi in zip(layers, experts, masses):
+        li_i = int(li)
+        ei_i = int(ei)
+        max_expert = max(max_expert, ei_i)
+        by_layer.setdefault(li_i, {})[ei_i] = float(mi)
+    out: dict[int, list[float]] = {}
+    for li, d in by_layer.items():
+        vec = [0.0] * (max_expert + 1)
+        for e, m in d.items():
+            if 0 <= int(e) < len(vec):
+                vec[int(e)] = float(m)
+        out[int(li)] = vec
+    return out
+
+
+def _coverage_set(mass: list[float], cov: float) -> list[int]:
+    cov = float(cov)
+    if not mass:
+        return []
+    order = sorted(range(len(mass)), key=lambda e: float(mass[e]), reverse=True)
+    total = float(sum(float(x) for x in mass)) or 0.0
+    if total <= 0:
+        return order[:0]
+    kept: list[int] = []
+    cum = 0.0
+    for e in order:
+        kept.append(int(e))
+        cum += float(mass[e])
+        if (cum / total) >= cov:
+            break
+    return kept
+
+
+def _union_keep_sets(
+    domain_masses: dict[str, dict[int, list[float]]],
+    *,
+    cov: float,
+    weights: dict[str, float],
+    core_n: int = 4,
+    cap: int | None = None,
+) -> list[list[int]]:
+    # Determine number of layers and experts from the first domain.
+    if not domain_masses:
+        raise ValueError("domain_masses is empty")
+    any_dom = next(iter(domain_masses.keys()))
+    layers = sorted(domain_masses[any_dom].keys())
+    keep_by_layer: list[list[int]] = []
+    for li in layers:
+        # Build union of per-domain coverage sets.
+        union: set[int] = set()
+        e_count = len(domain_masses[any_dom][li])
+        # Global weighted saliency per expert.
+        gmass = [0.0] * e_count
+        for dom, masses_by_layer in domain_masses.items():
+            mass = masses_by_layer.get(li, [0.0] * e_count)
+            w = float(weights.get(dom, 1.0))
+            for e in range(e_count):
+                gmass[e] += w * float(mass[e])
+            cov_set = _coverage_set(mass, cov=float(cov))
+            union.update(int(e) for e in cov_set)
+
+        core = sorted(range(e_count), key=lambda e: float(gmass[e]), reverse=True)[: max(0, int(core_n))]
+        union.update(int(e) for e in core)
+
+        if cap is not None and int(cap) > 0 and len(union) > int(cap):
+            ranked = sorted(range(e_count), key=lambda e: float(gmass[e]), reverse=True)
+            kept = set(ranked[: int(cap)])
+            kept.update(int(e) for e in core)
+            # If core blew past cap, keep it anyway (deterministic).
+            union = kept
+
+        keep_by_layer.append(sorted(union))
+    return keep_by_layer
 
 
 def _iter_gpt_oss_layers(model) -> list[Any]:
@@ -412,7 +578,7 @@ class ProfileArgs:
 
 
 @app.function(
-    image=image,
+    image=image_no_kernels,
     gpu="H100:1",
     timeout=21600,
     cpu=16.0,
@@ -718,6 +884,208 @@ def profile_20b_expert_usage(
 
 @app.function(
     image=image,
+    timeout=21600,
+    cpu=16.0,
+    memory=65536,
+    volumes={
+        "/root/data": data_volume,
+        "/root/hf_cache": hf_cache_volume,
+    },
+    secrets=_secrets,
+)
+def sample_domain_rows_cpu(
+    *,
+    dataset_id: str,
+    dataset_split: str,
+    text_column: str,
+    domain: str,
+    domain_column: str,
+    num_rows: int,
+    seed: int,
+    max_scan_rows: int,
+) -> dict[str, Any]:
+    """
+    Deterministically sample `num_rows` examples from a streaming HF dataset by
+    keeping the rows with the smallest hash under `seed`.
+
+    Writes a JSONL file into the data volume and returns its path.
+    """
+    import hashlib
+    import heapq
+
+    from datasets import load_dataset
+
+    _ensure_hf_env()
+    try:
+        data_volume.reload()
+        hf_cache_volume.reload()
+    except Exception:
+        pass
+
+    token = _get_hf_token()
+    ds = load_dataset(
+        str(dataset_id),
+        split=str(dataset_split),
+        streaming=True,
+        token=token,
+    )
+
+    dom = str(domain or "").strip()
+    dom_col = str(domain_column or "").strip() or DEFAULT_DOMAIN_COLUMN
+    num_rows = int(num_rows)
+    seed = int(seed)
+    max_scan_rows = int(max_scan_rows)
+
+    heap: list[tuple[int, dict[str, Any]]] = []
+    scanned = 0
+    matched = 0
+
+    def _score(row_id: Any, text: str) -> int:
+        h = hashlib.sha256()
+        h.update(str(seed).encode("utf-8"))
+        h.update(b"\n")
+        h.update(str(row_id).encode("utf-8", errors="ignore"))
+        h.update(b"\n")
+        h.update(text.encode("utf-8", errors="ignore"))
+        return int.from_bytes(h.digest()[:8], "big", signed=False)
+
+    for row in ds:
+        scanned += 1
+        if max_scan_rows > 0 and scanned > max_scan_rows:
+            break
+        if scanned % 50000 == 0:
+            print(
+                f"[*] sample_domain_rows_cpu domain={dom!r} scanned={scanned} matched={matched} heap={len(heap)}/{num_rows}",
+                flush=True,
+            )
+        if dom:
+            try:
+                if str(row.get(dom_col, "")).strip() != dom:
+                    continue
+            except Exception:
+                continue
+        text = row.get(str(text_column))
+        if not isinstance(text, str) or not text.strip():
+            continue
+        matched += 1
+        s = _score(row.get("id"), text)
+        payload = {
+            "id": row.get("id"),
+            "text": text,
+            "meta_domain": row.get(dom_col),
+            "score_u64": s,
+        }
+        if len(heap) < num_rows:
+            heapq.heappush(heap, (-s, payload))
+        else:
+            if -s > heap[0][0]:
+                heapq.heapreplace(heap, (-s, payload))
+
+    if len(heap) < num_rows:
+        raise RuntimeError(
+            f"Only sampled {len(heap)}/{num_rows} rows for domain={dom!r} after scanning {scanned} rows "
+            f"(matched={matched}). Increase max_scan_rows or verify domain values."
+        )
+
+    selected = [p for _neg, p in heap]
+    selected.sort(key=lambda r: int(r.get("score_u64", 0)))
+
+    prompt_hash = hashlib.sha256(
+        ("\n".join(str(r.get("id") or "") for r in selected)).encode("utf-8", errors="ignore")
+        + b"\n"
+        + ("\n".join(r["text"] for r in selected)).encode("utf-8", errors="ignore")
+    ).hexdigest()
+
+    out_dir = Path("/root/data/reap_domain_samples") / str(dataset_id).replace("/", "__") / str(dataset_split)
+    out_dir.mkdir(parents=True, exist_ok=True)
+    dom_safe = "".join(ch if ch.isalnum() or ch in ("-", "_") else "_" for ch in (dom or "all"))
+    out_path = out_dir / f"{dom_safe}_seed{seed}_n{num_rows}.jsonl"
+    with out_path.open("w", encoding="utf-8") as f:
+        for r in selected:
+            f.write(json.dumps(r, ensure_ascii=False) + "\n")
+
+    try:
+        data_volume.commit()
+    except Exception:
+        pass
+
+    return {
+        "dataset_id": str(dataset_id),
+        "dataset_split": str(dataset_split),
+        "text_column": str(text_column),
+        "domain": str(dom),
+        "domain_column": str(dom_col),
+        "seed": int(seed),
+        "num_rows": int(num_rows),
+        "max_scan_rows": int(max_scan_rows),
+        "scanned": int(scanned),
+        "matched": int(matched),
+        "prompt_hash": str(prompt_hash),
+        "rows_jsonl_path": str(out_path),
+    }
+
+
+@app.function(
+    image=image,
+    timeout=21600,
+    cpu=16.0,
+    memory=65536,
+    volumes={
+        "/root/hf_cache": hf_cache_volume,
+    },
+    secrets=_secrets,
+)
+def scan_domain_counts_cpu(
+    *,
+    dataset_id: str,
+    dataset_split: str,
+    domain_column: str,
+    max_scan_rows: int,
+) -> dict[str, Any]:
+    from collections import Counter
+
+    from datasets import load_dataset
+
+    _ensure_hf_env()
+    try:
+        hf_cache_volume.reload()
+    except Exception:
+        pass
+
+    token = _get_hf_token()
+    ds = load_dataset(
+        str(dataset_id),
+        split=str(dataset_split),
+        streaming=True,
+        token=token,
+    )
+    dom_col = str(domain_column or "").strip() or DEFAULT_DOMAIN_COLUMN
+    max_scan_rows = int(max_scan_rows)
+    scanned = 0
+    counts: Counter[str] = Counter()
+    missing = 0
+    for row in ds:
+        scanned += 1
+        if max_scan_rows > 0 and scanned > max_scan_rows:
+            break
+        v = row.get(dom_col)
+        if v is None:
+            missing += 1
+            continue
+        counts[str(v).strip()] += 1
+    return {
+        "dataset_id": str(dataset_id),
+        "dataset_split": str(dataset_split),
+        "domain_column": str(dom_col),
+        "max_scan_rows": int(max_scan_rows),
+        "scanned": int(scanned),
+        "missing": int(missing),
+        "counts": dict(counts),
+    }
+
+
+@app.function(
+    image=image_no_kernels,
     gpu="H100:1",
     timeout=21600,
     cpu=16.0,
@@ -739,6 +1107,7 @@ def profile_20b_reap_saliency(
     num_rows: int,
     max_seq_length: int,
     batch_size: int,
+    rows_jsonl_path: str = "",
 ) -> dict[str, Any]:
     """
     REAP-lite saliency profiling for GPT-OSS MoE (Transformers).
@@ -759,13 +1128,24 @@ def profile_20b_reap_saliency(
 
     _ensure_hf_env()
 
-    rows = _stream_rows_for_reap(
-        dataset_id=dataset_id,
-        split=dataset_split,
-        text_column=text_column,
-        limit=int(num_rows),
-        domain=str(domain or ""),
-    )
+    try:
+        data_volume.reload()
+        model_volume.reload()
+        hf_cache_volume.reload()
+    except Exception:
+        pass
+
+    if str(rows_jsonl_path or "").strip():
+        rows = _load_rows_jsonl(str(rows_jsonl_path), limit=int(num_rows))
+    else:
+        rows = _stream_rows_for_reap(
+            dataset_id=dataset_id,
+            split=dataset_split,
+            text_column=text_column,
+            limit=int(num_rows),
+            domain=str(domain or ""),
+            domain_column=DEFAULT_DOMAIN_COLUMN,
+        )
     prompt_hash = hashlib.sha256(
         ("\n".join(str(r.get("id") or "") for r in rows)).encode("utf-8", errors="ignore")
         + b"\n"
@@ -777,6 +1157,10 @@ def profile_20b_reap_saliency(
     if tokenizer.pad_token_id is None:
         tokenizer.pad_token = tokenizer.eos_token
     tokenizer.padding_side = "right"
+    # REAP-lite is meant to measure "generated" (assistant) tokens. For long
+    # Harmony transcripts, assistant turns are often near the end; use left
+    # truncation so we keep the tail instead of chopping it off.
+    tokenizer.truncation_side = "left"
 
     model = AutoModelForCausalLM.from_pretrained(
         str(model_dir),
@@ -801,32 +1185,6 @@ def profile_20b_reap_saliency(
     gate_sum = torch.zeros((num_layers, num_experts), dtype=torch.float32, device="cuda")
     norm_sum = torch.zeros((num_layers, num_experts), dtype=torch.float32, device="cuda")
     gate_norm_sum = torch.zeros((num_layers, num_experts), dtype=torch.float32, device="cuda")
-
-    def _gpt_oss_expert_out(
-        *,
-        experts_mod,
-        hidden: torch.Tensor,  # [N, hidden]
-        expert_idx: int,
-    ) -> torch.Tensor:
-        # Implements `transformers.models.gpt_oss.modeling_gpt_oss.GptOssExperts.forward`
-        # for a single expert, without applying routing weights.
-        gate_up_proj = getattr(experts_mod, "gate_up_proj", None)
-        down_proj = getattr(experts_mod, "down_proj", None)
-        if gate_up_proj is None or down_proj is None:
-            raise RuntimeError("Unsupported experts module: missing gate_up_proj/down_proj params.")
-        gate_up_proj_bias = getattr(experts_mod, "gate_up_proj_bias")
-        down_proj_bias = getattr(experts_mod, "down_proj_bias")
-        alpha = float(getattr(experts_mod, "alpha", 1.702))
-        limit = float(getattr(experts_mod, "limit", 7.0))
-
-        gate_up = hidden @ gate_up_proj[int(expert_idx)] + gate_up_proj_bias[int(expert_idx)]
-        gate, up = gate_up[..., ::2], gate_up[..., 1::2]
-        gate = gate.clamp(min=None, max=limit)
-        up = up.clamp(min=-limit, max=limit)
-        glu = gate * torch.sigmoid(gate * alpha)
-        gated_output = (up + 1) * glu
-        out = gated_output @ down_proj[int(expert_idx)] + down_proj_bias[int(expert_idx)]
-        return out
 
     hooks = []
 
@@ -857,6 +1215,12 @@ def profile_20b_reap_saliency(
                 return
             hs_sel = hs2[keep2]
 
+            # Cap tokens per batch to keep profiling cheap and avoid OOM from
+            # computing per-expert outputs for all experts.
+            max_tokens = int(os.environ.get("REAP_MAX_TOKENS_PER_BATCH", "128"))
+            if max_tokens > 0 and int(hs_sel.shape[0]) > max_tokens:
+                hs_sel = hs_sel[:max_tokens]
+
             out = router(hs_sel)
             if not isinstance(out, (tuple, list)) or len(out) != 2:
                 return
@@ -874,25 +1238,113 @@ def profile_20b_reap_saliency(
             # Gather top-k weights for the selected experts.
             router_idx = router_idx.to(torch.int64)
             topk_w = router_scores.gather(1, router_idx).to(torch.float32)  # [N, kk]
+            # Most MoE implementations renormalize top-k probabilities to sum to 1.
+            denom = topk_w.sum(dim=-1, keepdim=True).clamp_min(1e-9)
+            topk_w = topk_w / denom
 
-            # Only compute for experts hit in this batch.
-            uniq = torch.unique(router_idx)
-            for e in uniq.tolist():
-                e = int(e)
-                if e < 0 or e >= int(num_experts):
-                    continue
-                tok_pos, kpos = torch.where(router_idx == e)
-                if tok_pos.numel() == 0:
-                    continue
-                h_e = hs_sel[tok_pos]  # [M, hidden]
-                out_e = _gpt_oss_expert_out(experts_mod=experts, hidden=h_e, expert_idx=e)
-                nrm = torch.linalg.norm(out_e.float(), dim=-1)  # [M]
-                g = topk_w[tok_pos, kpos]  # [M]
+            gate_up_proj = getattr(experts, "gate_up_proj", None)
+            down_proj = getattr(experts, "down_proj", None)
+            if gate_up_proj is None or down_proj is None:
+                return
+            gate_up_proj_bias = getattr(experts, "gate_up_proj_bias", None)
+            down_proj_bias = getattr(experts, "down_proj_bias", None)
+            trace = os.environ.get("TRACE_REAP", "0").lower() in ("1", "true", "yes", "y")
+            if trace and layer_idx == 0:
+                try:
+                    import importlib.util
 
-                count[layer_idx, e] += int(tok_pos.numel())
-                gate_sum[layer_idx, e] += g.sum()
-                norm_sum[layer_idx, e] += nrm.sum()
-                gate_norm_sum[layer_idx, e] += (g * nrm).sum()
+                    print(
+                        "[trace] kernels_installed=",
+                        bool(importlib.util.find_spec("kernels")),
+                        flush=True,
+                    )
+                except Exception:
+                    pass
+                print(
+                    f"[trace] experts={experts.__class__.__name__} "
+                    f"gate_up_proj_type={type(gate_up_proj)} down_proj_type={type(down_proj)} "
+                    f"gate_up_bias_type={type(gate_up_proj_bias)} down_bias_type={type(down_proj_bias)}",
+                    flush=True,
+                )
+
+            # REAP-lite requires access to raw PyTorch weights; if a hub kernel
+            # swaps in a wrapper type, fail fast with a clear message.
+            if not torch.is_tensor(gate_up_proj) or not torch.is_tensor(down_proj):
+                raise TypeError(
+                    "REAP-lite requires PyTorch expert weights, but got non-torch tensors for "
+                    f"gate_up_proj={type(gate_up_proj)} down_proj={type(down_proj)}. "
+                    "Try running on `image_no_kernels` and ensure `kernels` is not installed."
+                )
+            if gate_up_proj_bias is not None and not torch.is_tensor(gate_up_proj_bias):
+                raise TypeError(
+                    "REAP-lite requires PyTorch expert bias tensors, but got "
+                    f"gate_up_proj_bias={type(gate_up_proj_bias)}."
+                )
+            if down_proj_bias is not None and not torch.is_tensor(down_proj_bias):
+                raise TypeError(
+                    "REAP-lite requires PyTorch expert bias tensors, but got "
+                    f"down_proj_bias={type(down_proj_bias)}."
+                )
+            alpha = float(getattr(experts, "alpha", 1.702))
+            limit = float(getattr(experts, "limit", 7.0))
+
+            # Compute expert output norms ||f_j(x)||_2 for selected experts only.
+            #
+            # Shapes expected (Transformers GPT-OSS reference):
+            # - gate_up_proj: [E, H, 2D]
+            # - gate_up_proj_bias: [E, 2D] (optional)
+            # - down_proj: [E, D, H]
+            # - down_proj_bias: [E, H] (optional)
+            n_tokens = int(hs_sel.shape[0])
+            token_ids = torch.arange(n_tokens, device=hs_sel.device).repeat_interleave(kk)  # [N*kk]
+            expert_ids = router_idx.reshape(-1)  # [N*kk]
+
+            expert_ids_sorted, perm = torch.sort(expert_ids)
+            token_ids_sorted = token_ids[perm]
+            w_sorted = topk_w.reshape(-1)[perm]
+            n_sorted = torch.empty_like(w_sorted, dtype=torch.float32)
+
+            unique_e, counts_e = torch.unique_consecutive(expert_ids_sorted, return_counts=True)
+            offset = 0
+            for e_t, c_t in zip(unique_e.tolist(), counts_e.tolist()):
+                e = int(e_t)
+                c = int(c_t)
+                tok = token_ids_sorted[offset : offset + c]
+                x = hs_sel.index_select(0, tok)
+
+                W_gu = gate_up_proj[e]
+                W_down = down_proj[e]
+                b_gu = gate_up_proj_bias[e] if gate_up_proj_bias is not None else None
+                b_down = down_proj_bias[e] if down_proj_bias is not None else None
+
+                gate_up = torch.matmul(x, W_gu)
+                if b_gu is not None:
+                    gate_up = gate_up + b_gu
+
+                gate, up = gate_up[..., ::2], gate_up[..., 1::2]
+                gate = gate.clamp(max=limit)
+                up = up.clamp(min=-limit, max=limit)
+                glu = gate * torch.sigmoid(gate * alpha)
+                act = (up + 1) * glu
+
+                out_e = torch.matmul(act, W_down)
+                if b_down is not None:
+                    out_e = out_e + b_down
+                n_sorted[offset : offset + c] = torch.linalg.norm(out_e.float(), dim=-1)
+                offset += c
+
+            norms_flat = torch.empty_like(n_sorted)
+            norms_flat[perm] = n_sorted
+            norms_sel = norms_flat.reshape(n_tokens, kk)
+            flat_e = router_idx.reshape(-1)
+            flat_w = topk_w.reshape(-1)
+            flat_n = norms_sel.reshape(-1)
+
+            ones = torch.ones_like(flat_e, dtype=torch.int64)
+            count[layer_idx].index_add_(0, flat_e, ones)
+            gate_sum[layer_idx].index_add_(0, flat_e, flat_w)
+            norm_sum[layer_idx].index_add_(0, flat_e, flat_n)
+            gate_norm_sum[layer_idx].index_add_(0, flat_e, flat_w * flat_n)
 
         return _hook
 
@@ -904,7 +1356,7 @@ def profile_20b_reap_saliency(
     total_kept_tokens = 0
 
     try:
-        for bi, start in enumerate(range(0, len(rows), max(1, int(batch_size))), start=1):
+        for batch_i, start in enumerate(range(0, len(rows), max(1, int(batch_size))), start=1):
             batch = rows[start : start + int(batch_size)]
             texts = [r["text"] for r in batch]
 
@@ -919,9 +1371,9 @@ def profile_20b_reap_saliency(
             offsets = tok.pop("offset_mapping")  # [bs, seq, 2] on CPU
 
             keep_masks: list[list[bool]] = []
-            for bi, text in enumerate(texts):
+            for row_i, text in enumerate(texts):
                 spans = _assistant_content_spans(text)
-                keep = _token_keep_mask(offsets[bi].tolist(), spans)
+                keep = _token_keep_mask(offsets[row_i].tolist(), spans)
                 keep_masks.append(keep)
 
             enc = {k: v.to("cuda") for k, v in tok.items()}
@@ -936,10 +1388,10 @@ def profile_20b_reap_saliency(
 
             total_tokens += int(enc["input_ids"].numel())
             total_kept_tokens += int(keep.sum().item())
-            if bi % 10 == 0:
+            if batch_i % 10 == 0:
                 dt_i = max(1e-9, time.time() - t0)
                 print(
-                    f"[*] profile_20b_reap_saliency batches={bi} rows={min(len(rows), start+int(batch_size))}/{len(rows)} "
+                    f"[*] profile_20b_reap_saliency batches={batch_i} rows={min(len(rows), start+int(batch_size))}/{len(rows)} "
                     f"tokens={total_tokens} kept={total_kept_tokens} tok/s={total_tokens/dt_i:.0f}",
                     flush=True,
                 )
@@ -1689,21 +2141,27 @@ def main(
     dataset_split: str = DEFAULT_DATASET_SPLIT,
     text_column: str = DEFAULT_TEXT_COLUMN,
     domain: str = DEFAULT_DOMAIN,
+    domain_column: str = DEFAULT_DOMAIN_COLUMN,
     math_dataset_id: str = DEFAULT_MATH_DATASET_ID,
     math_dataset_split: str = DEFAULT_MATH_DATASET_SPLIT,
     math_text_column: str = DEFAULT_MATH_TEXT_COLUMN,
     num_rows: int = 500,
     max_seq_length: int = 4096,
     batch_size: int = 1,
+    domains_csv: str = "math,science,agentic,general",
+    seed: int = 3407,
+    max_scan_rows: int = 2_000_000,
 ):
     """
     Pruning-track tasks:
     - profile_20b: produce `reports/20b_expert_usage_profile.md` + `data/20b_expert_usage.parquet`
     - reap_saliency_20b: produce `reports/20b_reap_saliency_profile.md` + `data/20b_reap_saliency.parquet`
+    - reap_saliency_by_domain_20b: produce `artifacts/reap_saliency_by_domain/*.parquet` + `reports/reap_saliency_by_domain.md`
     - soft_prune_20b: produce `reports/20b_soft_prune_eval.md`
     - build_pruned_20b: produce `reports/20b_structural_prune_build.md` (and pruned checkpoints in Modal volume)
     - build_pruned_20b_freq: produce `artifacts/20b_pruned_models_freq/manifest_freq.json` (frequency-based)
     - build_pruned_20b_reap: produce `artifacts/20b_pruned_models_reap/manifest_reap.json` (REAP-ranked)
+    - scan_domain_values_20b: scan `DOMAIN_COLUMN` and report counts (debug data availability)
     """
 
     if task == "profile_20b":
@@ -1781,6 +2239,333 @@ def main(
         print(f"[+] Wrote {out_parquet}")
         print(f"[+] Wrote {out_ranking}")
         print(f"[+] Wrote {out_report}")
+        return
+
+    if task == "reap_saliency_by_domain_20b":
+        domains = _parse_csv(domains_csv)
+        if not domains:
+            raise SystemExit("No domains specified. Use --domains-csv 'math,science,agentic,general'")
+
+        out_dir = Path("artifacts/reap_saliency_by_domain")
+        out_dir.mkdir(parents=True, exist_ok=True)
+
+        domain_results: dict[str, dict[str, Any]] = {}
+        for dom in domains:
+            dom = str(dom).strip()
+            # Domain routing:
+            # - `math` uses the dedicated math dataset by default.
+            # - `general` maps to `chat_if` in the CPU artifacts dataset (based on scans).
+            # - other names are treated as literal `meta_domain` values.
+            dsid = str(dataset_id)
+            dsplit = str(dataset_split)
+            dcol = str(text_column)
+            dom_filter = dom
+            if dom == "math":
+                dsid = str(math_dataset_id)
+                dsplit = str(math_dataset_split)
+                dcol = str(math_text_column)
+                dom_filter = ""
+            elif dom == "general":
+                dom_filter = "chat_if"
+            elif dom == "agentic/tools":
+                dom_filter = "agentic"
+
+            sample = sample_domain_rows_cpu.remote(
+                dataset_id=str(dsid),
+                dataset_split=str(dsplit),
+                text_column=str(dcol),
+                domain=str(dom_filter),
+                domain_column=str(domain_column),
+                num_rows=int(num_rows),
+                seed=int(seed),
+                max_scan_rows=int(max_scan_rows),
+            )
+            prof = profile_20b_reap_saliency.remote(
+                model_id=model_id_20b,
+                dataset_id=str(dsid),
+                dataset_split=str(dsplit),
+                text_column=str(dcol),
+                domain=str(dom_filter),
+                num_rows=int(num_rows),
+                max_seq_length=int(max_seq_length),
+                batch_size=int(batch_size),
+                rows_jsonl_path=str(sample["rows_jsonl_path"]),
+            )
+
+            parquet_path = out_dir / f"{dom}.parquet"
+            ranking_path = out_dir / f"{dom}_ranking_by_layer.json"
+            parquet_path.write_bytes(prof["parquet_bytes"])
+            ranking_path.write_text(json.dumps(prof["ranking_by_layer"], indent=2), encoding="utf-8")
+            print(f"[+] Wrote {parquet_path}")
+            print(f"[+] Wrote {ranking_path}")
+
+            domain_results[dom] = {
+                "sample": sample,
+                "meta": prof.get("meta", {}),
+                "concentration_by_layer": prof.get("concentration_by_layer", []),
+                "paths": {"parquet": str(parquet_path), "ranking": str(ranking_path)},
+                "source": {"dataset_id": dsid, "dataset_split": dsplit, "text_column": dcol, "domain_filter": dom_filter},
+            }
+
+        rep = Path("reports/reap_saliency_by_domain.md")
+        rep.parent.mkdir(parents=True, exist_ok=True)
+        lines: list[str] = [
+            "# 20B REAP-lite saliency by domain",
+            "",
+            f"- Base model: `{model_id_20b}`",
+            f"- Dataset: `{dataset_id}` split `{dataset_split}` col `{text_column}`",
+            f"- Domain column: `{domain_column}`",
+            f"- Domains: {', '.join(domains)}",
+            f"- Rows/domain: {int(num_rows)} | Seed: {int(seed)} | Max scan rows: {int(max_scan_rows)}",
+            f"- Max seq length: {int(max_seq_length)} | Batch size: {int(batch_size)}",
+            "",
+        ]
+        for dom in domains:
+            d = domain_results.get(dom, {})
+            s = d.get("sample", {})
+            m = d.get("meta", {})
+            src = d.get("source", {})
+            conc = d.get("concentration_by_layer", [])
+            lines += [
+                f"## {dom}",
+                "",
+                f"- source: `{src.get('dataset_id','')}` split `{src.get('dataset_split','')}` col `{src.get('text_column','')}` domain_filter=`{src.get('domain_filter','')}`",
+                f"- scanned={s.get('scanned')} matched={s.get('matched')} sample_path=`{s.get('rows_jsonl_path')}`",
+                f"- kept_tokens={m.get('total_kept_tokens')} total_tokens={m.get('total_tokens')} tok_s_pred={float(m.get('tokens_per_s') or 0):.0f}",
+                f"- parquet: `{d.get('paths',{}).get('parquet','')}`",
+                "",
+            ]
+            if conc:
+                for li in (0, 1, 10, 23):
+                    if li >= len(conc):
+                        continue
+                    c = conc[li]
+                    lines.append(
+                        f"- layer_{li}: top4={float(c.get('top_4',0)):.3f} top8={float(c.get('top_8',0)):.3f} top16={float(c.get('top_16',0)):.3f}"
+                    )
+                lines.append("")
+
+        rep.write_text("\n".join(lines), encoding="utf-8")
+        print(f"[+] Wrote {rep}")
+        return
+
+    if task == "scan_domain_values_20b":
+        res = scan_domain_counts_cpu.remote(
+            dataset_id=str(dataset_id),
+            dataset_split=str(dataset_split),
+            domain_column=str(domain_column),
+            max_scan_rows=int(max_scan_rows),
+        )
+        out = Path("reports/domain_value_scan.md")
+        out.parent.mkdir(parents=True, exist_ok=True)
+        counts = res.get("counts") or {}
+        top = sorted(counts.items(), key=lambda kv: int(kv[1]), reverse=True)[:50]
+        lines = [
+            "# Domain value scan",
+            "",
+            f"- Dataset: `{res.get('dataset_id')}` split `{res.get('dataset_split')}`",
+            f"- Column: `{res.get('domain_column')}`",
+            f"- Scanned: {res.get('scanned')} (max {res.get('max_scan_rows')}) | Missing: {res.get('missing')}",
+            "",
+            "## Top values",
+            "",
+        ]
+        for k, v in top:
+            lines.append(f"- {k}: {v}")
+        out.write_text("\n".join(lines), encoding="utf-8")
+        print(f"[+] Wrote {out}")
+        return
+
+    if task == "build_union_expert_sets_20b":
+        # Build per-layer union expert sets from previously saved
+        # artifacts/reap_saliency_by_domain/<domain>.parquet.
+        domains = _parse_csv(domains_csv)
+        if not domains:
+            raise SystemExit("No domains specified. Use --domains-csv 'math,science,agentic,general'")
+
+        sal_dir = Path("artifacts/reap_saliency_by_domain")
+        if not sal_dir.exists():
+            raise SystemExit(f"Missing `{sal_dir}`. Run --task reap_saliency_by_domain_20b first.")
+
+        domain_masses: dict[str, dict[int, list[float]]] = {}
+        for dom in domains:
+            p = sal_dir / f"{dom}.parquet"
+            if not p.exists():
+                raise SystemExit(f"Missing `{p}`. Run --task reap_saliency_by_domain_20b for domain={dom}.")
+            domain_masses[dom] = _read_reap_saliency_mass_parquet(p)
+
+        # Default weighting reflects our priorities; can be adjusted later.
+        weights = {d: 1.0 for d in domains}
+        weights.setdefault("general", 1.0)
+        weights.setdefault("science", 1.1)
+        weights.setdefault("agentic", 1.2)
+        weights.setdefault("math", 1.3)
+
+        out_dir = Path("artifacts/union_expert_sets")
+        out_dir.mkdir(parents=True, exist_ok=True)
+
+        covs = [0.95, 0.97, 0.99]
+        for cov in covs:
+            keep = _union_keep_sets(domain_masses, cov=float(cov), weights=weights, core_n=4, cap=None)
+            (out_dir / f"union_cov{int(cov*100)}.json").write_text(
+                json.dumps(
+                    {
+                        "coverage": float(cov),
+                        "domains": domains,
+                        "weights": weights,
+                        "core_n": 4,
+                        "cap": None,
+                        "keep_experts_by_layer": keep,
+                    },
+                    indent=2,
+                ),
+                encoding="utf-8",
+            )
+
+        # Derived variants for pruning.
+        union50 = _union_keep_sets(domain_masses, cov=0.95, weights=weights, core_n=4, cap=16)
+        union_agg = _union_keep_sets(domain_masses, cov=0.97, weights=weights, core_n=4, cap=12)
+        (out_dir / "union50_cap16_cov95.json").write_text(
+            json.dumps(
+                {
+                    "name": "union50",
+                    "coverage": 0.95,
+                    "cap": 16,
+                    "domains": domains,
+                    "weights": weights,
+                    "core_n": 4,
+                    "keep_experts_by_layer": union50,
+                },
+                indent=2,
+            ),
+            encoding="utf-8",
+        )
+        (out_dir / "unionAgg_cap12_cov97.json").write_text(
+            json.dumps(
+                {
+                    "name": "unionAgg",
+                    "coverage": 0.97,
+                    "cap": 12,
+                    "domains": domains,
+                    "weights": weights,
+                    "core_n": 4,
+                    "keep_experts_by_layer": union_agg,
+                },
+                indent=2,
+            ),
+            encoding="utf-8",
+        )
+
+        # Report counts.
+        def _counts(keep_by_layer: list[list[int]]) -> dict[str, Any]:
+            counts = [len(x) for x in keep_by_layer]
+            return {
+                "min": int(min(counts)) if counts else 0,
+                "max": int(max(counts)) if counts else 0,
+                "avg": float(sum(counts) / max(1, len(counts))) if counts else 0.0,
+                "counts": counts,
+            }
+
+        rep = Path("reports/union_policy.md")
+        rep.parent.mkdir(parents=True, exist_ok=True)
+        lines = [
+            "# Union expert-set policy (REAP-lite)",
+            "",
+            f"- Domains: {', '.join(domains)} (column `{domain_column}`)",
+            f"- Rows/domain used: {int(num_rows)} (see `artifacts/reap_saliency_by_domain/`)",
+            f"- Weights: {json.dumps(weights)}",
+            "",
+            "## Outputs",
+            "",
+            "- `artifacts/union_expert_sets/union_cov95.json`",
+            "- `artifacts/union_expert_sets/union_cov97.json`",
+            "- `artifacts/union_expert_sets/union_cov99.json`",
+            "- `artifacts/union_expert_sets/union50_cap16_cov95.json`",
+            "- `artifacts/union_expert_sets/unionAgg_cap12_cov97.json`",
+            "",
+            "## Kept-expert counts (per layer)",
+            "",
+            f"- union50 (cap16@cov95): {json.dumps(_counts(union50))}",
+            f"- unionAgg (cap12@cov97): {json.dumps(_counts(union_agg))}",
+            "",
+        ]
+        rep.write_text("\n".join(lines), encoding="utf-8")
+        print(f"[+] Wrote {rep}")
+        return
+
+    if task == "build_pruned_20b_union":
+        # Structural-prune checkpoints using previously computed union sets.
+        union_dir = Path("artifacts/union_expert_sets")
+        u50_path = union_dir / "union50_cap16_cov95.json"
+        uagg_path = union_dir / "unionAgg_cap12_cov97.json"
+        if not u50_path.exists() or not uagg_path.exists():
+            raise SystemExit(
+                f"Missing union sets under `{union_dir}`. Run --task build_union_expert_sets_20b first."
+            )
+        u50 = json.loads(u50_path.read_text(encoding="utf-8"))
+        uagg = json.loads(uagg_path.read_text(encoding="utf-8"))
+        keep50 = u50.get("keep_experts_by_layer")
+        keepagg = uagg.get("keep_experts_by_layer")
+        if not isinstance(keep50, list) or not isinstance(keepagg, list):
+            raise SystemExit("Invalid union json; missing keep_experts_by_layer.")
+
+        union50_dir = structural_prune_20b_build.remote(
+            model_id=model_id_20b,
+            variant_name="union50",
+            keep_experts_by_layer_json=json.dumps(keep50),
+            out_subdir="20b_union_pruned",
+        )
+        unionagg_dir = structural_prune_20b_build.remote(
+            model_id=model_id_20b,
+            variant_name="unionAgg",
+            keep_experts_by_layer_json=json.dumps(keepagg),
+            out_subdir="20b_union_pruned",
+        )
+        ok50 = sanity_infer_model_dir.remote(model_dir=union50_dir)
+        okagg = sanity_infer_model_dir.remote(model_dir=unionagg_dir)
+
+        artifacts_dir = Path("artifacts/20b_union_pruned")
+        artifacts_dir.mkdir(parents=True, exist_ok=True)
+        manifest = {
+            "base_model": str(model_id_20b),
+            "dataset_id": str(dataset_id),
+            "dataset_split": str(dataset_split),
+            "text_column": str(text_column),
+            "domain_column": str(domain_column),
+            "domains": _parse_csv(domains_csv),
+            "seed": int(seed),
+            "num_rows_per_domain": int(num_rows),
+            "max_scan_rows": int(max_scan_rows),
+            "union50": {"dir": union50_dir, "ok": bool(ok50.get("ok"))},
+            "unionAgg": {"dir": unionagg_dir, "ok": bool(okagg.get("ok"))},
+            "union_set_files": {"union50": str(u50_path), "unionAgg": str(uagg_path)},
+        }
+        (artifacts_dir / "manifest_union.json").write_text(json.dumps(manifest, indent=2), encoding="utf-8")
+        rep = Path("reports/20b_union_prune_build.md")
+        rep.parent.mkdir(parents=True, exist_ok=True)
+        rep.write_text(
+            "\n".join(
+                [
+                    "# 20B structural prune build (union expert set)",
+                    "",
+                    f"- Base model: `{model_id_20b}`",
+                    f"- union50: `{union50_dir}` ok={ok50.get('ok')}",
+                    f"- unionAgg: `{unionagg_dir}` ok={okagg.get('ok')}",
+                    "",
+                    f"- Manifest: `{artifacts_dir/'manifest_union.json'}`",
+                    "",
+                    "## Reproduce",
+                    "",
+                    "```bash",
+                    "modal run modal/gpt_oss_pruning_track.py --task build_pruned_20b_union",
+                    "```",
+                    "",
+                ]
+            ),
+            encoding="utf-8",
+        )
+        print(f"[+] Wrote {artifacts_dir/'manifest_union.json'}")
+        print(f"[+] Wrote {rep}")
         return
 
     if task == "reap_saliency_20b":
@@ -2297,6 +3082,94 @@ def main(
                 model_dir="/root/model/artifacts/20b_pruned_models/general_50pct_experts"
             )
         )
+        print(json.dumps(infos, indent=2))
+        return
+
+    if task == "build_pruned_120b_first64":
+        # CPU-only structural prune build for GPT-OSS-120B with a deterministic baseline:
+        # keep experts [0..63] for every layer. This validates the full rewrite/indexing path
+        # without needing any 120B saliency ranking yet.
+        #
+        # NOTE: We do not run sanity_infer_model_dir here because 120B cannot be loaded on H100:1.
+        model_id_120b = DEFAULT_120B_MODEL_ID
+
+        # Read num_layers/num_experts remotely (local entrypoint should never touch /root/*).
+        meta = read_model_cfg_meta.remote(str(model_id_120b))
+        num_layers = int(meta.get("num_layers") or 0)
+        num_experts = int(meta.get("num_experts") or 0)
+        if num_layers <= 0 or num_experts <= 0:
+            raise SystemExit(f"Invalid config for {model_id_120b}: num_layers={num_layers} num_experts={num_experts}")
+
+        keep_n = 64
+        if keep_n > num_experts:
+            raise SystemExit(f"keep_n={keep_n} exceeds num_experts={num_experts} for {model_id_120b}")
+        keep = list(range(keep_n))
+        keep_by_layer = [keep for _ in range(num_layers)]
+
+        variant_name = f"first{keep_n}_experts_keepfrac50"
+        out_dir = structural_prune_20b_build.remote(
+            model_id=model_id_120b,
+            variant_name=variant_name,
+            keep_experts_by_layer_json=json.dumps(keep_by_layer),
+            out_subdir="120b_pruned_models",
+        )
+
+        # Validate a few keys for correct mapping + tensor shape.
+        infos = []
+        for li in (0, 1, 9, 18, 27, 35):
+            infos.append(inspect_pruned_checkpoint.remote(model_dir=out_dir, layer_idx=int(li)))
+        infos.append(validate_pruned_expert_shards.remote(model_dir=out_dir))
+
+        artifacts_dir = Path("artifacts/120b_pruned_models_first64")
+        artifacts_dir.mkdir(parents=True, exist_ok=True)
+        (artifacts_dir / "manifest.json").write_text(
+            json.dumps(
+                {
+                    "base_model": model_id_120b,
+                    "variant_name": variant_name,
+                    "keep_n": keep_n,
+                    "num_layers": num_layers,
+                    "num_experts": num_experts,
+                    "keep_experts_by_layer": keep_by_layer,
+                    "model_dir": out_dir,
+                    "inspect": infos,
+                },
+                indent=2,
+                sort_keys=True,
+            ),
+            encoding="utf-8",
+        )
+
+        out_report = Path("reports/120b_structural_prune_build_first64.md")
+        out_report.parent.mkdir(parents=True, exist_ok=True)
+        out_report.write_text(
+            "\n".join(
+                [
+                    "# 120B structural prune build (baseline: first64)",
+                    "",
+                    f"- Base model: `{model_id_120b}`",
+                    f"- keep_n: {keep_n}/{num_experts} (all {num_layers} layers)",
+                    "",
+                    "## Output",
+                    "",
+                    f"- model_dir: `{out_dir}`",
+                    "",
+                    "## Validation (CPU)",
+                    "",
+                    f"- wrote: `{artifacts_dir/'manifest.json'}`",
+                    "",
+                    "## Reproduce",
+                    "",
+                    "```bash",
+                    "modal run modal/gpt_oss_pruning_track.py --task build_pruned_120b_first64",
+                    "```",
+                    "",
+                ]
+            ),
+            encoding="utf-8",
+        )
+        print(f"[+] Wrote {artifacts_dir/'manifest.json'}")
+        print(f"[+] Wrote {out_report}")
         print(json.dumps(infos, indent=2))
         return
 

@@ -212,6 +212,11 @@ def bench_decode_sweep(
     for bs in batch_sizes:
         bs = int(bs)
         try:
+            print(
+                f"[*] bench_decode_sweep name={name} top_k={top_k} bs={bs} "
+                f"prompt_len={prompt_len} new_tokens={new_tokens}",
+                flush=True,
+            )
             input_ids = torch.full(
                 (bs, prompt_len),
                 fill_value=token_id,
@@ -261,8 +266,22 @@ def bench_decode_sweep(
                 decode_s = _decode_loop(pkv, nt)
 
             peak_alloc_gib = float(torch.cuda.max_memory_allocated() / (1024.0**3))
+            peak_reserved_gib = float(torch.cuda.max_memory_reserved() / (1024.0**3))
+            try:
+                free_b, total_b = torch.cuda.mem_get_info()
+                mem_used_gib = float((total_b - free_b) / (1024.0**3))
+                mem_free_gib = float(free_b / (1024.0**3))
+            except Exception:
+                mem_used_gib = float("nan")
+                mem_free_gib = float("nan")
             total_decode_tok_s = float((bs * new_tokens) / max(1e-9, decode_s))
             per_stream_decode_tok_s = float(new_tokens / max(1e-9, decode_s))
+            print(
+                f"[*] bench_decode_sweep ok name={name} top_k={top_k} bs={bs} "
+                f"total_tok_s={total_decode_tok_s:.2f} per_stream_tok_s={per_stream_decode_tok_s:.2f} "
+                f"decode_s={decode_s:.3f} peak_alloc_gib={peak_alloc_gib:.1f} mem_used_gib={mem_used_gib:.1f}",
+                flush=True,
+            )
             results.append(
                 {
                     "batch_size": int(bs),
@@ -271,10 +290,17 @@ def bench_decode_sweep(
                     "per_stream_decode_tok_s": float(per_stream_decode_tok_s),
                     "total_decode_tok_s": float(total_decode_tok_s),
                     "peak_alloc_gib": float(peak_alloc_gib),
+                    "peak_reserved_gib": float(peak_reserved_gib),
+                    "mem_used_gib": float(mem_used_gib),
+                    "mem_free_gib": float(mem_free_gib),
                 }
             )
         except Exception as e:
             if _oom(e):
+                print(
+                    f"[*] bench_decode_sweep oom name={name} top_k={top_k} bs={bs} err={type(e).__name__}: {e}",
+                    flush=True,
+                )
                 results.append(
                     {
                         "batch_size": int(bs),
@@ -314,9 +340,10 @@ def main(
     batch_sizes: str = "1,2,4,8,16,32",
     warmup: int = 1,
     include_reap_25_topk2: bool = False,
+    out_path: str = "reports/20b_decode_throughput_reap_vs_freq.md",
 ):
     batch_list = _parse_csv_ints(batch_sizes)
-    out_path = Path("reports/20b_decode_throughput_reap_vs_freq.md")
+    out_path = Path(str(out_path))
     out_path.parent.mkdir(parents=True, exist_ok=True)
 
     variants: list[tuple[str, str, int]] = [
@@ -350,7 +377,7 @@ def main(
         f"- prompt_len: {int(prompt_len)} | new_tokens: {int(new_tokens)}",
         f"- batch_sweep: {','.join(str(x) for x in batch_list)}",
         "",
-        "| run | top_k | max_batch | total tok/s @max | per-stream tok/s @max | peak_alloc_gib @max | model |",
+        "| run | top_k | max_batch | total tok/s @max | per-stream tok/s @max | mem_used_gib @max | model |",
         "|---|---:|---:|---:|---:|---:|---|",
     ]
     for r in runs:
@@ -361,6 +388,8 @@ def main(
             )
             continue
         best = max(ok, key=lambda x: x.get("batch_size", 0))
+        mem_used = best.get("mem_used_gib")
+        mem_used_str = f"{float(mem_used):.1f}" if isinstance(mem_used, (int, float)) else ""
         lines.append(
             "| "
             + " | ".join(
@@ -370,7 +399,7 @@ def main(
                     str(best["batch_size"]),
                     f"{best['total_decode_tok_s']:.2f}",
                     f"{best['per_stream_decode_tok_s']:.2f}",
-                    f"{best['peak_alloc_gib']:.1f}",
+                    mem_used_str,
                     f"`{r['model_path']}`",
                 ]
             )
@@ -385,14 +414,14 @@ def main(
     for r in runs:
         lines.append(f"### {r['name']}")
         lines.append("")
-        lines.append("| batch | total tok/s | per-stream tok/s | decode_s | peak_alloc_gib | status |")
+        lines.append("| batch | total tok/s | per-stream tok/s | decode_s | mem_used_gib | status |")
         lines.append("|---:|---:|---:|---:|---:|---|")
         for x in r["results"]:
             if x.get("oom"):
                 lines.append(f"| {x['batch_size']} |  |  |  |  | OOM |")
                 break
             lines.append(
-                f"| {x['batch_size']} | {x['total_decode_tok_s']:.2f} | {x['per_stream_decode_tok_s']:.2f} | {x['decode_s']:.3f} | {x['peak_alloc_gib']:.1f} | ok |"
+                f"| {x['batch_size']} | {x['total_decode_tok_s']:.2f} | {x['per_stream_decode_tok_s']:.2f} | {x['decode_s']:.3f} | {x.get('mem_used_gib','')} | ok |"
             )
         lines.append("")
 

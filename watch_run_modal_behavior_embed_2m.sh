@@ -10,6 +10,17 @@ LOG_DIR="${LOG_DIR:-$ROOT_DIR/modal_parallel_logs}"
 CPU_LOG_DIR="${CPU_LOG_DIR:-$ROOT_DIR/cpu_logs}"
 mkdir -p "$LOG_DIR" "$CPU_LOG_DIR"
 
+# Modal volumes are profile/environment scoped. Profiles change frequently, so make the runner
+# robust by creating required volumes on-demand (CLI `volume put/ls` do not auto-create).
+ensure_modal_volume() {
+  local name="$1"
+  if modal volume ls "$name" / >/dev/null 2>&1; then
+    return 0
+  fi
+  echo "[*] creating Modal volume: $name" | tee -a "$master_log"
+  modal volume create "$name" >>"$master_log" 2>&1 || true
+}
+
 # Concurrency cap (manager requirement).
 # Default to 6 (manager requirement) to keep GPU utilization high without overloading the host.
 MAX_PARALLEL="${MAX_PARALLEL:-6}"
@@ -21,6 +32,12 @@ if [[ "${MAX_PARALLEL}" -gt 6 ]]; then
   MAX_PARALLEL=6
 fi
 FILE_SHARD_COUNT="${FILE_SHARD_COUNT:-8}"
+# Optional: only run a subset of shards (for retries), e.g. SHARD_LIST="2,3,5,6,7"
+# Supported formats:
+#   - comma-separated ints: "0,1,4"
+#   - whitespace-separated ints: "0 1 4"
+#   - ranges: "0-3,7"
+SHARD_LIST="${SHARD_LIST:-}"
 
 # Speed: avoid re-uploading candidates / re-prefetching model if already cached in Modal volumes.
 SKIP_CANDIDATE_UPLOAD="${SKIP_CANDIDATE_UPLOAD:-1}"
@@ -139,6 +156,9 @@ if [[ "${FILE_SHARD_COUNT}" -gt "${num_files}" ]]; then
   FILE_SHARD_COUNT="${num_files}"
 fi
 
+ensure_modal_volume "harmony-embed-data"
+ensure_modal_volume "qwen-embed-model-weights"
+
 remote_candidates_dir="/candidates/$REMOTE_TAG/$PACKED_BASE"
 if [[ "${SKIP_CANDIDATE_UPLOAD}" == "1" ]] && modal volume ls harmony-embed-data "$remote_candidates_dir" >/dev/null 2>&1; then
   echo "[ok] candidates already present in Modal volume at $remote_candidates_dir; skipping upload" | tee -a "$master_log"
@@ -161,12 +181,62 @@ else
     export SKIP_PREFETCH=0;
     export MODEL_ID=\"$MODEL_ID\";
     modal run \"$ROOT_DIR/modal/qwen_embedding_sglang_scoring.py\";
-  " >\"$prefetch_log\" 2>&1
+  " >"$prefetch_log" 2>&1
   echo "[ok] model prefetch done" | tee -a "$master_log"
 fi
 
 echo "[*] launching DP shards: FILE_SHARD_COUNT=$FILE_SHARD_COUNT MAX_PARALLEL=$MAX_PARALLEL" | tee -a "$master_log"
-for i in $(seq 0 $((FILE_SHARD_COUNT - 1))); do
+shards_to_run=()
+if [[ -n "${SHARD_LIST}" ]]; then
+  # Normalize separators to commas, then expand ranges.
+  norm="${SHARD_LIST//[[:space:]]/,}"
+  norm="${norm//,,/,}"
+  IFS=',' read -r -a parts <<<"$norm"
+  for part in "${parts[@]}"; do
+    part="$(echo "$part" | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//')"
+    [[ -z "$part" ]] && continue
+    if [[ "$part" =~ ^([0-9]+)-([0-9]+)$ ]]; then
+      a="${BASH_REMATCH[1]}"
+      b="${BASH_REMATCH[2]}"
+      if ((a > b)); then
+        tmp="$a"; a="$b"; b="$tmp"
+      fi
+      for i in $(seq "$a" "$b"); do
+        shards_to_run+=("$i")
+      done
+    elif [[ "$part" =~ ^[0-9]+$ ]]; then
+      shards_to_run+=("$part")
+    else
+      echo "[err] invalid SHARD_LIST entry: $part (SHARD_LIST=$SHARD_LIST)" | tee -a "$master_log"
+      exit 2
+    fi
+  done
+else
+  for i in $(seq 0 $((FILE_SHARD_COUNT - 1))); do
+    shards_to_run+=("$i")
+  done
+fi
+
+# De-dup and validate shard ids.
+deduped=()
+declare -A seen=()
+for i in "${shards_to_run[@]}"; do
+  if ! [[ "$i" =~ ^[0-9]+$ ]]; then
+    echo "[err] invalid shard index: $i" | tee -a "$master_log"
+    exit 2
+  fi
+  if ((i < 0 || i >= FILE_SHARD_COUNT)); then
+    echo "[err] shard index out of range: $i (FILE_SHARD_COUNT=$FILE_SHARD_COUNT)" | tee -a "$master_log"
+    exit 2
+  fi
+  if [[ -z "${seen[$i]+x}" ]]; then
+    seen[$i]=1
+    deduped+=("$i")
+  fi
+done
+
+echo "[*] shards_to_run: ${deduped[*]}" | tee -a "$master_log"
+for i in "${deduped[@]}"; do
   run_one "$i"
 done
 
