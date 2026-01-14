@@ -15,6 +15,7 @@ import time
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Iterable
+import json
 
 import modal
 
@@ -281,6 +282,11 @@ class _WorkerArgs:
     max_steps: int
     run_dir: str
     tokenized_cache_dir: str
+    benchmark: bool = False
+    bench_warmup_steps: int = 2
+    lora_plus: bool = False
+    lora_plus_lr_ratio: float = 16.0
+    baseline_key: str = ""
 
 
 def _tokenize_to_disk_if_needed(
@@ -630,6 +636,9 @@ def _ddp_qlora_train_worker(w: _WorkerArgs) -> None:
     log_every = int(os.environ.get("LOG_EVERY", "1"))
     save_steps = int(os.environ.get("SAVE_STEPS", "16"))
     eval_steps = int(os.environ.get("EVAL_STEPS", "16"))
+    if bool(w.benchmark):
+        save_steps = 0
+        eval_steps = 0
 
     if is_main:
         eff = per_device_train_batch_size * world_size * max(1, grad_accum_steps)
@@ -682,21 +691,52 @@ def _ddp_qlora_train_worker(w: _WorkerArgs) -> None:
     # ----
     # Optimizer (LoRA params only)
     # ----
-    trainable = [p for p in model.parameters() if p.requires_grad]
+    trainable_named = [(n, p) for (n, p) in model.named_parameters() if p.requires_grad]
+    trainable = [p for (_n, p) in trainable_named]
     if not trainable:
         raise RuntimeError("No trainable parameters found (LoRA not applied?)")
+
+    def _lora_plus_param_groups():
+        # Chronicals-style LoRA+: boost LR for LoRA "B" matrices.
+        lora_a = []
+        lora_b = []
+        other = []
+        for name, param in trainable_named:
+            if "lora_A" in name or "lora_embedding_A" in name:
+                lora_a.append(param)
+            elif "lora_B" in name or "lora_embedding_B" in name:
+                lora_b.append(param)
+            else:
+                other.append(param)
+        groups = []
+        if other:
+            groups.append({"params": other, "lr": lr})
+        if lora_a:
+            groups.append({"params": lora_a, "lr": lr})
+        if lora_b:
+            groups.append({"params": lora_b, "lr": lr * float(w.lora_plus_lr_ratio)})
+        if is_main:
+            print(
+                "[*] LoRA+: "
+                f"enabled={bool(w.lora_plus)} lr={lr} lr_ratio={float(w.lora_plus_lr_ratio)} "
+                f"A={len(lora_a)} B={len(lora_b)} other={len(other)} groups={len(groups)}",
+                flush=True,
+            )
+        return groups
 
     optimizer = None
     try:
         import bitsandbytes as bnb
 
-        optimizer = bnb.optim.AdamW8bit(trainable, lr=lr)
+        params = _lora_plus_param_groups() if bool(w.lora_plus) else trainable
+        optimizer = bnb.optim.AdamW8bit(params, lr=lr)
         if is_main:
             print("[*] Optimizer: bitsandbytes AdamW8bit", flush=True)
     except Exception:
         from torch.optim import AdamW
 
-        optimizer = AdamW(trainable, lr=lr)
+        params = _lora_plus_param_groups() if bool(w.lora_plus) else trainable
+        optimizer = AdamW(params, lr=lr)
         if is_main:
             print("[*] Optimizer: torch AdamW", flush=True)
 
@@ -769,20 +809,34 @@ def _ddp_qlora_train_worker(w: _WorkerArgs) -> None:
     t0 = time.time()
     global_step = 0
     micro_step = 0
+    bench_warmup = int(max(0, w.bench_warmup_steps))
+    bench_tokens = 0.0
+    bench_time_s = 0.0
+    bench_loss_sum = 0.0
+    bench_loss_tokens = 0.0
 
     run_dir = Path(w.run_dir)
     checkpoints_dir = run_dir / "checkpoints"
     final_adapter_dir = run_dir / "lora_adapter"
+    bench_path = run_dir / "bench_result.json"
 
     for epoch in range(1):
         train_sampler.set_epoch(epoch)
         optimizer.zero_grad(set_to_none=True)
+        step_tokens_local = 0
+        step_t0 = None
+        step_loss_sum_local = 0.0
+        step_loss_tokens_local = 0.0
 
         for batch in train_loader:
             micro_step += 1
             batch = {k: v.to(device, non_blocking=True) for k, v in batch.items()}
+            active = (batch["labels"] != -100).sum().to(torch.float32)
+            step_tokens_local += int(active.item())
 
             sync = (micro_step % max(1, grad_accum_steps)) == 0
+            if step_t0 is None:
+                step_t0 = time.time()
             sync_ctx = (
                 nullcontext()
                 if (sync or not hasattr(model, "no_sync"))
@@ -792,6 +846,10 @@ def _ddp_qlora_train_worker(w: _WorkerArgs) -> None:
             with sync_ctx:
                 with torch.autocast(device_type="cuda", dtype=torch.bfloat16):
                     out = model(**batch)
+                    # HF returns mean loss over active labels; keep a true per-token sum.
+                    micro_loss = out.loss.detach().to(torch.float32)
+                    step_loss_sum_local += float(micro_loss.item()) * float(active.item())
+                    step_loss_tokens_local += float(active.item())
                     loss = out.loss / max(1, grad_accum_steps)
                 loss.backward()
 
@@ -804,12 +862,38 @@ def _ddp_qlora_train_worker(w: _WorkerArgs) -> None:
             optimizer.zero_grad(set_to_none=True)
             global_step += 1
 
+            step_dt = max(1e-9, time.time() - (step_t0 or time.time()))
+            tokens_step = float(step_tokens_local)
+            loss_step_sum = float(step_loss_sum_local)
+            loss_step_tokens = float(step_loss_tokens_local)
+            if is_dist:
+                t = torch.tensor([tokens_step], device=device, dtype=torch.float32)
+                dist.all_reduce(t, op=dist.ReduceOp.SUM)
+                tokens_step = float(t.item())
+                ls = torch.tensor([loss_step_sum, loss_step_tokens], device=device, dtype=torch.float32)
+                dist.all_reduce(ls, op=dist.ReduceOp.SUM)
+                loss_step_sum = float(ls[0].item())
+                loss_step_tokens = float(ls[1].item())
+            tok_s = tokens_step / step_dt
+            step_tokens_local = 0
+            step_t0 = None
+            step_loss_sum_local = 0.0
+            step_loss_tokens_local = 0.0
+            loss_step_mean = loss_step_sum / max(1.0, loss_step_tokens)
+
             if is_main and (global_step <= 5 or global_step % max(1, log_every) == 0):
                 lr_now = scheduler.get_last_lr()[0]
                 print(
-                    f"[step {global_step}] loss={loss.detach().float().item() * max(1, grad_accum_steps):.4f} lr={lr_now:.2e}",
+                    f"[step {global_step}] loss={loss_step_mean:.4f} "
+                    f"lr={lr_now:.2e} tok_s={tok_s:.0f} step_tokens={int(tokens_step)}",
                     flush=True,
                 )
+
+            if global_step > bench_warmup:
+                bench_tokens += tokens_step
+                bench_time_s += step_dt
+                bench_loss_sum += loss_step_mean * tokens_step
+                bench_loss_tokens += tokens_step
 
             if eval_steps and global_step % eval_steps == 0:
                 run_eval(global_step)
@@ -825,11 +909,51 @@ def _ddp_qlora_train_worker(w: _WorkerArgs) -> None:
 
     if is_dist:
         dist.barrier()
-    save_adapter(final_adapter_dir)
+    if not bool(w.benchmark):
+        save_adapter(final_adapter_dir)
 
     if is_main:
         dt = time.time() - t0
         max_mem_gb = torch.cuda.max_memory_allocated(device=device) / (1024**3)
+        bench_out = None
+        if bench_time_s > 0 and bench_loss_tokens > 0:
+            bench_tok_s = bench_tokens / bench_time_s
+            bench_mean_loss = bench_loss_sum / max(1.0, bench_loss_tokens)
+            ppl = math.exp(bench_mean_loss) if bench_mean_loss < 20 else float("inf")
+            print(
+                f"[bench] warmup={bench_warmup} bench_steps={max(0, global_step - bench_warmup)} "
+                f"tok_s={bench_tok_s:.0f} tokens={int(bench_tokens)} time_s={bench_time_s:.2f} "
+                f"loss={bench_mean_loss:.4f} ppl={ppl:.2f}",
+                flush=True,
+            )
+            bench_out = {
+                "baseline_key": str(w.baseline_key or ""),
+                "strategy": "ddp_qlora",
+                "model_id": str(w.model_id),
+                "dataset_id": str(w.dataset_id),
+                "dataset_split": str(w.dataset_split),
+                "max_seq_length": int(w.max_seq_length),
+                "world_size": int(world_size),
+                "per_device_train_batch_size": int(per_device_train_batch_size),
+                "grad_accum_steps": int(grad_accum_steps),
+                "learning_rate": float(lr),
+                "lora_plus": bool(w.lora_plus),
+                "lora_plus_lr_ratio": float(w.lora_plus_lr_ratio),
+                "bench_warmup_steps": int(bench_warmup),
+                "bench_steps": int(max(0, global_step - bench_warmup)),
+                "bench_tokens": int(bench_tokens),
+                "bench_time_s": float(bench_time_s),
+                "bench_tok_s": float(bench_tok_s),
+                "bench_loss": float(bench_mean_loss),
+                "bench_ppl": float(ppl),
+                "max_mem_gb": float(max_mem_gb),
+                "wall_s_total": float(dt),
+                "ts": int(time.time()),
+            }
+            try:
+                bench_path.write_text(json.dumps(bench_out, indent=2, sort_keys=True), encoding="utf-8")
+            except Exception as e:
+                print(f"[warn] failed to write {bench_path}: {type(e).__name__}: {e}", flush=True)
         print(
             f"[+] Train done. steps={global_step} wall={dt:.1f}s max_mem={max_mem_gb:.1f}GB",
             flush=True,
@@ -1119,21 +1243,51 @@ def _fsdp_bf16_train_worker(w: _WorkerArgs) -> None:
     # ----
     # Optimizer (LoRA params only)
     # ----
-    trainable = [p for p in model.parameters() if p.requires_grad]
+    trainable_named = [(n, p) for (n, p) in model.named_parameters() if p.requires_grad]
+    trainable = [p for (_n, p) in trainable_named]
     if not trainable:
         raise RuntimeError("No trainable parameters found (LoRA not applied?)")
+
+    def _lora_plus_param_groups():
+        lora_a = []
+        lora_b = []
+        other = []
+        for name, param in trainable_named:
+            if "lora_A" in name or "lora_embedding_A" in name:
+                lora_a.append(param)
+            elif "lora_B" in name or "lora_embedding_B" in name:
+                lora_b.append(param)
+            else:
+                other.append(param)
+        groups = []
+        if other:
+            groups.append({"params": other, "lr": lr})
+        if lora_a:
+            groups.append({"params": lora_a, "lr": lr})
+        if lora_b:
+            groups.append({"params": lora_b, "lr": lr * float(w.lora_plus_lr_ratio)})
+        if is_main:
+            print(
+                "[*] LoRA+: "
+                f"enabled={bool(w.lora_plus)} lr={lr} lr_ratio={float(w.lora_plus_lr_ratio)} "
+                f"A={len(lora_a)} B={len(lora_b)} other={len(other)} groups={len(groups)}",
+                flush=True,
+            )
+        return groups
 
     optimizer = None
     try:
         import bitsandbytes as bnb
 
-        optimizer = bnb.optim.AdamW8bit(trainable, lr=lr)
+        params = _lora_plus_param_groups() if bool(w.lora_plus) else trainable
+        optimizer = bnb.optim.AdamW8bit(params, lr=lr)
         if is_main:
             print("[*] Optimizer: bitsandbytes AdamW8bit", flush=True)
     except Exception:
         from torch.optim import AdamW
 
-        optimizer = AdamW(trainable, lr=lr)
+        params = _lora_plus_param_groups() if bool(w.lora_plus) else trainable
+        optimizer = AdamW(params, lr=lr)
         if is_main:
             print("[*] Optimizer: torch AdamW", flush=True)
 
@@ -1510,6 +1664,10 @@ def train_high_part00_fsdp(
     max_steps: int = -1,
     strategy: str = "ddp_qlora",
     load_in_4bit: bool = True,
+    benchmark: bool = False,
+    bench_warmup_steps: int = 2,
+    lora_plus: bool = False,
+    lora_plus_lr_ratio: float = 16.0,
 ):
     import subprocess
     import torch
@@ -1573,6 +1731,14 @@ def train_high_part00_fsdp(
         str(run_dir),
         "--tokenized-cache-dir",
         str(tokenized_cache_dir),
+        "--benchmark",
+        ("1" if benchmark else "0"),
+        "--bench-warmup-steps",
+        str(int(bench_warmup_steps)),
+        "--lora-plus",
+        ("1" if lora_plus else "0"),
+        "--lora-plus-lr-ratio",
+        str(float(lora_plus_lr_ratio)),
     ]
 
     print(f"[*] torchrun: {' '.join(cmd[:6])} ...")
@@ -1584,6 +1750,238 @@ def train_high_part00_fsdp(
     data_volume.commit()
 
     return str(run_dir)
+
+
+@app.function(
+    image=image,
+    gpu="B200:1",
+    volumes={
+        "/root/data": data_volume,
+        "/root/model": model_volume,
+        "/root/hf_cache": hf_cache_volume,
+    },
+    secrets=_secrets,
+    timeout=21600,
+    cpu=16.0,
+    memory=262144,
+)
+def train_high_part00_b2001(
+    model_id: str = DEFAULT_MODEL_ID,
+    dataset_id: str = DEFAULT_DATASET_ID,
+    dataset_split: str = DEFAULT_DATASET_SPLIT,
+    train_samples: int = 512,
+    eval_samples: int = 0,
+    max_seq_length: int = 4096,
+    max_steps: int = 50,
+    strategy: str = "ddp_qlora",
+    load_in_4bit: bool = True,
+    benchmark: bool = True,
+    bench_warmup_steps: int = 2,
+    lora_plus: bool = False,
+    lora_plus_lr_ratio: float = 16.0,
+    baseline_key: str = "",
+):
+    import subprocess
+    import torch
+
+    _ensure_hf_env()
+    model_volume.reload()
+    data_volume.reload()
+    hf_cache_volume.reload()
+
+    world_size = torch.cuda.device_count()
+    if world_size != 1:
+        raise RuntimeError(f"Expected 1 GPU, but saw {world_size}.")
+
+    out_root = Path("/root/model/finetuned")
+    out_root.mkdir(parents=True, exist_ok=True)
+    run_dir = (
+        out_root
+        / _sanitize_for_path(dataset_id)
+        / dataset_split
+        / _sanitize_for_path(model_id)
+        / f"run_{int(time.time())}"
+    )
+    run_dir.mkdir(parents=True, exist_ok=True)
+
+    tokenized_cache_dir = _local_tokenized_dir(
+        dataset_id=dataset_id,
+        dataset_split=dataset_split,
+        max_seq_length=int(max_seq_length),
+        train_samples=int(train_samples),
+        eval_samples=int(eval_samples),
+    )
+
+    script_path = Path(__file__).resolve()
+    cmd = [
+        "torchrun",
+        "--standalone",
+        "--nproc_per_node=1",
+        str(script_path),
+        "--worker",
+        "--strategy",
+        strategy,
+        "--load-in-4bit",
+        ("1" if load_in_4bit else "0"),
+        "--model-id",
+        model_id,
+        "--dataset-id",
+        dataset_id,
+        "--dataset-split",
+        dataset_split,
+        "--train-samples",
+        str(int(train_samples)),
+        "--eval-samples",
+        str(int(eval_samples)),
+        "--max-seq-length",
+        str(int(max_seq_length)),
+        "--max-steps",
+        str(int(max_steps)),
+        "--run-dir",
+        str(run_dir),
+        "--tokenized-cache-dir",
+        str(tokenized_cache_dir),
+        "--benchmark",
+        ("1" if benchmark else "0"),
+        "--bench-warmup-steps",
+        str(int(bench_warmup_steps)),
+        "--lora-plus",
+        ("1" if lora_plus else "0"),
+        "--lora-plus-lr-ratio",
+        str(float(lora_plus_lr_ratio)),
+        "--baseline-key",
+        str(baseline_key or ""),
+    ]
+    print(f"[*] torchrun: {' '.join(cmd[:6])} ...")
+    subprocess.run(cmd, check=True)
+
+    model_volume.commit()
+    hf_cache_volume.commit()
+    data_volume.commit()
+    bench_path = Path(run_dir) / "bench_result.json"
+    bench = None
+    if bench_path.exists():
+        try:
+            bench = json.loads(bench_path.read_text(encoding="utf-8"))
+        except Exception:
+            bench = None
+    return {"run_dir": str(run_dir), "bench": bench}
+
+
+@app.function(
+    image=image,
+    gpu="B200:2",
+    volumes={
+        "/root/data": data_volume,
+        "/root/model": model_volume,
+        "/root/hf_cache": hf_cache_volume,
+    },
+    secrets=_secrets,
+    timeout=21600,
+    cpu=32.0,
+    memory=262144,
+)
+def train_high_part00_b2002(
+    model_id: str = DEFAULT_MODEL_ID,
+    dataset_id: str = DEFAULT_DATASET_ID,
+    dataset_split: str = DEFAULT_DATASET_SPLIT,
+    train_samples: int = 512,
+    eval_samples: int = 0,
+    max_seq_length: int = 4096,
+    max_steps: int = 50,
+    strategy: str = "ddp_qlora",
+    load_in_4bit: bool = True,
+    benchmark: bool = True,
+    bench_warmup_steps: int = 2,
+    lora_plus: bool = False,
+    lora_plus_lr_ratio: float = 16.0,
+    baseline_key: str = "",
+):
+    import subprocess
+    import torch
+
+    _ensure_hf_env()
+    model_volume.reload()
+    data_volume.reload()
+    hf_cache_volume.reload()
+
+    world_size = torch.cuda.device_count()
+    if world_size != 2:
+        raise RuntimeError(f"Expected 2 GPUs, but saw {world_size}.")
+
+    out_root = Path("/root/model/finetuned")
+    out_root.mkdir(parents=True, exist_ok=True)
+    run_dir = (
+        out_root
+        / _sanitize_for_path(dataset_id)
+        / dataset_split
+        / _sanitize_for_path(model_id)
+        / f"run_{int(time.time())}"
+    )
+    run_dir.mkdir(parents=True, exist_ok=True)
+
+    tokenized_cache_dir = _local_tokenized_dir(
+        dataset_id=dataset_id,
+        dataset_split=dataset_split,
+        max_seq_length=int(max_seq_length),
+        train_samples=int(train_samples),
+        eval_samples=int(eval_samples),
+    )
+
+    script_path = Path(__file__).resolve()
+    cmd = [
+        "torchrun",
+        "--standalone",
+        "--nproc_per_node=2",
+        str(script_path),
+        "--worker",
+        "--strategy",
+        strategy,
+        "--load-in-4bit",
+        ("1" if load_in_4bit else "0"),
+        "--model-id",
+        model_id,
+        "--dataset-id",
+        dataset_id,
+        "--dataset-split",
+        dataset_split,
+        "--train-samples",
+        str(int(train_samples)),
+        "--eval-samples",
+        str(int(eval_samples)),
+        "--max-seq-length",
+        str(int(max_seq_length)),
+        "--max-steps",
+        str(int(max_steps)),
+        "--run-dir",
+        str(run_dir),
+        "--tokenized-cache-dir",
+        str(tokenized_cache_dir),
+        "--benchmark",
+        ("1" if benchmark else "0"),
+        "--bench-warmup-steps",
+        str(int(bench_warmup_steps)),
+        "--lora-plus",
+        ("1" if lora_plus else "0"),
+        "--lora-plus-lr-ratio",
+        str(float(lora_plus_lr_ratio)),
+        "--baseline-key",
+        str(baseline_key or ""),
+    ]
+    print(f"[*] torchrun: {' '.join(cmd[:6])} ...")
+    subprocess.run(cmd, check=True)
+
+    model_volume.commit()
+    hf_cache_volume.commit()
+    data_volume.commit()
+    bench_path = Path(run_dir) / "bench_result.json"
+    bench = None
+    if bench_path.exists():
+        try:
+            bench = json.loads(bench_path.read_text(encoding="utf-8"))
+        except Exception:
+            bench = None
+    return {"run_dir": str(run_dir), "bench": bench}
 
 
 @app.function(
@@ -1678,6 +2076,13 @@ def main(
     save_merged_mxfp4: bool = True,
     strategy: str = "ddp_qlora",
     load_in_4bit: bool = True,
+    benchmark_record_baseline: bool = False,
+    benchmark_compare_baseline: bool = False,
+    baseline_key: str = "gptoss20b_bnb4bit_high_part00_msl4096",
+    gpus: int = 8,
+    bench_warmup_steps: int = 2,
+    lora_plus_lr_ratio: float = 16.0,
+    lora_plus: bool = False,
 ):
     predownload_model.remote(model_id=model_id)
     predownload_dataset.remote(dataset_id=dataset_id, split=dataset_split)
@@ -1692,6 +2097,110 @@ def main(
     if predownload_only:
         return
 
+    if benchmark_record_baseline and benchmark_compare_baseline:
+        raise SystemExit("Use only one of --benchmark-record-baseline or --benchmark-compare-baseline")
+
+    def _baseline_path(key: str) -> Path:
+        p = Path("benchmarks/baselines") / f"{key}.json"
+        p.parent.mkdir(parents=True, exist_ok=True)
+        return p
+
+    def _runs_dir(key: str) -> Path:
+        p = Path("benchmarks/runs") / str(key)
+        p.mkdir(parents=True, exist_ok=True)
+        return p
+
+    if benchmark_record_baseline or benchmark_compare_baseline:
+        if int(gpus) not in (1, 2):
+            raise SystemExit("benchmark mode requires --gpus 1 or 2")
+        if int(eval_samples) != 0:
+            print("[warn] benchmark mode forces eval_samples=0 (speed run)")
+            eval_samples = 0
+        train_fn = train_high_part00_b2001 if int(gpus) == 1 else train_high_part00_b2002
+
+        if benchmark_record_baseline:
+            print(f"[*] Recording baseline once: key={baseline_key}")
+            res = train_fn.remote(
+                model_id=model_id,
+                dataset_id=dataset_id,
+                dataset_split=dataset_split,
+                train_samples=train_samples,
+                eval_samples=0,
+                max_seq_length=max_seq_length,
+                max_steps=max_steps,
+                strategy=strategy,
+                load_in_4bit=load_in_4bit,
+                benchmark=True,
+                bench_warmup_steps=int(bench_warmup_steps),
+                lora_plus=False,
+                lora_plus_lr_ratio=float(lora_plus_lr_ratio),
+                baseline_key=str(baseline_key),
+            )
+            bench = res.get("bench")
+            if not isinstance(bench, dict):
+                raise SystemExit("Baseline run did not produce bench_result.json")
+            out = _baseline_path(str(baseline_key))
+            out.write_text(json.dumps(bench, indent=2, sort_keys=True), encoding="utf-8")
+            print(f"[+] Saved baseline to {out}")
+            return
+
+        # Compare current settings to baseline (no rerun of baseline).
+        base_path = _baseline_path(str(baseline_key))
+        if not base_path.exists():
+            raise SystemExit(f"Missing baseline at {base_path}. Run with --benchmark-record-baseline first.")
+        baseline = json.loads(base_path.read_text(encoding="utf-8"))
+
+        print(
+            f"[*] Benchmark run (compare): key={baseline_key} lora_plus={bool(lora_plus)} "
+            f"lr_ratio={float(lora_plus_lr_ratio)} gpus={int(gpus)}",
+            flush=True,
+        )
+        res = train_fn.remote(
+            model_id=model_id,
+            dataset_id=dataset_id,
+            dataset_split=dataset_split,
+            train_samples=train_samples,
+            eval_samples=0,
+            max_seq_length=max_seq_length,
+            max_steps=max_steps,
+            strategy=strategy,
+            load_in_4bit=load_in_4bit,
+            benchmark=True,
+            bench_warmup_steps=int(bench_warmup_steps),
+            lora_plus=bool(lora_plus),
+            lora_plus_lr_ratio=float(lora_plus_lr_ratio),
+            baseline_key=str(baseline_key),
+        )
+        bench = res.get("bench")
+        if not isinstance(bench, dict):
+            raise SystemExit("Compare run did not produce bench_result.json")
+
+        run_out = _runs_dir(str(baseline_key)) / f"{int(time.time())}_lora_plus_{int(bool(lora_plus))}.json"
+        run_out.write_text(json.dumps(bench, indent=2, sort_keys=True), encoding="utf-8")
+        print(f"[+] Saved run to {run_out}")
+
+        def _f(x, default=0.0):
+            try:
+                return float(x)
+            except Exception:
+                return float(default)
+
+        base_tok_s = _f(baseline.get("bench_tok_s"))
+        tok_s = _f(bench.get("bench_tok_s"))
+        base_loss = _f(baseline.get("bench_loss"))
+        loss = _f(bench.get("bench_loss"))
+        base_mem = _f(baseline.get("max_mem_gb"))
+        mem = _f(bench.get("max_mem_gb"))
+
+        print(
+            "[compare] "
+            f"tok_s {tok_s:.0f} vs {base_tok_s:.0f} ({(tok_s/base_tok_s - 1.0)*100.0:+.2f}%) | "
+            f"loss {loss:.4f} vs {base_loss:.4f} ({(loss-base_loss):+.4f}) | "
+            f"max_mem_gb {mem:.1f} vs {base_mem:.1f} ({(mem-base_mem):+.1f})",
+            flush=True,
+        )
+        return
+
     run_dir = None
     try:
         run_dir = train_high_part00_fsdp.remote(
@@ -1704,6 +2213,10 @@ def main(
             max_steps=max_steps,
             strategy=strategy,
             load_in_4bit=load_in_4bit,
+            benchmark=False,
+            bench_warmup_steps=int(bench_warmup_steps),
+            lora_plus=False,
+            lora_plus_lr_ratio=float(lora_plus_lr_ratio),
         )
     except Exception as e:
         if not fallback_model_id or fallback_model_id == model_id:
@@ -1729,6 +2242,10 @@ def main(
             max_steps=max_steps,
             strategy=strategy,
             load_in_4bit=load_in_4bit,
+            benchmark=False,
+            bench_warmup_steps=int(bench_warmup_steps),
+            lora_plus=False,
+            lora_plus_lr_ratio=float(lora_plus_lr_ratio),
         )
 
     if save_merged_mxfp4 and run_dir:
@@ -1766,6 +2283,11 @@ if __name__ == "__main__":
     parser.add_argument("--max-steps", type=int, required=True)
     parser.add_argument("--run-dir", type=str, required=True)
     parser.add_argument("--tokenized-cache-dir", type=str, required=True)
+    parser.add_argument("--benchmark", type=int, default=0)
+    parser.add_argument("--bench-warmup-steps", type=int, default=2)
+    parser.add_argument("--lora-plus", type=int, default=0)
+    parser.add_argument("--lora-plus-lr-ratio", type=float, default=16.0)
+    parser.add_argument("--baseline-key", type=str, default="")
     # torchrun may inject this flag in some configurations; accept it even though
     # we read ranks from environment variables.
     parser.add_argument("--local_rank", "--local-rank", type=int, default=None)
@@ -1789,6 +2311,11 @@ if __name__ == "__main__":
         max_steps=int(args.max_steps),
         run_dir=str(args.run_dir),
         tokenized_cache_dir=str(args.tokenized_cache_dir),
+        benchmark=bool(int(args.benchmark)),
+        bench_warmup_steps=int(args.bench_warmup_steps),
+        lora_plus=bool(int(args.lora_plus)),
+        lora_plus_lr_ratio=float(args.lora_plus_lr_ratio),
+        baseline_key=str(args.baseline_key or ""),
     )
     if args.strategy == "ddp_qlora":
         _ddp_qlora_train_worker(w)

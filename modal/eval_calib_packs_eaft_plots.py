@@ -5,7 +5,7 @@ This generates paper-style "entropy–probability landscapes" for:
   - base model (e.g., openai/gpt-oss-20b)
   - pruned model (e.g., sandeshrajx/gpt-oss-20b-reap-0.5-mxfp4)
 
-For each pack (and UNION mix) and each seq_len (1024, 2048), it computes on
+For each pack (and UNION mix) and each seq_len, it computes on
 completion-only tokens (Harmony packed blocks):
   - PPL (completion-only)
   - p_t = P(reference token)
@@ -42,7 +42,12 @@ from itertools import zip_longest
 from pathlib import Path
 from typing import Any, Callable, Iterable
 
-import modal
+try:
+    import modal
+    _MODAL_IMPORT_ERROR = None
+except Exception as exc:  # pragma: no cover - render-only environments
+    modal = None  # type: ignore[assignment]
+    _MODAL_IMPORT_ERROR = exc
 
 APP_NAME = "eval-calib-packs-eaft-plots"
 
@@ -83,36 +88,61 @@ DEFAULT_PACK_FILES = [
 
 DEFAULT_BASE_MODEL_ID = os.environ.get("MODEL_ID_20B", "openai/gpt-oss-20b")
 DEFAULT_PRUNED_MODEL_ID = os.environ.get("PRUNED_MODEL_ID", "sandeshrajx/gpt-oss-20b-reap-0.5-mxfp4")
+DEFAULT_GPU_TYPE = os.environ.get("GPU_TYPE", "B200:1")
 
-_secrets: list[modal.Secret] = []
-if os.environ.get("HF_TOKEN"):
-    _secrets.append(modal.Secret.from_dict({"HF_TOKEN": os.environ["HF_TOKEN"]}))
+if modal is not None:
+    _secrets: list[modal.Secret] = []
+    if os.environ.get("HF_TOKEN"):
+        _secrets.append(modal.Secret.from_dict({"HF_TOKEN": os.environ["HF_TOKEN"]}))
 
-data_volume = modal.Volume.from_name("pruning-data", create_if_missing=True)
-model_volume = modal.Volume.from_name("pruning-models", create_if_missing=True)
-hf_cache_volume = modal.Volume.from_name("hf-cache-persistent", create_if_missing=True)
+    data_volume = modal.Volume.from_name("pruning-data", create_if_missing=True)
+    model_volume = modal.Volume.from_name("pruning-models", create_if_missing=True)
+    hf_cache_volume = modal.Volume.from_name("hf-cache-persistent", create_if_missing=True)
+else:
+    _secrets = []
+    data_volume = None
+    model_volume = None
+    hf_cache_volume = None
 
-BASE_IMAGE = "nvidia/cuda:12.8.0-devel-ubuntu24.04"
-image = (
-    modal.Image.from_registry(BASE_IMAGE, add_python="3.12")
-    .apt_install("git", "python3-dev", "build-essential", "curl")
-    .run_commands("python -m pip install -U pip setuptools wheel")
-    .run_commands(
-        "python -m pip install "
-        "torch==2.9.0 "
-        "--extra-index-url https://download.pytorch.org/whl/cu128"
+if modal is not None:
+    BASE_IMAGE = "nvidia/cuda:12.8.0-devel-ubuntu24.04"
+    image = (
+        modal.Image.from_registry(BASE_IMAGE, add_python="3.12")
+        .apt_install("git", "python3-dev", "build-essential", "curl")
+        .run_commands("python -m pip install -U pip setuptools wheel")
+        .run_commands(
+            "python -m pip install "
+            "torch==2.9.0 "
+            "--extra-index-url https://download.pytorch.org/whl/cu128"
+        )
+        .run_commands(
+            "python -m pip install "
+            "numpy==2.2.0 pyarrow==22.0.0 "
+            "accelerate==1.10.1 "
+            "transformers==4.56.2 tokenizers safetensors "
+            "kernels==0.11.7 "
+            "hf_transfer huggingface-hub==0.34.0"
+        )
     )
-    .run_commands(
-        "python -m pip install "
-        "numpy==2.2.0 pyarrow==22.0.0 "
-        "accelerate==1.10.1 "
-        "transformers==4.56.2 tokenizers safetensors "
-        "kernels==0.11.7 "
-        "hf_transfer huggingface-hub==0.34.0"
-    )
-)
+    app = modal.App(APP_NAME)
+else:
+    BASE_IMAGE = ""
+    image = None
 
-app = modal.App(APP_NAME)
+    class _DummyApp:
+        def function(self, *args, **kwargs):
+            def _wrap(fn):
+                return fn
+
+            return _wrap
+
+        def local_entrypoint(self, *args, **kwargs):
+            def _wrap(fn):
+                return fn
+
+            return _wrap
+
+    app = _DummyApp()
 
 
 def _ensure_hf_env() -> None:
@@ -355,6 +385,7 @@ def _eaft_collect_for_plots(
     prob_scale: str,
     logp_min: float,
     logp_max: float,
+    sample_points: int,
 ) -> dict[str, Any]:
     import numpy as np
     import torch
@@ -468,6 +499,18 @@ def _eaft_collect_for_plots(
     hist_x = _hist1d(x_vals, bins=int(hist_xbins), vmin=float(x_min), vmax=float(x_max))
     hist_h = _hist1d(h_all, bins=int(hist_ybins), vmin=0.0, vmax=1.0)
 
+    # Sample points for interactive hover (downsampled).
+    sample_points = int(sample_points)
+    samples: list[list[float]] = []
+    if sample_points > 0:
+        total = int(x_vals.shape[0])
+        if total > 0:
+            rng = np.random.default_rng(0)
+            take = min(sample_points, total)
+            idx = rng.choice(total, size=take, replace=False)
+            for i in idx:
+                samples.append([float(x_vals[i]), float(h_all[i])])
+
     # Quadrant masses under this model's thresholds (low/high p, low/high H).
     p_le = p_all_t <= float(p_thr)
     h_le = h_all_t <= float(h_thr)
@@ -509,6 +552,7 @@ def _eaft_collect_for_plots(
         "hist2d_x_H": hist2d,
         "hist1d_x": hist_x,
         "hist1d_H": hist_h,
+        "samples": samples,
         "x_scale": prob_scale,
         "x_min": float(x_min),
         "x_max": float(x_max),
@@ -552,7 +596,7 @@ def _z_for_prop_delta(p1: float, n1: int, p2: float, n2: int) -> float:
 
 @app.function(
     image=image,
-    gpu="H100:1",
+    gpu=DEFAULT_GPU_TYPE,
     timeout=21600,
     cpu=16.0,
     memory=262144,
@@ -575,6 +619,12 @@ def eval_calib_packs_eaft_plots(
     prob_scale: str,
     logp_min: float,
     logp_max: float,
+    sample_points: int,
+    device_map: str,
+    max_gpu_mem_gb: float,
+    max_cpu_mem_gb: float,
+    offload_folder: str,
+    seq_lens: list[int],
 ) -> dict[str, Any]:
     from transformers import AutoModelForCausalLM, AutoTokenizer
 
@@ -600,26 +650,44 @@ def eval_calib_packs_eaft_plots(
     for f in pack_files:
         pack_paths[str(f)] = _download_dataset_file(str(dataset_repo), str(f))
 
-    base_model = AutoModelForCausalLM.from_pretrained(
-        str(base_dir),
-        torch_dtype="auto",
-        device_map={"": 0},
-        trust_remote_code=True,
-    )
-    pruned_model = AutoModelForCausalLM.from_pretrained(
-        str(pruned_dir),
-        torch_dtype="auto",
-        device_map={"": 0},
-        trust_remote_code=True,
-    )
+    device_map = str(device_map or "").strip().lower()
+    dm = {"": 0} if not device_map or device_map == "cuda" else device_map
+    max_memory = None
+    if float(max_gpu_mem_gb) > 0 or float(max_cpu_mem_gb) > 0:
+        max_memory = {}
+        if float(max_gpu_mem_gb) > 0:
+            max_memory[0] = f"{float(max_gpu_mem_gb):.0f}GiB"
+        if float(max_cpu_mem_gb) > 0:
+            max_memory["cpu"] = f"{float(max_cpu_mem_gb):.0f}GiB"
+
+    extra = {
+        "torch_dtype": "auto",
+        "device_map": dm,
+        "trust_remote_code": True,
+        "low_cpu_mem_usage": True,
+    }
+    if max_memory:
+        extra["max_memory"] = max_memory
+    if offload_folder:
+        extra["offload_folder"] = str(offload_folder)
+        extra["offload_state_dict"] = True
+
+    base_model = AutoModelForCausalLM.from_pretrained(str(base_dir), **extra)
+    pruned_model = AutoModelForCausalLM.from_pretrained(str(pruned_dir), **extra)
     base_model.eval()
     pruned_model.eval()
     _apply_top_k(base_model, int(top_k))
     _apply_top_k(pruned_model, int(top_k))
 
-    def _eval_pack(name: str, text_it: Callable[[], Iterable[str]]) -> dict[str, Any]:
+    seq_lens = [int(s) for s in seq_lens if int(s) > 0]
+    if not seq_lens:
+        raise RuntimeError("seq_lens must be non-empty")
+
+    def _eval_pack(
+        name: str, text_it: Callable[[], Iterable[str]], seq_lens: list[int]
+    ) -> dict[str, Any]:
         out: dict[str, Any] = {"pack": name, "seq": {}}
-        for seq_len in (1024, 2048):
+        for seq_len in seq_lens:
             blocks = _pack_blocks(
                 text_iter=text_it,
                 tok=tok,
@@ -639,6 +707,7 @@ def eval_calib_packs_eaft_plots(
                 prob_scale=str(prob_scale),
                 logp_min=float(logp_min),
                 logp_max=float(logp_max),
+                sample_points=int(sample_points),
             )
             base_thresholds = (float(base_metrics["p_thr"]), float(base_metrics["h_thr"]))
             pruned_metrics = _eaft_collect_for_plots(
@@ -653,6 +722,7 @@ def eval_calib_packs_eaft_plots(
                 prob_scale=str(prob_scale),
                 logp_min=float(logp_min),
                 logp_max=float(logp_max),
+                sample_points=int(sample_points),
             )
             # Distribution shift diagnostics (JS divergence on binned densities).
             js2d = _js_divergence(
@@ -692,7 +762,7 @@ def eval_calib_packs_eaft_plots(
     results: list[dict[str, Any]] = []
     for f, p in pack_paths.items():
         name = Path(f).stem
-        results.append(_eval_pack(name, lambda p=p: _iter_parquet_texts(p, text_column="text")))
+        results.append(_eval_pack(name, lambda p=p: _iter_parquet_texts(p, text_column="text"), seq_lens))
 
     def union_iter() -> Iterable[str]:
         iters = [_iter_parquet_texts(pack_paths[str(f)], text_column="text") for f in pack_files]
@@ -701,7 +771,7 @@ def eval_calib_packs_eaft_plots(
                 if isinstance(t, str) and t.strip():
                     yield t
 
-    results.append(_eval_pack("UNION", lambda: union_iter()))
+    results.append(_eval_pack("UNION", lambda: union_iter(), seq_lens))
 
     return {
         "meta": {
@@ -709,6 +779,7 @@ def eval_calib_packs_eaft_plots(
             "pack_files": list(pack_files),
             "base_model_id": str(base_model_id),
             "pruned_model_id": str(pruned_model_id),
+            "gpu_type": str(DEFAULT_GPU_TYPE),
             "top_k": int(top_k),
             "entropy_topk": int(entropy_topk),
             "cc_quantile": float(cc_quantile),
@@ -719,6 +790,8 @@ def eval_calib_packs_eaft_plots(
             "prob_scale": str(prob_scale),
             "logp_min": float(logp_min),
             "logp_max": float(logp_max),
+            "sample_points": int(sample_points),
+            "seq_lens": [int(s) for s in seq_lens],
             "axes": {"x": "p_t" if str(prob_scale) == "linear" else "log10(p_t)", "y": "H_topK/ln(K)"},
             "x_min": 0.0 if str(prob_scale) == "linear" else float(logp_min),
             "x_max": 1.0 if str(prob_scale) == "linear" else float(logp_max),
@@ -754,15 +827,17 @@ def _render_html_dashboard(data: dict[str, Any]) -> str:
     h1 {{ margin: 0 0 8px 0; font-size: 22px; letter-spacing: 0.4px; }}
     h2 {{ margin: 0 0 12px 0; font-size: 16px; }}
     .meta {{ color: var(--muted); font-size: 13px; line-height: 1.4; }}
-    .row {{ display: flex; gap: 16px; align-items: stretch; flex-wrap: nowrap; overflow-x: auto; padding-bottom: 6px; }}
-    .panel {{ border: 1px solid var(--grid); border-radius: 12px; padding: 14px; background: var(--panel); min-width: 660px; flex: 0 0 auto; }}
+    .row {{ display: grid; gap: 16px; align-items: stretch; }}
+    .grid-3 {{ grid-template-columns: repeat(3, minmax(0, 1fr)); }}
+    .grid-2 {{ grid-template-columns: repeat(2, minmax(0, 1fr)); }}
+    .panel {{ border: 1px solid var(--grid); border-radius: 12px; padding: 14px; background: var(--panel); min-width: 0; }}
     .panel h3 {{ margin: 0 0 10px 0; font-size: 14px; color: var(--muted); text-transform: uppercase; letter-spacing: 0.08em; }}
     .panel.hero {{ min-width: 100%; background: linear-gradient(135deg, #0f172a, #0b1220); }}
     .controls {{ display: flex; gap: 16px; align-items: center; flex-wrap: wrap; margin: 12px 0 16px 0; min-width: 100%; }}
     select {{ padding: 6px 10px; background: #0b1220; color: var(--text); border: 1px solid var(--grid); border-radius: 8px; }}
     canvas {{ border: 1px solid var(--grid); border-radius: 8px; background: var(--plot-bg); width: 100%; height: auto; }}
-    canvas.heatmap {{ height: clamp(320px, 45vh, 560px); }}
-    canvas.hist {{ height: clamp(140px, 18vh, 240px); }}
+    canvas.heatmap {{ height: clamp(320px, 50vh, 600px); }}
+    canvas.hist {{ height: clamp(200px, 28vh, 320px); }}
     .small {{ font-size: 12px; color: var(--muted); }}
     table {{ border-collapse: collapse; font-size: 12px; width: 100%; }}
     td, th {{ border: 1px solid var(--grid); padding: 8px 10px; text-align: right; }}
@@ -809,34 +884,41 @@ def _render_html_dashboard(data: dict[str, Any]) -> str:
     </div>
   </div>
 
-  <div class="row">
+  <div class="row grid-3">
     <div class="panel">
       <h3>Base</h3>
       <canvas id="cBase" class="heatmap" width="700" height="520"></canvas>
       <div class="small" id="baseStats"></div>
+      <div class="small mono" id="baseHover"></div>
     </div>
     <div class="panel">
       <h3>Pruned</h3>
       <canvas id="cPruned" class="heatmap" width="700" height="520"></canvas>
       <div class="small" id="prunedStats"></div>
+      <div class="small mono" id="prunedHover"></div>
     </div>
     <div class="panel">
       <h3>Δ Density (pruned - base)</h3>
       <canvas id="cDelta" class="heatmap" width="700" height="520"></canvas>
       <div class="small" id="deltaStats"></div>
+      <div class="small mono" id="deltaHover"></div>
     </div>
   </div>
 
-  <div class="row" style="margin-top: 16px;">
+  <div class="row grid-2" style="margin-top: 16px;">
     <div class="panel">
       <h3>Histograms (Base)</h3>
       <canvas id="hBaseLogp" class="hist" width="700" height="180"></canvas>
+      <div class="small mono" id="hBaseLogpHover"></div>
       <canvas id="hBaseH" class="hist" width="700" height="180" style="margin-top:10px;"></canvas>
+      <div class="small mono" id="hBaseHHover"></div>
     </div>
     <div class="panel">
       <h3>Histograms (Pruned)</h3>
       <canvas id="hPrunedLogp" class="hist" width="700" height="180"></canvas>
+      <div class="small mono" id="hPrunedLogpHover"></div>
       <canvas id="hPrunedH" class="hist" width="700" height="180" style="margin-top:10px;"></canvas>
+      <div class="small mono" id="hPrunedHHover"></div>
     </div>
   </div>
 
@@ -939,8 +1021,10 @@ def _render_html_dashboard(data: dict[str, Any]) -> str:
     function prepareCanvas(canvas) {{
       const rect = canvas.getBoundingClientRect();
       const dpr = window.devicePixelRatio || 1;
-      const w = Math.max(1, rect.width);
-      const h = Math.max(1, rect.height);
+      const maxW = 1600;
+      const maxH = 1200;
+      const w = Math.min(maxW, Math.max(1, rect.width));
+      const h = Math.min(maxH, Math.max(1, rect.height));
       const needResize = canvas.width !== Math.round(w * dpr) || canvas.height !== Math.round(h * dpr);
       if (needResize) {{
         canvas.width = Math.round(w * dpr);
@@ -977,7 +1061,7 @@ def _render_html_dashboard(data: dict[str, Any]) -> str:
       return "rgb(0,0,0)";
     }}
 
-    function drawHeatmap(canvas, hist, thresholds, title, extraThresholds=null) {{
+    function drawHeatmap(canvas, hist, thresholds, title, extraThresholds=null, samples=null) {{
       const {{ ctx, W, H }} = prepareCanvas(canvas);
       const padL = 44, padR = 10, padT = 16, padB = 36;
       ctx.clearRect(0, 0, W, H);
@@ -1083,6 +1167,68 @@ def _render_html_dashboard(data: dict[str, Any]) -> str:
         ctx.font = "bold 12px sans-serif";
         ctx.fillText(title, padL, 12);
       }}
+
+      if (samples && samples.length) {{
+        ctx.fillStyle = "rgba(255,255,255,0.35)";
+        const xMin = DATA.meta.x_min, xMax = DATA.meta.x_max;
+        const yMin = 0.0, yMax = 1.0;
+        for (let i = 0; i < samples.length; i++) {{
+          const sx = samples[i][0];
+          const sy = samples[i][1];
+          const x = padL + ((sx - xMin) / (xMax - xMin)) * plotW;
+          const y = padT + (1 - (sy - yMin) / (yMax - yMin)) * plotH;
+          ctx.fillRect(x, y, 1.5, 1.5);
+        }}
+      }}
+    }}
+
+    function attachHeatmapHover(canvas, hist, label, outId, extraInfo=null, samples=null) {{
+      const out = document.getElementById(outId);
+      if (!out) return;
+      canvas.onmousemove = (ev) => {{
+        const rect = canvas.getBoundingClientRect();
+        const x = (ev.clientX - rect.left) / rect.width;
+        const y = (ev.clientY - rect.top) / rect.height;
+        if (x < 0 || x > 1 || y < 0 || y > 1) {{
+          out.textContent = "";
+          return;
+        }}
+        const xbins = hist.xbins, ybins = hist.ybins;
+        const ix = Math.min(xbins - 1, Math.max(0, Math.floor(x * xbins)));
+        const iy = Math.min(ybins - 1, Math.max(0, Math.floor((1 - y) * ybins)));
+        const idx = ix * ybins + iy;
+        const count = hist.counts[idx] || 0;
+        const x0 = hist.x_edges[ix];
+        const x1 = hist.x_edges[ix + 1];
+        const y0 = hist.y_edges[iy];
+        const y1 = hist.y_edges[iy + 1];
+        let nearest = "";
+        if (samples && samples.length) {{
+          const xMin = hist.x_edges[0];
+          const xMax = hist.x_edges[hist.x_edges.length - 1];
+          const yMin = hist.y_edges[0];
+          const yMax = hist.y_edges[hist.y_edges.length - 1];
+          let best = null;
+          let bestD = 1e9;
+          for (let i = 0; i < samples.length; i++) {{
+            const sx = (samples[i][0] - xMin) / (xMax - xMin + 1e-12);
+            const sy = 1 - (samples[i][1] - yMin) / (yMax - yMin + 1e-12);
+            const dx = sx - x;
+            const dy = sy - y;
+            const d = dx*dx + dy*dy;
+            if (d < bestD) {{
+              bestD = d;
+              best = samples[i];
+            }}
+          }}
+          if (best) {{
+            nearest = ` | nearest=(${{best[0].toFixed(4)}},${{best[1].toFixed(4)}})`;
+          }}
+        }}
+        const extra = extraInfo ? (" | " + extraInfo()) : "";
+        out.textContent = `${{label}}: x∈[${{x0.toFixed(3)}},${{x1.toFixed(3)}}] y∈[${{y0.toFixed(3)}},${{y1.toFixed(3)}}] count=${{count}}${{nearest}}${{extra}}`;
+      }};
+      canvas.onmouseleave = () => {{ out.textContent = ""; }};
     }}
 
     function drawDeltaHeatmap(canvas, histA, histB, thresholds, title) {{
@@ -1212,6 +1358,26 @@ def _render_html_dashboard(data: dict[str, Any]) -> str:
       }}
     }}
 
+    function attachHistHover(canvas, hist, label, outId) {{
+      const out = document.getElementById(outId);
+      if (!out) return;
+      canvas.onmousemove = (ev) => {{
+        const rect = canvas.getBoundingClientRect();
+        const x = (ev.clientX - rect.left) / rect.width;
+        if (x < 0 || x > 1) {{
+          out.textContent = "";
+          return;
+        }}
+        const bins = hist.counts.length;
+        const ix = Math.min(bins - 1, Math.max(0, Math.floor(x * bins)));
+        const count = hist.counts[ix] || 0;
+        const x0 = hist.edges[ix];
+        const x1 = hist.edges[ix + 1];
+        out.textContent = `${{label}}: bin [${{x0.toFixed(4)}},${{x1.toFixed(4)}}] count=${{count}}`;
+      }};
+      canvas.onmouseleave = () => {{ out.textContent = ""; }};
+    }}
+
     function populate() {{
       const packSel = document.getElementById("packSel");
       const seqSel = document.getElementById("seqSel");
@@ -1223,7 +1389,7 @@ def _render_html_dashboard(data: dict[str, Any]) -> str:
         opt.textContent = p.pack;
         packSel.appendChild(opt);
       }}
-      ["1024","2048"].forEach(s => {{
+      (DATA.meta.seq_lens || ["1024","2048"]).forEach(s => {{
         const opt = document.createElement("option");
         opt.value = s;
         opt.textContent = s;
@@ -1469,7 +1635,17 @@ def _render_html_dashboard(data: dict[str, Any]) -> str:
         document.getElementById("cBase"),
         base.hist2d_x_H,
         baseThr,
-        `ppl=${{fmt(base.ppl,3)}} CC=${{fmt(base.cc_rate,4)}}`
+        `ppl=${{fmt(base.ppl,3)}} CC=${{fmt(base.cc_rate,4)}}`,
+        null,
+        base.samples || []
+      );
+      attachHeatmapHover(
+        document.getElementById("cBase"),
+        base.hist2d_x_H,
+        "base",
+        "baseHover",
+        () => `CC_thr=(${{fmt(base.x_thr,4)}},${{fmt(base.h_thr,4)}})`,
+        base.samples || []
       );
       // Pruned heatmap uses BASE thresholds as the primary CC region (shading),
       // and draws pruned's own thresholds as a secondary overlay (dotted).
@@ -1478,7 +1654,16 @@ def _render_html_dashboard(data: dict[str, Any]) -> str:
         pruned.hist2d_x_H,
         baseThrForPruned,
         `ppl=${{fmt(pruned.ppl,3)}} CC=${{fmt(pruned.cc_rate,4)}} (CC@baseThr=${{fmt(pruned.cc_rate_base_thr,4)}})`,
-        prunedThr
+        prunedThr,
+        pruned.samples || []
+      );
+      attachHeatmapHover(
+        document.getElementById("cPruned"),
+        pruned.hist2d_x_H,
+        "pruned",
+        "prunedHover",
+        () => `baseThr=(${{fmt(baseThrForPruned.x_thr,4)}},${{fmt(baseThrForPruned.h_thr,4)}})`,
+        pruned.samples || []
       );
       drawDeltaHeatmap(
         document.getElementById("cDelta"),
@@ -1487,12 +1672,23 @@ def _render_html_dashboard(data: dict[str, Any]) -> str:
         baseThrForPruned,
         `Δ log1p(density) | JS2D=${{fmt(s.js_divergence_2d,4)}}`
       );
+      attachHeatmapHover(
+        document.getElementById("cDelta"),
+        pruned.hist2d_x_H,
+        "delta",
+        "deltaHover",
+        () => `JS2D=${{fmt(s.js_divergence_2d,4)}}`
+      );
 
       const xLabel = (DATA.meta.axes && DATA.meta.axes.x) ? DATA.meta.axes.x : "p_t";
       drawHist(document.getElementById("hBaseLogp"), base.hist1d_x, {{value: base.x_thr}}, `base ${{xLabel}}`);
       drawHist(document.getElementById("hBaseH"), base.hist1d_H, {{value: base.h_thr}}, "base H");
       drawHist(document.getElementById("hPrunedLogp"), pruned.hist1d_x, {{value: baseThrForPruned.x_thr}}, `pruned ${{xLabel}} (threshold=base)`);
       drawHist(document.getElementById("hPrunedH"), pruned.hist1d_H, {{value: baseThrForPruned.h_thr}}, "pruned H (threshold=base)");
+      attachHistHover(document.getElementById("hBaseLogp"), base.hist1d_x, `base ${{xLabel}}`, "hBaseLogpHover");
+      attachHistHover(document.getElementById("hBaseH"), base.hist1d_H, "base H", "hBaseHHover");
+      attachHistHover(document.getElementById("hPrunedLogp"), pruned.hist1d_x, `pruned ${{xLabel}}`, "hPrunedLogpHover");
+      attachHistHover(document.getElementById("hPrunedH"), pruned.hist1d_H, "pruned H", "hPrunedHHover");
 
       document.getElementById("baseStats").innerHTML =
         `rows_seen=${{s.rows_seen}} | kept_tokens=${{base.kept_tokens}} | tok/s(pred)=${{fmt(base.tok_s_pred,1)}} | mean_prob=${{fmt(base.mean_prob,5)}} | mean_entropy=${{fmt(base.mean_entropy,4)}} | p_thr=${{fmt(base.p_thr,6)}} | H_thr=${{fmt(base.h_thr,4)}} | quadrants LL=${{fmt(base.quadrants.LL,4)}} LH=${{fmt(base.quadrants.LH,4)}} HL=${{fmt(base.quadrants.HL,4)}}`;
@@ -1545,7 +1741,8 @@ def _write_summary_md(res: dict[str, Any], out_path: Path) -> None:
         "seq_len,pack,score_z,score,delta_ppl,delta_nll,delta_nll_p,cc_delta_pp,cc_delta_ci_lo,cc_delta_ci_hi,js2d,mean_p_drop_pp,cc_z,cc_p"
     ]
 
-    for seq in ("1024", "2048"):
+    seq_lens = [str(s) for s in res.get("meta", {}).get("seq_lens", ["1024", "2048"])]
+    for seq in seq_lens:
         rows = []
         for p in packs:
             s = p["seq"][seq]
@@ -1673,31 +1870,53 @@ def main(
     prob_scale: str = "linear",
     logp_min: float = -12.0,
     logp_max: float = 0.0,
+    sample_points: int = 2000,
     input_json: str = "",
+    device_map: str = "",
+    max_gpu_mem_gb: float = 0.0,
+    max_cpu_mem_gb: float = 0.0,
+    offload_folder: str = "/root/model/offload",
+    seq_lens_csv: str = "1024,2048",
+    mode: str = "pair",
+    model_id: str = "",
 ):
     pack_files = [x.strip() for x in (pack_files_csv or "").split(",") if x.strip()]
     if not pack_files:
         raise SystemExit("Empty --pack-files-csv")
 
+    mode = str(mode or "pair").strip().lower()
+    seq_lens = [int(s.strip()) for s in str(seq_lens_csv).split(",") if s.strip()]
+    if not seq_lens:
+        raise SystemExit("Empty --seq-lens-csv")
+
     if input_json:
         res = json.loads(Path(input_json).read_text(encoding="utf-8"))
     else:
-        res = eval_calib_packs_eaft_plots.remote(
-            dataset_repo=str(dataset_repo),
-            pack_files=pack_files,
-            base_model_id=str(base_model_id),
-            pruned_model_id=str(pruned_model_id),
-            top_k=int(top_k),
-            entropy_topk=int(entropy_topk),
-            cc_quantile=float(cc_quantile),
-            num_blocks=int(num_blocks),
-            batch_size=int(batch_size),
-            hist_xbins=int(hist_xbins),
-            hist_ybins=int(hist_ybins),
-            prob_scale=str(prob_scale),
-            logp_min=float(logp_min),
-            logp_max=float(logp_max),
-        )
+        if mode == "pair":
+            res = eval_calib_packs_eaft_plots.remote(
+                dataset_repo=str(dataset_repo),
+                pack_files=pack_files,
+                base_model_id=str(base_model_id),
+                pruned_model_id=str(pruned_model_id),
+                top_k=int(top_k),
+                entropy_topk=int(entropy_topk),
+                cc_quantile=float(cc_quantile),
+                num_blocks=int(num_blocks),
+                batch_size=int(batch_size),
+                hist_xbins=int(hist_xbins),
+                hist_ybins=int(hist_ybins),
+                prob_scale=str(prob_scale),
+                logp_min=float(logp_min),
+                logp_max=float(logp_max),
+                sample_points=int(sample_points),
+                device_map=str(device_map),
+                max_gpu_mem_gb=float(max_gpu_mem_gb),
+                max_cpu_mem_gb=float(max_cpu_mem_gb),
+                offload_folder=str(offload_folder),
+                seq_lens=seq_lens,
+            )
+        else:
+            raise SystemExit("mode=single is not supported in this entrypoint; use render-only or add a separate runner.")
 
     run_id = time.strftime("%Y%m%d_%H%M%S")
     out_dir = Path("artifacts/eaft_plots") / run_id
