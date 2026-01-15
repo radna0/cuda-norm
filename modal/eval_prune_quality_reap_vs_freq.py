@@ -1,5 +1,5 @@
 """
-Parity PPL comparison: base vs frequency-pruned vs REAP-pruned (GPT-OSS-20B).
+Parity PPL comparison: base vs frequency-pruned vs REAP-pruned vs EAFT-REAP-pruned (GPT-OSS-20B).
 
 Rules:
 - Same packing + completion-only masking rules as `modal/verify_sglang_gptoss_transmla.py`.
@@ -7,13 +7,13 @@ Rules:
 - Compute NLL only on assistant message body spans (completion-only).
 
 Outputs:
-- `reports/20b_prune_quality_reap_vs_freq.md`
+- `reports/20b_prune_quality_eaftreap_vs_reap_vs_freq.md`
 
 Run (always log to unsloth_logs/):
   mkdir -p unsloth_logs
   ts=$(date +%Y%m%d_%H%M%S)
   nohup modal run modal/eval_prune_quality_reap_vs_freq.py --num-blocks 64 --batch-size 1 \
-    > "unsloth_logs/20b_prune_quality_reap_vs_freq_${ts}.log" 2>&1 &
+    > "unsloth_logs/20b_prune_quality_eaftreap_vs_reap_vs_freq_${ts}.log" 2>&1 &
 """
 
 from __future__ import annotations
@@ -66,6 +66,8 @@ FREQ50_DIR = "/root/model/artifacts/20b_pruned_models_freq/general_50pct_experts
 FREQ25_DIR = "/root/model/artifacts/20b_pruned_models_freq/math_25pct_experts_freq"
 REAP50_DIR = "/root/model/artifacts/20b_pruned_models_reap/general_50pct_experts_reap"
 REAP25_DIR = "/root/model/artifacts/20b_pruned_models_reap/math_25pct_experts_reap"
+EAFTREAP50_DIR = "/root/model/artifacts/20b_pruned_models_eaftreap/general_50pct_experts_eaftreap"
+EAFTREAP25_DIR = "/root/model/artifacts/20b_pruned_models_eaftreap/math_25pct_experts_eaftreap"
 
 _secrets: list[modal.Secret] = []
 if os.environ.get("HF_TOKEN"):
@@ -194,6 +196,25 @@ def _token_keep_mask(offsets: list[tuple[int, int]], spans: list[tuple[int, int]
     return keep
 
 
+def _parse_csv_ints(s: str) -> list[int]:
+    out: list[int] = []
+    for part in (s or "").split(","):
+        p = part.strip()
+        if not p:
+            continue
+        out.append(int(p))
+    if not out:
+        raise ValueError("Expected a non-empty CSV of ints.")
+    seen: set[int] = set()
+    uniq: list[int] = []
+    for v in out:
+        if v in seen:
+            continue
+        seen.add(v)
+        uniq.append(v)
+    return uniq
+
+
 @app.function(
     image=image,
     gpu="H100:1",
@@ -212,7 +233,7 @@ def eval_parity_many(
     dataset_id: str,
     dataset_split: str,
     text_column: str,
-    seq_len: int,
+    seq_lens_csv: str,
     num_blocks: int,
     batch_size: int,
 ) -> dict[str, Any]:
@@ -229,9 +250,14 @@ def eval_parity_many(
     except Exception:
         pass
 
-    seq_len = int(seq_len)
+    seq_lens = _parse_csv_ints(str(seq_lens_csv))
     num_blocks = int(num_blocks)
     batch_size = int(max(1, batch_size))
+
+    print(
+        f"[*] eval_parity_many start: seq_lens={seq_lens} num_blocks={num_blocks} batch_size={batch_size}",
+        flush=True,
+    )
 
     base_dir = _snapshot_download_model(BASE_20B_MODEL_ID)
     tok = AutoTokenizer.from_pretrained(str(base_dir), trust_remote_code=True)
@@ -249,45 +275,57 @@ def eval_parity_many(
                 continue
             yield t
 
-    buf_ids: list[int] = []
-    buf_keep: list[bool] = []
-    blocks_ids: list[list[int]] = []
-    blocks_keep: list[list[bool]] = []
-    rows_seen = 0
-    t_pack0 = time.time()
-    for text in text_iter():
-        rows_seen += 1
-        spans = _assistant_content_spans(text)
-        enc = tok(text, add_special_tokens=False, truncation=False, return_offsets_mapping=True)
-        ids: list[int] = enc["input_ids"]
-        offs: list[tuple[int, int]] = enc["offset_mapping"]
-        keep = _token_keep_mask(offs, spans)
-        buf_ids.extend(ids)
-        buf_keep.extend(keep)
-        buf_ids.append(int(eos))
-        buf_keep.append(False)
-        while len(buf_ids) >= (seq_len + 1) and len(blocks_ids) < num_blocks:
-            block_i = buf_ids[: seq_len + 1]
-            block_k = buf_keep[: seq_len + 1]
-            block_k[0] = False
-            blocks_ids.append(block_i)
-            blocks_keep.append(block_k)
-            del buf_ids[: seq_len + 1]
-            del buf_keep[: seq_len + 1]
-        if len(blocks_ids) >= num_blocks:
-            break
-    pack_s = time.time() - t_pack0
-    if len(blocks_ids) < num_blocks:
-        raise RuntimeError(f"Only built {len(blocks_ids)}/{num_blocks} blocks (rows_seen={rows_seen}).")
+    def build_blocks(seq_len: int) -> dict[str, Any]:
+        buf_ids: list[int] = []
+        buf_keep: list[bool] = []
+        blocks_ids: list[list[int]] = []
+        blocks_keep: list[list[bool]] = []
+        rows_seen = 0
+        t_pack0 = time.time()
+        for text in text_iter():
+            rows_seen += 1
+            spans = _assistant_content_spans(text)
+            enc = tok(text, add_special_tokens=False, truncation=False, return_offsets_mapping=True)
+            ids: list[int] = enc["input_ids"]
+            offs: list[tuple[int, int]] = enc["offset_mapping"]
+            keep = _token_keep_mask(offs, spans)
+            buf_ids.extend(ids)
+            buf_keep.extend(keep)
+            buf_ids.append(int(eos))
+            buf_keep.append(False)
+            while len(buf_ids) >= (seq_len + 1) and len(blocks_ids) < num_blocks:
+                block_i = buf_ids[: seq_len + 1]
+                block_k = buf_keep[: seq_len + 1]
+                block_k[0] = False
+                blocks_ids.append(block_i)
+                blocks_keep.append(block_k)
+                del buf_ids[: seq_len + 1]
+                del buf_keep[: seq_len + 1]
+            if len(blocks_ids) >= num_blocks:
+                break
+        pack_s = time.time() - t_pack0
+        if len(blocks_ids) < num_blocks:
+            raise RuntimeError(
+                f"Only built {len(blocks_ids)}/{num_blocks} blocks for seq_len={seq_len} (rows_seen={rows_seen})."
+            )
+        return {
+            "seq_len": int(seq_len),
+            "rows_seen": int(rows_seen),
+            "pack_wall_s": float(pack_s),
+            "blocks_ids": blocks_ids,
+            "blocks_keep": blocks_keep,
+        }
 
-    def ppl_for(model_path: str) -> dict[str, Any]:
-        m = AutoModelForCausalLM.from_pretrained(
-            model_path,
-            torch_dtype="auto",
-            device_map={"": 0},
-            trust_remote_code=True,
+    blocks_by_seq: dict[int, dict[str, Any]] = {}
+    for sl in seq_lens:
+        blocks_by_seq[int(sl)] = build_blocks(int(sl))
+        b = blocks_by_seq[int(sl)]
+        print(
+            f"[*] packed seq_len={int(sl)} rows_seen={b['rows_seen']} pack_s={b['pack_wall_s']:.2f}",
+            flush=True,
         )
-        m.eval()
+
+    def ppl_for_loaded(m, blocks_ids: list[list[int]], blocks_keep: list[list[bool]]) -> dict[str, Any]:
         total_nll = 0.0
         kept_tokens = 0
         total_pred_tokens = 0
@@ -326,23 +364,64 @@ def eval_parity_many(
         "base": str(base_dir),
         "freq_50": FREQ50_DIR,
         "reap_50": REAP50_DIR,
+        "eaftreap_50": EAFTREAP50_DIR,
         "freq_25": FREQ25_DIR,
         "reap_25": REAP25_DIR,
+        "eaftreap_25": EAFTREAP25_DIR,
     }
     out: dict[str, Any] = {}
     for name, path in models.items():
-        out[name] = {"path": path, **ppl_for(path)}
+        t_load0 = time.time()
+        print(f"[*] loading model {name}: {path}", flush=True)
+        m = AutoModelForCausalLM.from_pretrained(
+            path,
+            torch_dtype="auto",
+            device_map={"": 0},
+            trust_remote_code=True,
+        )
+        m.eval()
+        try:
+            torch.cuda.synchronize()
+        except Exception:
+            pass
+        print(f"[*] loaded model {name} dt_s={time.time()-t_load0:.1f}", flush=True)
+        by_seq: dict[str, Any] = {}
+        for sl in seq_lens:
+            b = blocks_by_seq[int(sl)]
+            t_eval0 = time.time()
+            stats = ppl_for_loaded(m, b["blocks_ids"], b["blocks_keep"])
+            by_seq[str(int(sl))] = stats
+            print(
+                f"[*] {name} seq{int(sl)} ppl={stats['ppl']:.3f} tok_s_pred={stats['tok_s_pred']:.0f} "
+                f"wall_s={stats['wall_s']:.1f} dt_s={time.time()-t_eval0:.1f}",
+                flush=True,
+            )
+        try:
+            del m
+        except Exception:
+            pass
+        try:
+            torch.cuda.empty_cache()
+        except Exception:
+            pass
+        out[name] = {"path": path, "by_seq": by_seq}
 
+    print("[+] eval_parity_many done", flush=True)
     return {
         "meta": {
             "dataset_id": str(dataset_id),
             "dataset_split": str(dataset_split),
             "text_column": str(text_column),
-            "seq_len": int(seq_len),
+            "seq_lens": [int(x) for x in seq_lens],
             "num_blocks": int(num_blocks),
             "batch_size": int(batch_size),
-            "rows_seen": int(rows_seen),
-            "pack_wall_s": float(pack_s),
+            "pack": {
+                str(int(sl)): {
+                    "rows_seen": int(blocks_by_seq[int(sl)]["rows_seen"]),
+                    "pack_wall_s": float(blocks_by_seq[int(sl)]["pack_wall_s"]),
+                }
+                for sl in seq_lens
+            },
         },
         "models": out,
     }
@@ -355,29 +434,31 @@ def main(
     text_column: str = DEFAULT_TEXT_COLUMN,
     num_blocks: int = 64,
     batch_size: int = 1,
+    seq_lens_csv: str = "1024,2048",
 ):
-    out_path = Path("reports/20b_prune_quality_reap_vs_freq.md")
+    out_path = Path("reports/20b_prune_quality_eaftreap_vs_reap_vs_freq.md")
     out_path.parent.mkdir(parents=True, exist_ok=True)
 
-    results = {}
-    for seq_len in (1024, 2048):
-        results[seq_len] = eval_parity_many.remote(
-            dataset_id=str(dataset_id),
-            dataset_split=str(dataset_split),
-            text_column=str(text_column),
-            seq_len=int(seq_len),
-            num_blocks=int(num_blocks),
-            batch_size=int(batch_size),
-        )
-
-    base1024 = results[1024]["models"]["base"]["ppl"]
-    base2048 = results[2048]["models"]["base"]["ppl"]
+    res = eval_parity_many.remote(
+        dataset_id=str(dataset_id),
+        dataset_split=str(dataset_split),
+        text_column=str(text_column),
+        seq_lens_csv=str(seq_lens_csv),
+        num_blocks=int(num_blocks),
+        batch_size=int(batch_size),
+    )
+    seq_lens = [int(x) for x in res["meta"]["seq_lens"]]
+    if 1024 not in seq_lens or 2048 not in seq_lens:
+        raise SystemExit(f"Expected seq_lens to include 1024 and 2048, got {seq_lens}")
+    base1024 = float(res["models"]["base"]["by_seq"]["1024"]["ppl"])
+    base2048 = float(res["models"]["base"]["by_seq"]["2048"]["ppl"])
 
     lines = [
-        "# 20B prune quality: REAP vs frequency (parity PPL)",
+        "# 20B prune quality: EAFT-REAP vs REAP vs frequency (parity PPL)",
         "",
         f"- Dataset: `{dataset_id}` split `{dataset_split}` col `{text_column}`",
         f"- Blocks: {int(num_blocks)} | Batch size: {int(batch_size)}",
+        f"- Seq lens: `{seq_lens_csv}`",
         "",
         "| model | keep_frac | top_k | ppl1024 | ppl2048 | delta vs base (1024/2048) |",
         "|---|---:|---:|---:|---:|---:|",
@@ -387,12 +468,14 @@ def main(
         ("base", 1.0, 4),
         ("freq_50", 0.5, 4),
         ("reap_50", 0.5, 4),
+        ("eaftreap_50", 0.5, 4),
         ("freq_25", 0.25, 4),
         ("reap_25", 0.25, 4),
+        ("eaftreap_25", 0.25, 4),
     ]
     for name, keep_frac, top_k in order:
-        ppl1024 = float(results[1024]["models"][name]["ppl"])
-        ppl2048 = float(results[2048]["models"][name]["ppl"])
+        ppl1024 = float(res["models"][name]["by_seq"]["1024"]["ppl"])
+        ppl2048 = float(res["models"][name]["by_seq"]["2048"]["ppl"])
         d1 = ppl1024 - float(base1024)
         d2 = ppl2048 - float(base2048)
         lines.append(

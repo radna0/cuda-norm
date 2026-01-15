@@ -102,6 +102,36 @@ Scans normalized output and organizes it into semantic pools for downstream task
 
 The Modal scripts consume the artifacts produced by the CPU pipeline.
 
+### DFlash (SGLang) on Kaggle via Versa
+
+This repo includes a DFlash (block-diffusion) speculative decoding stack for GPT-OSS, plus a converter that makes our HF-trained DFlash draft checkpoints loadable by SGLang’s `DFlashDraftModel`.
+
+- HF → SGLang draft checkpoint converter: `harmony/cuda-norm/scripts/convert_hf_dflash_ckpt_to_sglang.py`
+- Kaggle remote smoke (one job): `harmony/cuda-norm/scripts/versa_run_kaggle_dflash_smoke.sh`
+- GPT-OSS-20B end-to-end (train → convert → benchmark): `harmony/cuda-norm/scripts/versa_run_kaggle_dflash_gptoss20b_pipeline.sh`
+
+Example:
+
+```bash
+export REMOTE_JUPYTER_URL="https://.../proxy"
+bash harmony/cuda-norm/scripts/versa_run_kaggle_dflash_smoke.sh
+```
+
+GPT-OSS-20B pipeline example (H100):
+
+```bash
+export REMOTE_JUPYTER_URL="https://.../proxy"
+export TARGET_MODEL="openai/gpt-oss-20b"
+export DATASET_REPO="radna0/harmony-qwen3-calib-packs-v2-20260113"
+export TRAIN_FILES_CSV="packs/reasoning_style_10k_v2/reasoning_style_10k_v2.parquet,packs/tool_agentic_10k_v6/tool_agentic_10k_v6.parquet,packs/calib_prompt_10000_v2/calib_prompt_10000_v2.parquet"
+export MAX_STEPS=200
+export SAVE_EVERY=200
+export SEQ_LEN=4096
+export BLOCK_SIZE=8
+export TEACHER_ATTN_BACKEND=fa3
+bash harmony/cuda-norm/scripts/versa_run_kaggle_dflash_gptoss20b_pipeline.sh
+```
+
 ### Embedding-Based Curation (Qwen3 + SGLang)
 
 For conversion calibration and coverage-driven filtering (agentic/tool-calling + deep reasoning), embeddings are often a better first pass than full NLL scoring.

@@ -21,3 +21,4 @@ hf_upload_logs/
 training_logs/
 cpu_logs/
 reports/
+.versa_sync_min/

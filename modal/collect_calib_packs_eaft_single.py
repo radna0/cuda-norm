@@ -164,6 +164,17 @@ def _snapshot_download_model(model_id: str) -> Path:
     token = _get_hf_token()
     cache_dir = Path("/root/model/.hf_cache")
     cache_dir.mkdir(parents=True, exist_ok=True)
+    # Hard rule: never burn GPU time downloading weights if they were already
+    # CPU-predownloaded into the persistent volume.
+    local_dir = Path("/root/model") / str(model_id)
+    try:
+        if local_dir.exists():
+            # `local_dir` is usually a symlink to a HF snapshot folder.
+            probe = local_dir / "config.json"
+            if probe.exists():
+                return Path(local_dir.resolve() if local_dir.is_symlink() else local_dir)
+    except Exception:
+        pass
     print(f"[*] snapshot_download(model) start: {model_id}", flush=True)
     # Keep logs alive during long downloads so we can see liveness on Modal.
     try:
@@ -222,6 +233,36 @@ def _download_dataset_file(dataset_repo: str, filename: str) -> Path:
             token=token,
         )
     )
+
+
+def _find_cached_dataset_file(dataset_repo: str, filename: str) -> Path | None:
+    # Avoid burning GPU time on dataset downloads: if CPU predownload already
+    # fetched the file into the HF cache volume, resolve the cached path
+    # directly instead of calling hf_hub_download (which can still do network
+    # metadata checks).
+    try:
+        cache_root = Path("/root/hf_cache/hub")
+        repo_dir = cache_root / f"datasets--{dataset_repo.replace('/', '--')}" / "snapshots"
+        if not repo_dir.exists():
+            return None
+        # Prefer the newest snapshot dir.
+        for snap in sorted(repo_dir.iterdir(), reverse=True):
+            p = snap / filename
+            if p.exists():
+                return p
+    except Exception:
+        return None
+    return None
+
+
+def _resolve_dataset_file(dataset_repo: str, filename: str) -> Path:
+    cached = _find_cached_dataset_file(str(dataset_repo), str(filename))
+    if cached is not None:
+        print(f"[+] using cached dataset file: {dataset_repo}::{filename} -> {cached}", flush=True)
+        return cached
+    p = _download_dataset_file(str(dataset_repo), str(filename))
+    print(f"[+] hf_hub_download(dataset) done: {dataset_repo}::{filename} -> {p}", flush=True)
+    return p
 
 
 @app.function(
@@ -879,7 +920,7 @@ def collect_calib_packs_eaft_single(
 
     pack_paths: dict[str, Path] = {}
     for f in pack_files:
-        pack_paths[str(f)] = _download_dataset_file(str(dataset_repo), str(f))
+        pack_paths[str(f)] = _resolve_dataset_file(str(dataset_repo), str(f))
 
     device_map = str(device_map or "").strip().lower()
     dm = {"": 0} if not device_map or device_map == "cuda" else device_map

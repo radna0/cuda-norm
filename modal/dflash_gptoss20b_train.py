@@ -71,9 +71,25 @@ if os.environ.get("HF_TOKEN"):
 SGLANG_PY_SRC = _repo_root / "sglang-flashinfer" / "python" / "sglang"
 SGL_KERNEL_PY_SRC = _repo_root / "sglang-flashinfer" / "sgl-kernel" / "python" / "sgl_kernel"
 
-image = (
+cpu_image = (
     modal.Image.from_registry(BASE_IMAGE, add_python="3.11")
     .apt_install("git", "python3-dev", "build-essential", "curl")
+    .run_commands("python -m pip install -U pip setuptools wheel")
+    .run_commands("python -m pip install huggingface-hub==0.36.0 hf-transfer")
+    .env(
+        {
+            "HF_HUB_ENABLE_HF_TRANSFER": "1",
+            "HF_HOME": "/root/hf_cache",
+            "TRANSFORMERS_CACHE": "/root/hf_cache/transformers",
+            "HF_DATASETS_CACHE": "/root/hf_cache/datasets",
+            "HUGGINGFACE_HUB_CACHE": "/root/hf_cache/hub",
+        }
+    )
+)
+
+train_image = (
+    modal.Image.from_registry(BASE_IMAGE, add_python="3.11")
+    .apt_install("git", "python3-dev", "build-essential", "curl", "libnuma1")
     .run_commands("python -m pip install -U pip setuptools wheel")
     .run_commands(
         "python -m pip install torch==2.9.1 --index-url https://download.pytorch.org/whl/cu128",
@@ -107,6 +123,42 @@ image = (
 )
 
 app = modal.App(APP_NAME)
+
+@app.function(
+    image=cpu_image,
+    timeout=21600,
+    cpu=8.0,
+    memory=65536,
+    volumes={"/root/hf_cache": hf_cache_volume},
+    secrets=_secrets,
+)
+def predownload_remote(*, model_id: str, dataset_repo: str, train_files: list[str]) -> str:
+    from huggingface_hub import hf_hub_download
+    from huggingface_hub import snapshot_download
+
+    hf_cache_volume.reload()
+    token = os.environ.get("HF_TOKEN")
+
+    # Model weights/config/tokenizer.
+    snapshot_download(
+        repo_id=str(model_id),
+        repo_type="model",
+        token=token,
+        local_files_only=False,
+        max_workers=16,
+    )
+
+    # Dataset pack files.
+    for f in train_files:
+        hf_hub_download(
+            repo_id=str(dataset_repo),
+            repo_type="dataset",
+            filename=str(f),
+            token=token,
+        )
+
+    hf_cache_volume.commit()
+    return "ok"
 
 
 def _ensure_mask_token(tok, *, target_model) -> int:
@@ -169,18 +221,13 @@ def _make_training_stream(tok, *, eos_id: int, seq_len: int, block_size: int, te
             buf = buf[need:]
             context = torch.tensor(chunk[:seq_len], dtype=torch.long)
             block = torch.tensor(chunk[seq_len:], dtype=torch.long)
+            # DFlash block diffusion training: token0 is the anchor/current token;
+            # ALL subsequent positions are masked (the inference-time regime).
             noise = block.clone()
             mask = torch.zeros((block_size,), dtype=torch.bool)
-            # Never mask token0, mask positions 1..end with a high-ish ratio.
-            mask_ratio = random.uniform(0.4, 0.9)
             for i in range(1, block_size):
-                if random.random() < mask_ratio:
-                    noise[i] = int(mask_token_id)
-                    mask[i] = True
-            if not mask.any():
-                j = random.randint(1, block_size - 1)
-                noise[j] = int(mask_token_id)
-                mask[j] = True
+                noise[i] = int(mask_token_id)
+                mask[i] = True
             yield TrainBatch(
                 context_ids=context,
                 block_ids=block,
@@ -190,7 +237,7 @@ def _make_training_stream(tok, *, eos_id: int, seq_len: int, block_size: int, te
 
 
 @app.function(
-    image=image,
+    image=train_image,
     gpu="H100:1",
     timeout=21600,
     cpu=12.0,
@@ -318,21 +365,25 @@ def train_remote(
                     context_ids, attention_mask=attn, use_cache=False, output_hidden_states=True
                 )
                 target_hidden = draft.extract_context_feature(out.hidden_states)
-                noise_embedding = target.model.embed_tokens(noise_block_ids)
+                base_noise_embedding = target.model.embed_tokens(noise_block_ids)
             else:
                 # Teacher returns [seq_len, layers*hidden]; add batch dim.
                 t_out = teacher.prefill_hidden_states(context_ids)
                 target_hidden = t_out.hidden_states.unsqueeze(0)
-                noise_embedding = teacher.embed_tokens(noise_block_ids).view(1, int(block_size), -1)
+                base_noise_embedding = (
+                    teacher.embed_tokens(noise_block_ids)
+                    .reshape(1, int(block_size), -1)
+                    .contiguous()
+                )
 
-        # Replace masked positions with a learned mask embedding to avoid using
-        # pad-token embedding as a "mask" surrogate.
-        try:
-            masked_idx = mask_pos[0].nonzero(as_tuple=True)[0]
-            if masked_idx.numel() > 0 and hasattr(draft, "mask_embedding"):
-                noise_embedding[0, masked_idx, :] = draft.mask_embedding.to(noise_embedding.dtype)[None, :]
-        except Exception:
-            pass
+        # Replace masked positions with a learned mask embedding. Use a
+        # differentiable `torch.where` so gradients can flow to `mask_embedding`.
+        if hasattr(draft, "mask_embedding"):
+            mask = (noise_block_ids == int(mask_token_id)).view(1, int(block_size), 1)
+            mask_embed = draft.mask_embedding.to(base_noise_embedding.dtype).view(1, 1, -1)
+            noise_embedding = torch.where(mask, mask_embed, base_noise_embedding)
+        else:
+            noise_embedding = base_noise_embedding
 
         # Draft predicts block tokens 1..end (token0 is anchor)
         pos = torch.arange(int(seq_len) + int(block_size), device=device).unsqueeze(0)
@@ -356,7 +407,8 @@ def train_remote(
         # Compute CE in fp32 for numerical stability.
         loss_tok = F.cross_entropy(logits.float().reshape(-1, logits.size(-1)), labels.reshape(-1), reduction="none")
         loss_tok = loss_tok.view_as(labels)
-        loss = (loss_tok * mask_pos[:, 1:].float()).sum() / mask_pos[:, 1:].float().sum().clamp_min(1.0)
+        # DFlash training uses completion over all masked positions (1..end).
+        loss = loss_tok.mean()
 
         opt.zero_grad(set_to_none=True)
         loss.backward()
@@ -405,15 +457,20 @@ def main(
     train_files_csv: str = "packs/reasoning_style_10k_v2/reasoning_style_10k_v2.parquet,tool_agentic_10k_v6.parquet,packs/calib_prompt_10000_v2/calib_prompt_10000_v2.parquet",
     model_id: str = "openai/gpt-oss-20b",
     seq_len: int = 4096,
-    block_size: int = 8,
+    block_size: int = 16,
     num_hidden_layers: int = 4,
     mlp_ratio: float = 4.0,
     max_steps: int = 50,
     lr: float = 2e-4,
     log_every: int = 1,
     save_every: int = 25,
+    predownload_only: bool = False,
 ):
     train_files = [x.strip() for x in (train_files_csv or "").split(",") if x.strip()]
+    predownload_remote.remote(model_id=model_id, dataset_repo=dataset_repo, train_files=train_files)
+    if predownload_only:
+        print("predownload ok")
+        return
     out = train_remote.remote(
         dataset_repo=dataset_repo,
         train_files=train_files,

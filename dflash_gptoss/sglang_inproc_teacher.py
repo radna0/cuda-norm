@@ -38,10 +38,13 @@ class SGLangInprocTeacher:
         attention_backend: str,
         context_length: int,
         layers_to_capture: Optional[list[int]] = None,
+        moe_runner_backend: Optional[str] = None,
         dtype: str = "bfloat16",
         gpu_id: int = 0,
         nccl_port: int = 23456,
         mem_fraction_static: float = 0.80,
+        max_total_tokens: Optional[int] = None,
+        disable_flashinfer_autotune: bool = True,
         enable_return_hidden_states: bool = True,
         return_hidden_states_before_norm: bool = False,
     ) -> None:
@@ -50,6 +53,11 @@ class SGLangInprocTeacher:
         from sglang.srt.configs.model_config import ModelConfig
         from sglang.srt.model_executor.model_runner import ModelRunner
         from sglang.srt.server_args import ServerArgs
+
+        if max_total_tokens is None:
+            # Keep KV pool minimal for training-style forward passes.
+            # Over-allocating can starve weight loading on large models.
+            max_total_tokens = int(context_length)
 
         server_args = ServerArgs(
             model_path=str(model_path),
@@ -62,11 +70,21 @@ class SGLangInprocTeacher:
             context_length=int(context_length),
             max_running_requests=1,
             # Conservative default; forward needs KV cache space for prefill.
-            max_total_tokens=int(max(4096, min(context_length * 2, 65536))),
+            max_total_tokens=int(max_total_tokens),
             disable_cuda_graph=True,
             allow_auto_truncate=True,
             enable_return_hidden_states=bool(enable_return_hidden_states),
+            moe_runner_backend=str(moe_runner_backend) if moe_runner_backend else ServerArgs.moe_runner_backend,
+            disable_flashinfer_autotune=bool(disable_flashinfer_autotune),
         )
+        # Ensure MoE backend is initialized before any quantization layers are
+        # constructed (some quant configs read the global backend at init time).
+        try:
+            from sglang.srt.layers.moe.utils import initialize_moe_config
+
+            initialize_moe_config(server_args)
+        except Exception:
+            pass
 
         model_config = ModelConfig.from_server_args(
             server_args,
@@ -111,11 +129,22 @@ class SGLangInprocTeacher:
         # `GptOssForCausalLM.capture_aux_hidden_states` switch.
         if self._layers_to_capture:
             try:
-                if hasattr(self._runner.model, "capture_aux_hidden_states"):
-                    self._runner.model.capture_aux_hidden_states = True  # type: ignore[attr-defined]
-                inner = getattr(self._runner.model, "model", None)
-                if inner is not None and hasattr(inner, "layers_to_capture"):
-                    inner.layers_to_capture = list(self._layers_to_capture)  # type: ignore[attr-defined]
+                # Prefer model-provided helper (handles off-by-one semantics).
+                if hasattr(self._runner.model, "set_dflash_layers_to_capture"):
+                    self._runner.model.set_dflash_layers_to_capture(list(self._layers_to_capture))  # type: ignore[attr-defined]
+                elif hasattr(self._runner.model, "set_eagle3_layers_to_capture"):
+                    # `layer_ids` here are 0-based transformer block indices (same as
+                    # HF hidden_states indexing before the +1 offset for embeddings).
+                    self._runner.model.set_eagle3_layers_to_capture(list(self._layers_to_capture))  # type: ignore[attr-defined]
+                else:
+                    # Manual fallback for GPT-OSS: SGLang records aux states as the
+                    # output of layer (i-1) when `i in layers_to_capture`, so we +1
+                    # to match HF's post-layer hidden_states indexing.
+                    if hasattr(self._runner.model, "capture_aux_hidden_states"):
+                        self._runner.model.capture_aux_hidden_states = True  # type: ignore[attr-defined]
+                    inner = getattr(self._runner.model, "model", None)
+                    if inner is not None and hasattr(inner, "layers_to_capture"):
+                        inner.layers_to_capture = [int(v) + 1 for v in self._layers_to_capture]  # type: ignore[attr-defined]
             except Exception:
                 # If anything goes wrong, keep default (final hidden only).
                 pass

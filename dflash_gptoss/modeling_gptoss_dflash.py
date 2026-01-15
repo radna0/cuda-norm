@@ -65,14 +65,13 @@ def eager_attention_forward_dflash(
     scaling: float,
     dropout: float = 0.0,
     sliding_window: Optional[int] = None,
-    s_aux: Optional[torch.Tensor] = None,
     **kwargs,
 ):
     """
-    Variant of GPT-OSS eager attention that is dtype-stable for our DFlash use.
+    DFlash non-causal attention over a concatenated KV sequence.
 
-    Some environments upcast the attention logits to fp32; if value remains bf16,
-    `torch.matmul(attn_weights, value)` can error due to dtype mismatch.
+    We keep this as a simple eager attention implementation to remain compatible
+    across environments while ensuring dtype stability.
     """
     key_states = _repeat_kv(key, module.num_key_value_groups)
     value_states = _repeat_kv(value, module.num_key_value_groups)
@@ -82,18 +81,10 @@ def eager_attention_forward_dflash(
         causal_mask = attention_mask[:, :, :, : key_states.shape[-2]]
         attn_weights = attn_weights + causal_mask
 
-    if s_aux is None:
-        s_aux = getattr(module, "sinks", None)
-    if s_aux is None:
-        raise RuntimeError("Missing sinks parameter for DFlash attention.")
-
-    sinks = s_aux.reshape(1, -1, 1, 1).expand(query.shape[0], -1, query.shape[-2], -1)
-    combined_logits = torch.cat([attn_weights, sinks.to(attn_weights.dtype)], dim=-1)
-    combined_logits = combined_logits - combined_logits.max(dim=-1, keepdim=True).values
-
-    probs = F.softmax(combined_logits, dim=-1, dtype=combined_logits.dtype)
-    scores = probs[..., :-1]
-    attn_probs = F.dropout(scores, p=dropout, training=module.training)
+    # Stabilize softmax.
+    attn_weights = attn_weights - attn_weights.max(dim=-1, keepdim=True).values
+    attn_probs = F.softmax(attn_weights, dim=-1, dtype=attn_weights.dtype)
+    attn_probs = F.dropout(attn_probs, p=dropout, training=module.training)
 
     # Ensure dtype match for matmul.
     if value_states.dtype != attn_probs.dtype:
@@ -135,8 +126,6 @@ class GptOssDFlashAttention(nn.Module):
             bias=bool(config.attention_bias),
         )
         self.sliding_window = int(config.sliding_window) if config.layer_types[layer_idx] == "sliding_attention" else None
-        # Important: initialize sinks deterministically; leaving as `empty()` can produce NaNs in softmax.
-        self.sinks = nn.Parameter(torch.zeros(int(config.num_attention_heads), dtype=torch.float32))
 
     def forward(
         self,
@@ -185,7 +174,6 @@ class GptOssDFlashAttention(nn.Module):
             dropout=0.0 if not self.training else self.attention_dropout,
             scaling=self.scaling,
             sliding_window=self.sliding_window,
-            s_aux=self.sinks,
             is_causal=False,
             **kwargs,
         )
@@ -342,7 +330,10 @@ class GptOssDFlashDraftModel(PreTrainedModel):  # type: ignore[misc]
             sliding_window=int(getattr(target_config, "sliding_window", 128)),
             layer_types=list(getattr(target_config, "layer_types", ["full_attention"] * int(target_config.num_hidden_layers))),
             num_hidden_layers=int(num_hidden_layers),
-            num_target_layers=int(getattr(target_config, "num_hidden_layers", 36)) + 1,
+            # Match upstream DFlash layer selection: `num_target_layers` is the
+            # number of transformer blocks in the target (embeddings are offset
+            # separately when indexing HF hidden_states).
+            num_target_layers=int(getattr(target_config, "num_hidden_layers", 36)),
             block_size=int(block_size),
             mlp_ratio=float(mlp_ratio),
             hidden_act=str(getattr(target_config, "hidden_act", "silu")),

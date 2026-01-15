@@ -160,6 +160,16 @@ def _snapshot_download_model(model_id: str) -> Path:
 
     cache_dir = Path("/root/model/.hf_cache")
     cache_dir.mkdir(parents=True, exist_ok=True)
+    # Avoid re-downloading in GPU containers: if the model was already
+    # predownloaded into the persistent volume, use it directly.
+    local_dir = Path("/root/model") / str(model_id)
+    try:
+        if local_dir.exists():
+            probe = local_dir / "config.json"
+            if probe.exists():
+                return Path(local_dir.resolve() if local_dir.is_symlink() else local_dir)
+    except Exception:
+        pass
     snap = snapshot_download(
         repo_id=str(model_id),
         repo_type="model",
@@ -178,6 +188,34 @@ def _snapshot_download_model(model_id: str) -> Path:
     except Exception:
         pass
     return Path(snap)
+
+
+@app.function(
+    image=image,
+    timeout=21600,
+    cpu=4.0,
+    memory=32768,
+    volumes={
+        "/root/model": model_volume,
+        "/root/hf_cache": hf_cache_volume,
+    },
+    secrets=_secrets,
+)
+def predownload_model(model_id: str) -> str:
+    """CPU-only: download a HF model snapshot into the persistent volumes."""
+    _ensure_hf_env()
+    try:
+        model_volume.reload()
+        hf_cache_volume.reload()
+    except Exception:
+        pass
+    model_dir = _snapshot_download_model(str(model_id))
+    try:
+        model_volume.commit()
+        hf_cache_volume.commit()
+    except Exception:
+        pass
+    return str(model_dir)
 
 
 @app.function(
@@ -1485,6 +1523,578 @@ def profile_20b_reap_saliency(
 
 
 @app.function(
+    image=image_no_kernels,
+    gpu="H100:1",
+    timeout=21600,
+    cpu=16.0,
+    memory=262144,
+    volumes={
+        "/root/data": data_volume,
+        "/root/model": model_volume,
+        "/root/hf_cache": hf_cache_volume,
+    },
+    secrets=_secrets,
+)
+def profile_20b_eaftreap_saliency(
+    *,
+    model_id: str,
+    dataset_id: str,
+    dataset_split: str,
+    text_column: str,
+    domain: str,
+    num_rows: int,
+    max_seq_length: int,
+    batch_size: int,
+    cc_quantile: float = 0.15,
+    uncertain_quantile: float = 0.85,
+    entropy_topk: int = 20,
+    w_good: float = 1.0,
+    w_uncertain: float = 0.25,
+    w_conflict: float = -2.0,
+    rows_jsonl_path: str = "",
+) -> dict[str, Any]:
+    """
+    EAFT-REAP (correctness-aware) saliency profiling for GPT-OSS MoE (Transformers).
+
+    REAP-lite uses: g_j(x) * ||f_j(x)||_2 (magnitude-only).
+    EAFT-REAP conditions that contribution on token outcome quality:
+      - p_t: probability assigned to the reference token
+      - H_t: predictive entropy (Top-K approx, normalized by ln(K))
+
+    We compute global thresholds over sampled tokens:
+      p_lo = quantile(p_t, cc_quantile)
+      H_lo = quantile(H_t, cc_quantile)
+      H_hi = quantile(H_t, uncertain_quantile)
+
+    Then per token we assign a weight w_t:
+      - good: (p_t >= p_lo) & (H_t <= H_lo)                 => w_good
+      - confident conflict: (p_t < p_lo) & (H_t <= H_lo)    => w_conflict (negative)
+      - otherwise (including uncertain/hard):               => w_uncertain
+
+    Expert score (per selection) is the signed mean:
+      E[w_t * g_j(x) * ||f_j(x)||_2]
+    """
+    import hashlib
+    import math
+
+    import torch
+    import pyarrow as pa
+    import pyarrow.parquet as pq
+    from transformers import AutoModelForCausalLM, AutoTokenizer
+
+    _ensure_hf_env()
+
+    try:
+        data_volume.reload()
+        model_volume.reload()
+        hf_cache_volume.reload()
+    except Exception:
+        pass
+
+    if str(rows_jsonl_path or "").strip():
+        rows = _load_rows_jsonl(str(rows_jsonl_path), limit=int(num_rows))
+    else:
+        rows = _stream_rows_for_reap(
+            dataset_id=dataset_id,
+            split=dataset_split,
+            text_column=text_column,
+            limit=int(num_rows),
+            domain=str(domain or ""),
+            domain_column=DEFAULT_DOMAIN_COLUMN,
+        )
+    prompt_hash = hashlib.sha256(
+        ("\n".join(str(r.get("id") or "") for r in rows)).encode("utf-8", errors="ignore")
+        + b"\n"
+        + ("\n".join(r["text"] for r in rows)).encode("utf-8", errors="ignore")
+    ).hexdigest()
+
+    model_dir = _snapshot_download_model(model_id)
+    tokenizer = AutoTokenizer.from_pretrained(str(model_dir), trust_remote_code=True)
+    if tokenizer.pad_token_id is None:
+        tokenizer.pad_token = tokenizer.eos_token
+    tokenizer.padding_side = "right"
+    tokenizer.truncation_side = "left"
+
+    model = AutoModelForCausalLM.from_pretrained(
+        str(model_dir),
+        torch_dtype="auto",
+        device_map={"": 0},
+        trust_remote_code=True,
+    )
+    model.eval()
+
+    layers = _iter_gpt_oss_layers(model)
+    num_layers = len(layers)
+    num_experts = int(getattr(model.config, "num_local_experts", 0) or 0)
+    top_k = int(getattr(model.config, "num_experts_per_tok", 0) or getattr(model.config, "experts_per_token", 4))
+    if num_experts <= 0 or top_k <= 0:
+        raise RuntimeError("Could not determine num_local_experts / top_k from config.")
+
+    # We only compute p/H/weights for the same sampled token subset that REAP-lite
+    # uses for expert-norm computation (first N kept tokens), for efficiency.
+    max_tokens = int(os.environ.get("REAP_MAX_TOKENS_PER_BATCH", "128"))
+    max_tokens = int(max_tokens) if int(max_tokens) > 0 else 0
+    entropy_topk = int(entropy_topk)
+    if entropy_topk <= 1:
+        raise ValueError("entropy_topk must be >= 2")
+
+    # ---- Pass 1: collect p_t and H_t samples (and store per-batch) ------------
+    p_all: list[float] = []
+    h_all: list[float] = []
+    batch_samples: list[dict[str, Any]] = []
+
+    total_tokens = 0
+    total_kept_tokens = 0
+    t0 = time.time()
+
+    for batch_i, start in enumerate(range(0, len(rows), max(1, int(batch_size))), start=1):
+        batch = rows[start : start + int(batch_size)]
+        texts = [r["text"] for r in batch]
+
+        tok = tokenizer(
+            texts,
+            return_tensors="pt",
+            truncation=True,
+            padding=True,
+            max_length=int(max_seq_length),
+            return_offsets_mapping=True,
+        )
+        offsets = tok.pop("offset_mapping")  # CPU
+
+        keep_masks: list[list[bool]] = []
+        for row_i, text in enumerate(texts):
+            spans = _assistant_content_spans(text)
+            keep = _token_keep_mask(offsets[row_i].tolist(), spans)
+            keep_masks.append(keep)
+
+        enc = {k: v.to("cuda") for k, v in tok.items()}
+        attn = enc.get("attention_mask")
+        keep = torch.tensor(keep_masks, dtype=torch.bool, device="cuda")
+        if attn is not None and torch.is_tensor(attn):
+            keep = keep & attn.to(torch.bool)
+
+        bs, seq = keep.shape
+        keep_flat = keep.reshape(-1)
+        sel_flat = torch.nonzero(keep_flat, as_tuple=False).squeeze(-1)
+        if max_tokens and int(sel_flat.numel()) > max_tokens:
+            sel_flat = sel_flat[:max_tokens]
+
+        # Placeholder lists aligned to `sel_flat` order; pos==0 has no prediction.
+        p_list: list[float | None] = [None] * int(sel_flat.numel())
+        h_list: list[float | None] = [None] * int(sel_flat.numel())
+
+        if int(sel_flat.numel()) > 0:
+            with torch.inference_mode():
+                out = model(**enc, use_cache=False, return_dict=True)
+            logits = out.logits  # [bs, seq, vocab]
+
+            sel_b = (sel_flat // int(seq)).to(torch.int64)
+            sel_t = (sel_flat % int(seq)).to(torch.int64)
+            pred_mask = sel_t > 0
+            if bool(pred_mask.any().item()):
+                b = sel_b[pred_mask]
+                t = sel_t[pred_mask]
+                logits_sel = logits[b, t - 1, :]  # predicts token at t
+                tgt = enc["input_ids"][b, t].to(torch.int64)
+
+                logits_sel_f = logits_sel.float()
+                logit_ref = logits_sel_f.gather(1, tgt.unsqueeze(-1)).squeeze(-1)
+                lse = torch.logsumexp(logits_sel_f, dim=-1)
+                p = torch.exp((logit_ref - lse).clamp(min=-50.0, max=0.0)).clamp(min=0.0, max=1.0)
+
+                topk_vals = torch.topk(logits_sel_f, k=int(entropy_topk), dim=-1).values
+                topk_p = torch.softmax(topk_vals, dim=-1)
+                ent = -(topk_p * torch.log(topk_p.clamp_min(1e-12))).sum(dim=-1) / math.log(float(entropy_topk))
+                ent = ent.clamp(min=0.0, max=1.0)
+
+                p_cpu = p.detach().to("cpu").tolist()
+                h_cpu = ent.detach().to("cpu").tolist()
+                pred_mask_cpu = pred_mask.detach().to("cpu").tolist()
+                it = 0
+                for i, ok in enumerate(pred_mask_cpu):
+                    if not ok:
+                        continue
+                    pv = float(p_cpu[it])
+                    hv = float(h_cpu[it])
+                    p_list[i] = pv
+                    h_list[i] = hv
+                    p_all.append(pv)
+                    h_all.append(hv)
+                    it += 1
+
+            # Free logits ASAP.
+            del logits
+            del out
+
+        batch_samples.append({"n_sel": int(sel_flat.numel()), "p": p_list, "h": h_list})
+        total_tokens += int(enc["input_ids"].numel())
+        total_kept_tokens += int(keep.sum().item())
+
+        if batch_i % 25 == 0:
+            dt_i = max(1e-9, time.time() - t0)
+            print(
+                f"[*] eaftreap pass1 batches={batch_i} rows={min(len(rows), start+int(batch_size))}/{len(rows)} "
+                f"tokens={total_tokens} kept={total_kept_tokens} tok/s={total_tokens/dt_i:.0f} p_samples={len(p_all)}",
+                flush=True,
+            )
+
+    if not p_all or not h_all:
+        raise RuntimeError("No EAFT samples collected; check that assistant spans exist in your data.")
+
+    import numpy as np
+
+    p_np = np.asarray(p_all, dtype=np.float64)
+    h_np = np.asarray(h_all, dtype=np.float64)
+    p_lo = float(np.quantile(p_np, float(cc_quantile)))
+    h_lo = float(np.quantile(h_np, float(cc_quantile)))
+    h_hi = float(np.quantile(h_np, float(uncertain_quantile)))
+
+    # Assign weights (CPU lists aligned to per-batch selection order).
+    weights_by_batch: list[list[float]] = []
+    region_counts = {"good": 0, "conflict": 0, "uncertain": 0}
+    for b in batch_samples:
+        ws: list[float] = []
+        for pv, hv in zip(b["p"], b["h"], strict=True):
+            if pv is None or hv is None:
+                ws.append(0.0)
+                continue
+            p_v = float(pv)
+            h_v = float(hv)
+            if p_v >= p_lo and h_v <= h_lo:
+                ws.append(float(w_good))
+                region_counts["good"] += 1
+            elif p_v < p_lo and h_v <= h_lo:
+                ws.append(float(w_conflict))
+                region_counts["conflict"] += 1
+            else:
+                ws.append(float(w_uncertain))
+                region_counts["uncertain"] += 1
+        weights_by_batch.append(ws)
+
+    # ---- Pass 2: run REAP-lite hooks with w_t weighting ------------------------
+    current_keep_mask = {"mask": None}
+    current_token_weights = {"weights": None}
+
+    count = torch.zeros((num_layers, num_experts), dtype=torch.int64, device="cuda")
+    gate_sum = torch.zeros((num_layers, num_experts), dtype=torch.float32, device="cuda")
+    norm_sum = torch.zeros((num_layers, num_experts), dtype=torch.float32, device="cuda")
+    gate_norm_sum = torch.zeros((num_layers, num_experts), dtype=torch.float32, device="cuda")
+    gate_norm_sum_weighted = torch.zeros((num_layers, num_experts), dtype=torch.float32, device="cuda")
+    pos_count = torch.zeros((num_layers, num_experts), dtype=torch.int64, device="cuda")
+    neg_count = torch.zeros((num_layers, num_experts), dtype=torch.int64, device="cuda")
+    pos_gate_norm_sum = torch.zeros((num_layers, num_experts), dtype=torch.float32, device="cuda")
+    neg_gate_norm_sum = torch.zeros((num_layers, num_experts), dtype=torch.float32, device="cuda")
+
+    hooks = []
+
+    def _make_mlp_prehook(layer_idx: int):
+        router = layers[layer_idx].mlp.router
+        experts = layers[layer_idx].mlp.experts
+
+        def _hook(_module, inputs):
+            if not inputs:
+                return
+            hidden = inputs[0]
+            if not torch.is_tensor(hidden) or hidden.dim() != 3:
+                return
+
+            keep_mask = current_keep_mask.get("mask")
+            w_mask = current_token_weights.get("weights")
+            if keep_mask is None or not torch.is_tensor(keep_mask):
+                return
+            if w_mask is None or not torch.is_tensor(w_mask):
+                return
+            if keep_mask.shape[:2] != hidden.shape[:2] or w_mask.shape[:2] != hidden.shape[:2]:
+                return
+
+            hs = hidden  # [bs, seq, hidden]
+            bs, seq, hd = hs.shape
+            hs2 = hs.reshape(-1, int(hd))
+            keep2 = keep_mask.reshape(-1)
+            if int(keep2.sum().item()) == 0:
+                return
+            hs_sel = hs2[keep2]
+            w2 = w_mask.reshape(-1)[keep2].to(torch.float32)
+
+            if max_tokens > 0 and int(hs_sel.shape[0]) > max_tokens:
+                hs_sel = hs_sel[:max_tokens]
+                w2 = w2[:max_tokens]
+
+            out = router(hs_sel)
+            if not isinstance(out, (tuple, list)) or len(out) != 2:
+                return
+            router_scores, router_idx = out
+            if not torch.is_tensor(router_scores) or not torch.is_tensor(router_idx):
+                return
+            if router_scores.dim() != 2 or int(router_scores.shape[1]) != int(num_experts):
+                return
+            if router_idx.dim() != 2:
+                return
+            kk = int(router_idx.shape[1])
+            if kk <= 0:
+                return
+
+            router_idx = router_idx.to(torch.int64)
+            topk_w = router_scores.gather(1, router_idx).to(torch.float32)
+            denom = topk_w.sum(dim=-1, keepdim=True).clamp_min(1e-9)
+            topk_w = topk_w / denom
+
+            gate_up_proj = getattr(experts, "gate_up_proj", None)
+            down_proj = getattr(experts, "down_proj", None)
+            if gate_up_proj is None or down_proj is None:
+                return
+            gate_up_proj_bias = getattr(experts, "gate_up_proj_bias", None)
+            down_proj_bias = getattr(experts, "down_proj_bias", None)
+            if not torch.is_tensor(gate_up_proj) or not torch.is_tensor(down_proj):
+                raise TypeError(
+                    "EAFT-REAP requires PyTorch expert weights, but got non-torch tensors for "
+                    f"gate_up_proj={type(gate_up_proj)} down_proj={type(down_proj)}."
+                )
+            if gate_up_proj_bias is not None and not torch.is_tensor(gate_up_proj_bias):
+                raise TypeError("EAFT-REAP requires PyTorch expert bias tensors, but got non-torch.")
+            if down_proj_bias is not None and not torch.is_tensor(down_proj_bias):
+                raise TypeError("EAFT-REAP requires PyTorch expert bias tensors, but got non-torch.")
+
+            # GPT-OSS gated-swish clamp params (from its implementation).
+            alpha = float(getattr(experts, "alpha", 1.702))
+            limit = float(getattr(experts, "limit", 7.0))
+
+            # Build per-expert norm for the selected top-k experts.
+            n_tokens = int(hs_sel.shape[0])
+            expert_ids = router_idx.reshape(-1)
+            token_ids = (
+                torch.arange(n_tokens, device=expert_ids.device, dtype=torch.int64)
+                .unsqueeze(1)
+                .expand(n_tokens, kk)
+                .reshape(-1)
+            )
+            perm = torch.argsort(expert_ids)
+            expert_ids_sorted = expert_ids[perm]
+            token_ids_sorted = token_ids[perm]
+            w_sorted = topk_w.reshape(-1)[perm]
+            n_sorted = torch.empty_like(w_sorted, dtype=torch.float32)
+
+            unique_e, counts_e = torch.unique_consecutive(expert_ids_sorted, return_counts=True)
+            offset = 0
+            for e_t, c_t in zip(unique_e.tolist(), counts_e.tolist()):
+                e = int(e_t)
+                c = int(c_t)
+                tok = token_ids_sorted[offset : offset + c]
+                x = hs_sel.index_select(0, tok)
+
+                W_gu = gate_up_proj[e]
+                W_down = down_proj[e]
+                b_gu = gate_up_proj_bias[e] if gate_up_proj_bias is not None else None
+                b_down = down_proj_bias[e] if down_proj_bias is not None else None
+
+                gate_up = torch.matmul(x, W_gu)
+                if b_gu is not None:
+                    gate_up = gate_up + b_gu
+
+                gate, up = gate_up[..., ::2], gate_up[..., 1::2]
+                gate = gate.clamp(max=limit)
+                up = up.clamp(min=-limit, max=limit)
+                glu = gate * torch.sigmoid(gate * alpha)
+                act = (up + 1) * glu
+
+                out_e = torch.matmul(act, W_down)
+                if b_down is not None:
+                    out_e = out_e + b_down
+                n_sorted[offset : offset + c] = torch.linalg.norm(out_e.float(), dim=-1)
+                offset += c
+
+            norms_flat = torch.empty_like(n_sorted)
+            norms_flat[perm] = n_sorted
+            norms_sel = norms_flat.reshape(n_tokens, kk)
+            flat_e = router_idx.reshape(-1)
+            flat_w = topk_w.reshape(-1)
+            flat_n = norms_sel.reshape(-1)
+
+            w_rep = w2.unsqueeze(1).expand(n_tokens, kk).reshape(-1).to(torch.float32)
+
+            ones = torch.ones_like(flat_e, dtype=torch.int64)
+            count[layer_idx].index_add_(0, flat_e, ones)
+            gate_sum[layer_idx].index_add_(0, flat_e, flat_w)
+            norm_sum[layer_idx].index_add_(0, flat_e, flat_n)
+
+            gate_norm = flat_w * flat_n
+            gate_norm_sum[layer_idx].index_add_(0, flat_e, gate_norm)
+            gate_norm_sum_weighted[layer_idx].index_add_(0, flat_e, gate_norm * w_rep)
+
+            pos_m = (w_rep > 0).to(torch.float32)
+            neg_m = (w_rep < 0).to(torch.float32)
+            pos_count[layer_idx].index_add_(0, flat_e, pos_m.to(torch.int64))
+            neg_count[layer_idx].index_add_(0, flat_e, neg_m.to(torch.int64))
+            pos_gate_norm_sum[layer_idx].index_add_(0, flat_e, gate_norm * pos_m)
+            neg_gate_norm_sum[layer_idx].index_add_(0, flat_e, gate_norm * neg_m)
+
+        return _hook
+
+    for li in range(num_layers):
+        hooks.append(layers[li].mlp.register_forward_pre_hook(_make_mlp_prehook(li)))
+
+    t1 = time.time()
+    total_tokens_pass2 = 0
+    total_kept_tokens_pass2 = 0
+
+    try:
+        for batch_i, start in enumerate(range(0, len(rows), max(1, int(batch_size))), start=1):
+            batch = rows[start : start + int(batch_size)]
+            texts = [r["text"] for r in batch]
+
+            tok = tokenizer(
+                texts,
+                return_tensors="pt",
+                truncation=True,
+                padding=True,
+                max_length=int(max_seq_length),
+                return_offsets_mapping=True,
+            )
+            offsets = tok.pop("offset_mapping")  # CPU
+
+            keep_masks = []
+            for row_i, text in enumerate(texts):
+                spans = _assistant_content_spans(text)
+                keep_masks.append(_token_keep_mask(offsets[row_i].tolist(), spans))
+
+            enc = {k: v.to("cuda") for k, v in tok.items()}
+            attn = enc.get("attention_mask")
+            keep = torch.tensor(keep_masks, dtype=torch.bool, device="cuda")
+            if attn is not None and torch.is_tensor(attn):
+                keep = keep & attn.to(torch.bool)
+
+            bs, seq = keep.shape
+            keep_flat = keep.reshape(-1)
+            sel_flat = torch.nonzero(keep_flat, as_tuple=False).squeeze(-1)
+            if max_tokens and int(sel_flat.numel()) > max_tokens:
+                sel_flat = sel_flat[:max_tokens]
+
+            ws = weights_by_batch[batch_i - 1]
+            if int(sel_flat.numel()) != len(ws):
+                raise RuntimeError(
+                    f"EAFT-REAP selection mismatch at batch {batch_i}: "
+                    f"sel={int(sel_flat.numel())} stored={len(ws)}"
+                )
+
+            w_full = torch.zeros((bs, seq), dtype=torch.float32, device="cuda")
+            if int(sel_flat.numel()) > 0:
+                w_full.reshape(-1)[sel_flat] = torch.tensor(ws, dtype=torch.float32, device="cuda")
+
+            current_keep_mask["mask"] = keep
+            current_token_weights["weights"] = w_full
+            with torch.inference_mode():
+                _ = model(**enc, use_cache=False, return_dict=False)
+
+            total_tokens_pass2 += int(enc["input_ids"].numel())
+            total_kept_tokens_pass2 += int(keep.sum().item())
+            if batch_i % 25 == 0:
+                dt_i = max(1e-9, time.time() - t1)
+                print(
+                    f"[*] eaftreap pass2 batches={batch_i} rows={min(len(rows), start+int(batch_size))}/{len(rows)} "
+                    f"tok/s={total_tokens_pass2/dt_i:.0f}",
+                    flush=True,
+                )
+    finally:
+        current_keep_mask["mask"] = None
+        current_token_weights["weights"] = None
+        for h in hooks:
+            try:
+                h.remove()
+            except Exception:
+                pass
+
+    dt = max(1e-9, time.time() - t1)
+    toks_s = total_tokens_pass2 / dt
+
+    # Move to CPU for serialization.
+    count_cpu = count.detach().to("cpu")
+    gate_sum_cpu = gate_sum.detach().to("cpu")
+    norm_sum_cpu = norm_sum.detach().to("cpu")
+    gate_norm_sum_cpu = gate_norm_sum.detach().to("cpu")
+    gate_norm_sum_weighted_cpu = gate_norm_sum_weighted.detach().to("cpu")
+    pos_count_cpu = pos_count.detach().to("cpu")
+    neg_count_cpu = neg_count.detach().to("cpu")
+    pos_gate_norm_sum_cpu = pos_gate_norm_sum.detach().to("cpu")
+    neg_gate_norm_sum_cpu = neg_gate_norm_sum.detach().to("cpu")
+
+    ranking: list[list[int]] = []
+    for li in range(num_layers):
+        c = count_cpu[li].to(torch.float32).clamp_min(1.0)
+        mean = gate_norm_sum_weighted_cpu[li] / c
+        order = torch.argsort(mean, descending=True).tolist()
+        ranking.append([int(x) for x in order])
+
+    parquet_rows: list[dict[str, Any]] = []
+    for li in range(num_layers):
+        for e in range(num_experts):
+            c = int(count_cpu[li, e].item())
+            gsum = float(gate_sum_cpu[li, e].item())
+            nsum = float(norm_sum_cpu[li, e].item())
+            gnsum = float(gate_norm_sum_cpu[li, e].item())
+            gnsum_w = float(gate_norm_sum_weighted_cpu[li, e].item())
+            pc = int(pos_count_cpu[li, e].item())
+            nc = int(neg_count_cpu[li, e].item())
+            pg = float(pos_gate_norm_sum_cpu[li, e].item())
+            ng = float(neg_gate_norm_sum_cpu[li, e].item())
+            parquet_rows.append(
+                {
+                    "layer": int(li),
+                    "expert": int(e),
+                    "count": int(c),
+                    "gate_sum": float(gsum),
+                    "norm_sum": float(nsum),
+                    "gate_norm_sum": float(gnsum),
+                    "gate_mean": float(gsum / max(1.0, float(c))),
+                    "norm_mean": float(nsum / max(1.0, float(c))),
+                    "saliency_mean": float(gnsum / max(1.0, float(c))),
+                    "eaft_gate_norm_sum": float(gnsum_w),
+                    "eaft_saliency_mean": float(gnsum_w / max(1.0, float(c))),
+                    "pos_count": int(pc),
+                    "neg_count": int(nc),
+                    "pos_gate_norm_sum": float(pg),
+                    "neg_gate_norm_sum": float(ng),
+                }
+            )
+
+    table = pa.Table.from_pylist(parquet_rows)
+    sink = pa.BufferOutputStream()
+    pq.write_table(table, sink, compression="zstd")
+
+    return {
+        "meta": {
+            "model_id": str(model_id),
+            "dataset_id": str(dataset_id),
+            "dataset_split": str(dataset_split),
+            "text_column": str(text_column),
+            "domain": str(domain or ""),
+            "prompt_hash": str(prompt_hash),
+            "num_rows": int(num_rows),
+            "max_seq_length": int(max_seq_length),
+            "batch_size": int(batch_size),
+            "num_layers": int(num_layers),
+            "num_experts": int(num_experts),
+            "top_k": int(top_k),
+            "entropy_topk": int(entropy_topk),
+            "cc_quantile": float(cc_quantile),
+            "uncertain_quantile": float(uncertain_quantile),
+            "p_lo": float(p_lo),
+            "h_lo": float(h_lo),
+            "h_hi": float(h_hi),
+            "w_good": float(w_good),
+            "w_uncertain": float(w_uncertain),
+            "w_conflict": float(w_conflict),
+            "region_counts": dict(region_counts),
+            "samples": {"p": int(len(p_all)), "H": int(len(h_all))},
+            "tokens_per_s_pass2": float(toks_s),
+            "total_tokens_pass2": int(total_tokens_pass2),
+            "total_kept_tokens_pass2": int(total_kept_tokens_pass2),
+        },
+        "ranking_by_layer": ranking,
+        "parquet_bytes": sink.getvalue().to_pybytes(),
+    }
+
+
+@app.function(
     image=image,
     gpu="H100:1",
     timeout=21600,
@@ -2151,16 +2761,24 @@ def main(
     domains_csv: str = "math,science,agentic,general",
     seed: int = 3407,
     max_scan_rows: int = 2_000_000,
+    eaft_cc_quantile: float = 0.15,
+    eaft_uncertain_quantile: float = 0.85,
+    eaft_entropy_topk: int = 20,
+    eaft_w_good: float = 1.0,
+    eaft_w_uncertain: float = 0.25,
+    eaft_w_conflict: float = -2.0,
 ):
     """
     Pruning-track tasks:
     - profile_20b: produce `reports/20b_expert_usage_profile.md` + `data/20b_expert_usage.parquet`
     - reap_saliency_20b: produce `reports/20b_reap_saliency_profile.md` + `data/20b_reap_saliency.parquet`
+    - eaftreap_saliency_20b: produce `reports/20b_eaftreap_saliency_profile.md` + `data/20b_eaftreap_saliency.parquet`
     - reap_saliency_by_domain_20b: produce `artifacts/reap_saliency_by_domain/*.parquet` + `reports/reap_saliency_by_domain.md`
     - soft_prune_20b: produce `reports/20b_soft_prune_eval.md`
     - build_pruned_20b: produce `reports/20b_structural_prune_build.md` (and pruned checkpoints in Modal volume)
     - build_pruned_20b_freq: produce `artifacts/20b_pruned_models_freq/manifest_freq.json` (frequency-based)
     - build_pruned_20b_reap: produce `artifacts/20b_pruned_models_reap/manifest_reap.json` (REAP-ranked)
+    - build_pruned_20b_eaftreap: produce `artifacts/20b_pruned_models_eaftreap/manifest_eaftreap.json` (EAFT-REAP ranked)
     - scan_domain_values_20b: scan `DOMAIN_COLUMN` and report counts (debug data availability)
     """
 
@@ -2174,6 +2792,9 @@ def main(
         out_ranking = Path(f"data/20b_expert_ranking_by_layer{suffix}.json")
         out_parquet.parent.mkdir(parents=True, exist_ok=True)
         out_report.parent.mkdir(parents=True, exist_ok=True)
+
+        # CPU predownload to avoid spending GPU time on HF downloads.
+        _ = predownload_model.remote(str(model_id_20b))
 
         res = profile_20b_expert_usage.remote(
             model_id=model_id_20b,
@@ -2579,6 +3200,9 @@ def main(
         out_parquet.parent.mkdir(parents=True, exist_ok=True)
         out_report.parent.mkdir(parents=True, exist_ok=True)
 
+        # CPU predownload to avoid spending GPU time on HF downloads.
+        _ = predownload_model.remote(str(model_id_20b))
+
         res = profile_20b_reap_saliency.remote(
             model_id=model_id_20b,
             dataset_id=dataset_id,
@@ -2645,6 +3269,91 @@ def main(
             "",
         ]
 
+        out_report.write_text("\n".join(md_lines), encoding="utf-8")
+        out_ranking.write_text(json.dumps(ranking, indent=2), encoding="utf-8")
+        print(f"[+] Wrote {out_parquet}")
+        print(f"[+] Wrote {out_ranking}")
+        print(f"[+] Wrote {out_report}")
+        return
+
+    if task == "eaftreap_saliency_20b":
+        suffix = ""
+        if str(domain or "").strip():
+            safe = "".join(ch if ch.isalnum() or ch in ("-", "_") else "_" for ch in str(domain).strip())
+            suffix = f"_domain_{safe}"
+        out_parquet = Path(f"data/20b_eaftreap_saliency{suffix}.parquet")
+        out_report = Path(f"reports/20b_eaftreap_saliency_profile{suffix}.md")
+        out_ranking = Path(f"data/20b_eaftreap_saliency_ranking_by_layer{suffix}.json")
+        out_parquet.parent.mkdir(parents=True, exist_ok=True)
+        out_report.parent.mkdir(parents=True, exist_ok=True)
+
+        # CPU predownload to avoid spending GPU time on HF downloads.
+        _ = predownload_model.remote(str(model_id_20b))
+
+        res = profile_20b_eaftreap_saliency.remote(
+            model_id=model_id_20b,
+            dataset_id=dataset_id,
+            dataset_split=dataset_split,
+            text_column=text_column,
+            domain=str(domain or ""),
+            num_rows=int(num_rows),
+            max_seq_length=int(max_seq_length),
+            batch_size=int(batch_size),
+            cc_quantile=float(eaft_cc_quantile),
+            uncertain_quantile=float(eaft_uncertain_quantile),
+            entropy_topk=int(eaft_entropy_topk),
+            w_good=float(eaft_w_good),
+            w_uncertain=float(eaft_w_uncertain),
+            w_conflict=float(eaft_w_conflict),
+        )
+        out_parquet.write_bytes(res["parquet_bytes"])
+        meta = res["meta"]
+        ranking = res["ranking_by_layer"]
+
+        rc = meta.get("region_counts") or {}
+        md_lines = [
+            "# 20B EAFT-REAP saliency profile (correctness-aware)",
+            "",
+            f"- Model: `{meta['model_id']}`",
+            f"- Dataset: `{meta['dataset_id']}` split `{meta['dataset_split']}` col `{meta['text_column']}`",
+            f"- Domain filter: `{meta.get('domain','')}` (empty = no filter)",
+            f"- Rows: {meta['num_rows']} | Batch size: {meta['batch_size']}",
+            f"- Max seq length: {meta['max_seq_length']}",
+            f"- Layers: {meta['num_layers']} | Experts: {meta['num_experts']} | Top-k: {meta['top_k']}",
+            f"- EAFT entropy top-k: {meta.get('entropy_topk')}",
+            f"- Thresholds: p_lo={meta.get('p_lo'):.6f} | h_lo={meta.get('h_lo'):.6f} | h_hi={meta.get('h_hi'):.6f}",
+            f"- Weights: good={meta.get('w_good')} uncertain={meta.get('w_uncertain')} conflict={meta.get('w_conflict')}",
+            f"- Region counts: good={rc.get('good', 0)} conflict={rc.get('conflict', 0)} uncertain={rc.get('uncertain', 0)}",
+            f"- Forward throughput (pass2): {meta['tokens_per_s_pass2']:.0f} tokens/s",
+            f"- Prompts hash: `{meta['prompt_hash']}`",
+            "",
+            "## Top experts by layer (top 10, ranked by eaft_saliency_mean)",
+            "",
+        ]
+        for li, experts in enumerate(ranking):
+            md_lines.append(f"- layer_{li}: {experts[:10]}")
+
+        md_lines += [
+            "",
+            "## Artifacts",
+            "",
+            "- `data/20b_eaftreap_saliency.parquet` (per-layer, per-expert count + EAFT-weighted saliency stats)",
+            "- `data/20b_eaftreap_saliency_ranking_by_layer.json` (sorted experts per layer)",
+            "",
+            "## Reproduce",
+            "",
+            "```bash",
+            "modal run modal/gpt_oss_pruning_track.py "
+            "--task eaftreap_saliency_20b "
+            f"--dataset-id {dataset_id} --dataset-split {dataset_split} --text-column {text_column} "
+            f"--domain {str(domain or '')} "
+            f"--num-rows {int(num_rows)} --max-seq-length {int(max_seq_length)} --batch-size {int(batch_size)} "
+            f"--eaft-cc-quantile {float(eaft_cc_quantile)} --eaft-uncertain-quantile {float(eaft_uncertain_quantile)} "
+            f"--eaft-entropy-topk {int(eaft_entropy_topk)} --eaft-w-good {float(eaft_w_good)} "
+            f"--eaft-w-uncertain {float(eaft_w_uncertain)} --eaft-w-conflict {float(eaft_w_conflict)}",
+            "```",
+            "",
+        ]
         out_report.write_text("\n".join(md_lines), encoding="utf-8")
         out_ranking.write_text(json.dumps(ranking, indent=2), encoding="utf-8")
         print(f"[+] Wrote {out_parquet}")
@@ -2816,6 +3525,9 @@ def main(
         # - general: keep 16/32
         # - math: keep 8/32 (uses a math-only dataset by default)
 
+        # CPU predownload to avoid spending GPU time on HF downloads.
+        _ = predownload_model.remote(str(model_id_20b))
+
         # Build general ranking (domain="") and math ranking (from math dataset).
         general_prof = profile_20b_expert_usage.remote(
             model_id=model_id_20b,
@@ -2938,6 +3650,9 @@ def main(
         # We produce 2 pruned variants under `/root/model/artifacts/20b_pruned_models_reap/...`.
         # - general: keep 16/32 (domain="")
         # - math: keep 8/32 (uses a math-only dataset by default)
+
+        # CPU predownload to avoid spending GPU time on HF downloads.
+        _ = predownload_model.remote(str(model_id_20b))
 
         general_prof = profile_20b_reap_saliency.remote(
             model_id=model_id_20b,
@@ -3064,6 +3779,176 @@ def main(
             encoding="utf-8",
         )
         print(f"[+] Wrote {artifacts_dir/'manifest_reap.json'}")
+        print(f"[+] Wrote {out_report}")
+        return
+
+    if task == "build_pruned_20b_eaftreap":
+        # EAFT-REAP ranked structural prunes (correctness-aware).
+        # We produce 2 pruned variants under `/root/model/artifacts/20b_pruned_models_eaftreap/...`.
+        # - general: keep 16/32 (domain="")
+        # - math: keep 8/32 (uses a math-only dataset by default)
+
+        # CPU predownload to avoid spending GPU time on HF downloads.
+        _ = predownload_model.remote(str(model_id_20b))
+
+        general_prof = profile_20b_eaftreap_saliency.remote(
+            model_id=model_id_20b,
+            dataset_id=dataset_id,
+            dataset_split=dataset_split,
+            text_column=text_column,
+            domain="",
+            num_rows=int(num_rows),
+            max_seq_length=int(max_seq_length),
+            batch_size=int(batch_size),
+            cc_quantile=float(eaft_cc_quantile),
+            uncertain_quantile=float(eaft_uncertain_quantile),
+            entropy_topk=int(eaft_entropy_topk),
+            w_good=float(eaft_w_good),
+            w_uncertain=float(eaft_w_uncertain),
+            w_conflict=float(eaft_w_conflict),
+        )
+        math_prof = profile_20b_eaftreap_saliency.remote(
+            model_id=model_id_20b,
+            dataset_id=math_dataset_id,
+            dataset_split=math_dataset_split,
+            text_column=math_text_column,
+            domain="",
+            num_rows=int(num_rows),
+            max_seq_length=int(max_seq_length),
+            batch_size=int(batch_size),
+            cc_quantile=float(eaft_cc_quantile),
+            uncertain_quantile=float(eaft_uncertain_quantile),
+            entropy_topk=int(eaft_entropy_topk),
+            w_good=float(eaft_w_good),
+            w_uncertain=float(eaft_w_uncertain),
+            w_conflict=float(eaft_w_conflict),
+        )
+
+        general_rank = general_prof["ranking_by_layer"]
+        math_rank = math_prof["ranking_by_layer"]
+
+        general_keep = [layer[:16] for layer in general_rank]
+        math_keep = [layer[:8] for layer in math_rank]
+
+        general_dir = structural_prune_20b_build.remote(
+            model_id=model_id_20b,
+            variant_name="general_50pct_experts_eaftreap",
+            keep_experts_by_layer_json=json.dumps(general_keep),
+            out_subdir="20b_pruned_models_eaftreap",
+        )
+        math_dir = structural_prune_20b_build.remote(
+            model_id=model_id_20b,
+            variant_name="math_25pct_experts_eaftreap",
+            keep_experts_by_layer_json=json.dumps(math_keep),
+            out_subdir="20b_pruned_models_eaftreap",
+        )
+
+        general_ok = sanity_infer_model_dir.remote(model_dir=general_dir)
+        math_ok = sanity_infer_model_dir.remote(model_dir=math_dir)
+
+        artifacts_dir = Path("artifacts/20b_pruned_models_eaftreap")
+        artifacts_dir.mkdir(parents=True, exist_ok=True)
+        (artifacts_dir / "manifest_eaftreap.json").write_text(
+            json.dumps(
+                {
+                    "base_model": model_id_20b,
+                    "general_dataset": {
+                        "dataset_id": dataset_id,
+                        "dataset_split": dataset_split,
+                        "text_column": text_column,
+                    },
+                    "math_dataset": {
+                        "dataset_id": math_dataset_id,
+                        "dataset_split": math_dataset_split,
+                        "text_column": math_text_column,
+                    },
+                    "keep_frac_general": 0.50,
+                    "keep_frac_math": 0.25,
+                    "eaftreap": {
+                        "profile_top_k": int(general_prof["meta"]["top_k"]),
+                        "entropy_topk": int(general_prof["meta"].get("entropy_topk") or 0),
+                        "cc_quantile": float(eaft_cc_quantile),
+                        "uncertain_quantile": float(eaft_uncertain_quantile),
+                        "weights": {
+                            "good": float(eaft_w_good),
+                            "uncertain": float(eaft_w_uncertain),
+                            "conflict": float(eaft_w_conflict),
+                        },
+                    },
+                    "general_profile": {
+                        "domain": "",
+                        "prompt_hash": general_prof["meta"]["prompt_hash"],
+                        "p_lo": float(general_prof["meta"]["p_lo"]),
+                        "h_lo": float(general_prof["meta"]["h_lo"]),
+                        "h_hi": float(general_prof["meta"]["h_hi"]),
+                        "region_counts": general_prof["meta"].get("region_counts") or {},
+                    },
+                    "math_profile": {
+                        "domain": "",
+                        "prompt_hash": math_prof["meta"]["prompt_hash"],
+                        "p_lo": float(math_prof["meta"]["p_lo"]),
+                        "h_lo": float(math_prof["meta"]["h_lo"]),
+                        "h_hi": float(math_prof["meta"]["h_hi"]),
+                        "region_counts": math_prof["meta"].get("region_counts") or {},
+                    },
+                    "variants": {
+                        "general_50pct_experts_eaftreap": general_dir,
+                        "math_25pct_experts_eaftreap": math_dir,
+                    },
+                    "sanity": {
+                        "general_ok": bool(general_ok.get("ok")),
+                        "math_ok": bool(math_ok.get("ok")),
+                    },
+                    "keep_experts_by_layer": {
+                        "general": general_keep,
+                        "math": math_keep,
+                    },
+                },
+                indent=2,
+                sort_keys=True,
+            ),
+            encoding="utf-8",
+        )
+        out_report = Path("reports/20b_structural_prune_build_eaftreap.md")
+        out_report.parent.mkdir(parents=True, exist_ok=True)
+        out_report.write_text(
+            "\n".join(
+                [
+                    "# 20B structural prune build (EAFT-REAP ranking)",
+                    "",
+                    f"- Base model: `{model_id_20b}`",
+                    f"- General dataset: `{dataset_id}` split `{dataset_split}` col `{text_column}`",
+                    f"- Math dataset: `{math_dataset_id}` split `{math_dataset_split}` col `{math_text_column}`",
+                    f"- Profile rows: {int(num_rows)} | Max seq length: {int(max_seq_length)} | Batch size: {int(batch_size)}",
+                    f"- EAFT: cc_q={float(eaft_cc_quantile)} uncertain_q={float(eaft_uncertain_quantile)} "
+                    f"entropy_topk={int(eaft_entropy_topk)} weights(good/uncertain/conflict)="
+                    f"{float(eaft_w_good)}/{float(eaft_w_uncertain)}/{float(eaft_w_conflict)}",
+                    "",
+                    "## Variants",
+                    "",
+                    f"- general_50pct_experts_eaftreap: `{general_dir}`",
+                    f"- math_25pct_experts_eaftreap: `{math_dir}`",
+                    "",
+                    "## Sanity inference",
+                    "",
+                    f"- general ok={general_ok.get('ok')}",
+                    f"- math ok={math_ok.get('ok')}",
+                    "",
+                    "## Artifacts",
+                    "",
+                    f"- `{artifacts_dir/'manifest_eaftreap.json'}`",
+                    "",
+                    "## Reproduce",
+                    "",
+                    "```bash",
+                    "modal run modal/gpt_oss_pruning_track.py --task build_pruned_20b_eaftreap",
+                    "```",
+                    "",
+                ]
+            ),
+            encoding="utf-8",
+        )
+        print(f"[+] Wrote {artifacts_dir/'manifest_eaftreap.json'}")
         print(f"[+] Wrote {out_report}")
         return
 
