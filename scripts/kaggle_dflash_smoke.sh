@@ -26,12 +26,32 @@ python -m pip -q install --no-cache-dir -U -t "$PYDEPS" safetensors
 python -m pip -q install --no-cache-dir -U --no-deps -t "$PYDEPS" sglang==0.5.7
 export PYTHONPATH="$PYDEPS:${PYTHONPATH:-}"
 
+# Shadow a potentially ABI-incompatible sklearn build with a pure-python stub.
+mkdir -p "$PYDEPS/sklearn"
+cat >"$PYDEPS/sklearn/__init__.py" <<'PY'
+__all__ = []
+__version__ = "0.0.0-stub"
+PY
+
+mkdir -p "$PYDEPS/sklearn/metrics"
+cat >"$PYDEPS/sklearn/metrics/__init__.py" <<'PY'
+def roc_curve(*args, **kwargs):  # pragma: no cover
+    raise RuntimeError("sklearn is stubbed out on Kaggle for ABI safety; roc_curve unavailable")
+PY
+
+# Shadow TensorFlow to avoid NumPy/protobuf ABI crashes on Kaggle.
+mkdir -p "$PYDEPS/tensorflow"
+cat >"$PYDEPS/tensorflow/__init__.py" <<'PY'
+__all__ = []
+__version__ = "0.0.0-stub"
+PY
+
 python - <<'PY'
 import sglang
 print("sglang", getattr(sglang, "__version__", "unknown"))
 PY
 
-export SGLANG_OVERLAY_SRC=/kaggle/working/cuda-norm-sync/sglang_overlay/sglang
+export SGLANG_OVERLAY_SRC=/kaggle/working/cuda-norm-sync/sglang-flashinfer/python/sglang
 python /kaggle/working/cuda-norm-sync/scripts/sglang_overlay_install.py
 
 # converter unit smoke (CPU-only; validates key rewrite).

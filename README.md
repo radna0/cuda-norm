@@ -123,7 +123,7 @@ GPT-OSS-20B pipeline example (H100):
 export REMOTE_JUPYTER_URL="https://.../proxy"
 export TARGET_MODEL="openai/gpt-oss-20b"
 export DATASET_REPO="radna0/harmony-qwen3-calib-packs-v2-20260113"
-export TRAIN_FILES_CSV="packs/reasoning_style_10k_v2/reasoning_style_10k_v2.parquet,packs/tool_agentic_10k_v6/tool_agentic_10k_v6.parquet,packs/calib_prompt_10000_v2/calib_prompt_10000_v2.parquet"
+export TRAIN_FILES_CSV="packs/reasoning_style_10k_v2/reasoning_style_10k_v2.parquet,tool_agentic_10k_v6.parquet,packs/calib_prompt_10000_v2/calib_prompt_10000_v2.parquet"
 export MAX_STEPS=200
 export SAVE_EVERY=200
 export SEQ_LEN=4096

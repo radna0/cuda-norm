@@ -84,13 +84,18 @@ def _rewrite_dflash_tensor_name_and_value(name: str, tensor):
         second = tensor[half:]
         gate_name = name.replace(".mlp.gate_up.", ".mlp.gate_proj.", 1)
         up_name = name.replace(".mlp.gate_up.", ".mlp.up_proj.", 1)
+        # Keep contiguous layout where possible (torch or numpy).
         try:
-            import numpy as np
-
-            first = np.ascontiguousarray(first)
-            second = np.ascontiguousarray(second)
+            first = first.contiguous()  # type: ignore[attr-defined]
+            second = second.contiguous()  # type: ignore[attr-defined]
         except Exception:
-            pass
+            try:
+                import numpy as np
+
+                first = np.ascontiguousarray(first)
+                second = np.ascontiguousarray(second)
+            except Exception:
+                pass
         return [(gate_name, first), (up_name, second)]
 
     if ".mlp.down." in name:
@@ -102,22 +107,46 @@ def _rewrite_dflash_tensor_name_and_value(name: str, tensor):
     return [(name, tensor)]
 
 
+def _torch_is_available() -> bool:
+    try:
+        import torch  # noqa: F401
+
+        return True
+    except Exception:
+        return False
+
+
 def _rewrite_safetensors_file(src_file: Path, dst_file: Path) -> dict[str, str]:
     """Rewrite a single safetensors file and return output weight_map entries."""
     from safetensors import safe_open
-    from safetensors.numpy import save_file
 
-    out_tensors = {}
     out_weight_map: dict[str, str] = {}
 
+    # Prefer torch tensors when available so BF16 weights can be rewritten on
+    # environments where NumPy lacks a bfloat16 dtype (e.g., Kaggle images).
+    if _torch_is_available():
+        from safetensors.torch import save_file
+
+        out_tensors: dict[str, "torch.Tensor"] = {}
+        with safe_open(str(src_file), framework="pt", device="cpu") as f:
+            for name in f.keys():
+                tensor = f.get_tensor(name)
+                for new_name, new_tensor in _rewrite_dflash_tensor_name_and_value(name, tensor):
+                    out_tensors[new_name] = new_tensor
+                    out_weight_map[new_name] = dst_file.name
+        save_file(out_tensors, str(dst_file), metadata={"converted_from": str(src_file.name)})
+        return out_weight_map
+
+    from safetensors.numpy import save_file
+
+    out_tensors_np = {}
     with safe_open(str(src_file), framework="np", device="cpu") as f:
         for name in f.keys():
             tensor = f.get_tensor(name)
             for new_name, new_tensor in _rewrite_dflash_tensor_name_and_value(name, tensor):
-                out_tensors[new_name] = new_tensor
+                out_tensors_np[new_name] = new_tensor
                 out_weight_map[new_name] = dst_file.name
-
-    save_file(out_tensors, str(dst_file), metadata={"converted_from": str(src_file.name)})
+    save_file(out_tensors_np, str(dst_file), metadata={"converted_from": str(src_file.name)})
     return out_weight_map
 
 
@@ -156,25 +185,42 @@ def _rewrite_single_safetensors_to_shards(
     Returns the path to the written index json.
     """
     from safetensors import safe_open
-    from safetensors.numpy import save_file
 
     groups = _plan_shards_for_single_file(src_file, max_shard_bytes=int(max_shard_bytes))
     n_shards = len(groups)
     weight_map: dict[str, str] = {}
     total_size = 0
 
-    with safe_open(str(src_file), framework="np", device="cpu") as f:
-        for shard_idx, names in enumerate(groups, start=1):
-            shard_name = f"model-{shard_idx:05d}-of-{n_shards:05d}.safetensors"
-            shard_path = dst_dir / shard_name
-            out_tensors = {}
-            for name in names:
-                tensor = f.get_tensor(name)
-                for new_name, new_tensor in _rewrite_dflash_tensor_name_and_value(name, tensor):
-                    out_tensors[new_name] = new_tensor
-                    weight_map[new_name] = shard_name
-            save_file(out_tensors, str(shard_path), metadata={"converted_from": str(src_file.name)})
-            total_size += int(shard_path.stat().st_size)
+    if _torch_is_available():
+        from safetensors.torch import save_file
+
+        with safe_open(str(src_file), framework="pt", device="cpu") as f:
+            for shard_idx, names in enumerate(groups, start=1):
+                shard_name = f"model-{shard_idx:05d}-of-{n_shards:05d}.safetensors"
+                shard_path = dst_dir / shard_name
+                out_tensors: dict[str, "torch.Tensor"] = {}
+                for name in names:
+                    tensor = f.get_tensor(name)
+                    for new_name, new_tensor in _rewrite_dflash_tensor_name_and_value(name, tensor):
+                        out_tensors[new_name] = new_tensor
+                        weight_map[new_name] = shard_name
+                save_file(out_tensors, str(shard_path), metadata={"converted_from": str(src_file.name)})
+                total_size += int(shard_path.stat().st_size)
+    else:
+        from safetensors.numpy import save_file
+
+        with safe_open(str(src_file), framework="np", device="cpu") as f:
+            for shard_idx, names in enumerate(groups, start=1):
+                shard_name = f"model-{shard_idx:05d}-of-{n_shards:05d}.safetensors"
+                shard_path = dst_dir / shard_name
+                out_tensors = {}
+                for name in names:
+                    tensor = f.get_tensor(name)
+                    for new_name, new_tensor in _rewrite_dflash_tensor_name_and_value(name, tensor):
+                        out_tensors[new_name] = new_tensor
+                        weight_map[new_name] = shard_name
+                save_file(out_tensors, str(shard_path), metadata={"converted_from": str(src_file.name)})
+                total_size += int(shard_path.stat().st_size)
 
     index = {
         "metadata": {"total_size": str(total_size)},

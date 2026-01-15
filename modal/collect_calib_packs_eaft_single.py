@@ -35,6 +35,108 @@ import modal
 
 APP_NAME = "collect-calib-packs-eaft-single"
 
+_KAGGLE_WORKDIR = Path("/kaggle/working")
+
+
+def _default_eaft_cache_root() -> Path:
+    override = (os.environ.get("EAFT_CACHE_ROOT") or "").strip()
+    if override:
+        return Path(override)
+    if _KAGGLE_WORKDIR.exists():
+        return _KAGGLE_WORKDIR / "eaft_cache"
+    return Path("/root")
+
+
+_EAFT_CACHE_ROOT = _default_eaft_cache_root()
+_HF_HOME_DIR = Path(os.environ.get("EAFT_HF_HOME", str(_EAFT_CACHE_ROOT / "hf_cache")))
+_MODEL_DIR = Path(os.environ.get("EAFT_MODEL_DIR", str(_EAFT_CACHE_ROOT / "model")))
+_DATA_DIR = Path(os.environ.get("EAFT_DATA_DIR", str(_EAFT_CACHE_ROOT / "data")))
+
+
+def _ensure_transformers_sklearn_stub() -> None:
+    """
+    Kaggle images can ship a broken `scikit-learn` wheel (ABI mismatch vs NumPy),
+    which can crash `import transformers` even though we don't use sklearn.
+
+    Transformers 4.57.x may import `sklearn.metrics.roc_curve` from its
+    generation utilities during lazy-init. If sklearn raises a non-ImportError
+    (e.g. ValueError from a compiled extension), it bubbles up and breaks the
+    run.
+
+    Fix: if sklearn cannot be imported cleanly, register a tiny pure-Python
+    stub so `from sklearn.metrics import roc_curve` succeeds.
+    """
+    try:
+        import sklearn  # noqa: F401
+
+        return
+    except Exception:
+        pass
+
+    # Ensure child processes (e.g. SGLang engine workers) also see the stub by
+    # placing a minimal `sklearn` package on disk and prepending it to
+    # PYTHONPATH. In spawn-based multiprocessing, sys.modules does not carry
+    # over, but PYTHONPATH does.
+    try:
+        override = (os.environ.get("VERSA_SKLEARN_STUB_DIR") or "").strip()
+        if override:
+            stub_root = Path(override)
+        elif Path("/kaggle/working").exists():
+            # Kaggle kernels always include CWD in sys.path, even for spawned
+            # subprocesses. This is the most reliable way to shadow the broken
+            # system sklearn wheel.
+            stub_root = Path("/kaggle/working")
+        else:
+            stub_root = Path("/tmp/versa_sklearn_stub")
+
+        (stub_root / "sklearn" / "metrics").mkdir(parents=True, exist_ok=True)
+        (stub_root / "sklearn" / "__init__.py").write_text(
+            "'''Minimal sklearn stub to avoid ABI crashes (Kaggle).'''\n"
+            "__all__ = ['metrics']\n",
+            encoding="utf-8",
+        )
+        (stub_root / "sklearn" / "metrics" / "__init__.py").write_text(
+            "def roc_curve(*args, **kwargs):\n"
+            "    raise ImportError('sklearn is unavailable (stubbed).')\n",
+            encoding="utf-8",
+        )
+        prev = os.environ.get("PYTHONPATH", "")
+        stub_str = str(stub_root)
+        if prev:
+            if not prev.split(":")[0] == stub_str and stub_str not in prev.split(":"):
+                os.environ["PYTHONPATH"] = stub_str + ":" + prev
+        else:
+            os.environ["PYTHONPATH"] = stub_str
+
+        # Kaggle's preinstalled SGLang env is often injected via PYTHONPATH.
+        # If we created PYTHONPATH ourselves, ensure we don't accidentally drop it.
+        kaggle_sglang = Path("/kaggle/usr/lib/fa3-pip-install-sglang")
+        if kaggle_sglang.exists():
+            parts = [p for p in os.environ.get("PYTHONPATH", "").split(":") if p]
+            if str(kaggle_sglang) not in parts:
+                os.environ["PYTHONPATH"] = os.environ.get("PYTHONPATH", "") + ":" + str(kaggle_sglang)
+    except Exception:
+        pass
+
+    import sys
+    import types
+
+    import importlib.machinery
+
+    sklearn_mod = types.ModuleType("sklearn")
+    sklearn_mod.__path__ = []  # mark as package
+    sklearn_mod.__spec__ = importlib.machinery.ModuleSpec("sklearn", loader=None, is_package=True)
+    metrics_mod = types.ModuleType("sklearn.metrics")
+    metrics_mod.__spec__ = importlib.machinery.ModuleSpec("sklearn.metrics", loader=None, is_package=False)
+
+    def roc_curve(*_args: Any, **_kwargs: Any) -> None:
+        raise ImportError("sklearn is unavailable (stubbed).")
+
+    metrics_mod.roc_curve = roc_curve  # type: ignore[attr-defined]
+    sklearn_mod.metrics = metrics_mod  # type: ignore[attr-defined]
+    sys.modules["sklearn"] = sklearn_mod
+    sys.modules["sklearn.metrics"] = metrics_mod
+
 
 def _maybe_load_repo_dotenv() -> None:
     try:
@@ -62,6 +164,38 @@ def _maybe_load_repo_dotenv() -> None:
 
 
 _maybe_load_repo_dotenv()
+
+# Kaggle: Transformers can accidentally pull in TF/Keras (and their sklearn
+# wrapper), which is frequently broken due to NumPy ABI mismatches. We only need
+# tokenization + logprob scoring, so hard-disable TF/Flax/JAX integrations.
+os.environ.setdefault("TRANSFORMERS_NO_TF", "1")
+os.environ.setdefault("TRANSFORMERS_NO_FLAX", "1")
+os.environ.setdefault("USE_TF", "0")
+os.environ.setdefault("USE_FLAX", "0")
+os.environ.setdefault("USE_JAX", "0")
+
+# Kaggle: Triton sometimes ships non-executable tool stubs inside the bundled
+# wheel; force a working `ptxas` from the CUDA toolkit when available.
+try:
+    if Path("/usr/local/cuda/bin/ptxas").exists():
+        os.environ.setdefault("TRITON_PTXAS_PATH", "/usr/local/cuda/bin/ptxas")
+except Exception:
+    pass
+
+# Kaggle: keep Triton cache writable and stable.
+try:
+    if Path("/kaggle/working").exists():
+        os.environ.setdefault("TRITON_CACHE_DIR", "/kaggle/working/.triton_cache")
+        Path(os.environ["TRITON_CACHE_DIR"]).mkdir(parents=True, exist_ok=True)
+except Exception:
+    pass
+
+# Install the sklearn stub early so any subprocess which imports this module
+# (e.g. SGLang engine workers) won't crash during Transformers lazy imports.
+try:
+    _ensure_transformers_sklearn_stub()
+except Exception:
+    pass
 
 DEFAULT_DATASET_REPO = os.environ.get("CALIB_PACKS_DATASET", "radna0/harmony-qwen3-calib-packs-v2-20260113")
 DEFAULT_PACK_FILES = [
@@ -140,12 +274,12 @@ app = modal.App(APP_NAME)
 
 
 def _ensure_hf_env() -> None:
-    os.environ.setdefault("HF_HOME", "/root/hf_cache")
-    os.environ.setdefault("XDG_CACHE_HOME", "/root/hf_cache/.cache")
+    os.environ.setdefault("HF_HOME", str(_HF_HOME_DIR))
+    os.environ.setdefault("XDG_CACHE_HOME", str(_HF_HOME_DIR / ".cache"))
     os.environ.setdefault("HF_HUB_ENABLE_HF_TRANSFER", "1")
     os.environ.setdefault("HF_HUB_DISABLE_PROGRESS_BARS", "0")
     os.environ.setdefault("TOKENIZERS_PARALLELISM", "false")
-    for p in ("/root/hf_cache", "/root/hf_cache/.cache", "/root/data", "/root/model"):
+    for p in (_HF_HOME_DIR, _HF_HOME_DIR / ".cache", _DATA_DIR, _MODEL_DIR):
         try:
             Path(p).mkdir(parents=True, exist_ok=True)
         except Exception:
@@ -161,12 +295,13 @@ def _snapshot_download_model(model_id: str) -> Path:
     from huggingface_hub import snapshot_download
 
     _ensure_hf_env()
+    _ensure_transformers_sklearn_stub()
     token = _get_hf_token()
-    cache_dir = Path("/root/model/.hf_cache")
+    cache_dir = _MODEL_DIR / ".hf_cache"
     cache_dir.mkdir(parents=True, exist_ok=True)
     # Hard rule: never burn GPU time downloading weights if they were already
     # CPU-predownloaded into the persistent volume.
-    local_dir = Path("/root/model") / str(model_id)
+    local_dir = _MODEL_DIR / str(model_id)
     try:
         if local_dir.exists():
             # `local_dir` is usually a symlink to a HF snapshot folder.
@@ -206,7 +341,7 @@ def _snapshot_download_model(model_id: str) -> Path:
     except Exception:
         pass
     print(f"[+] snapshot_download(model) done: {model_id} -> {snap}", flush=True)
-    local_dir = Path("/root/model") / str(model_id)
+    local_dir = _MODEL_DIR / str(model_id)
     local_dir.parent.mkdir(parents=True, exist_ok=True)
     if local_dir.exists() and local_dir.is_symlink():
         return Path(local_dir.resolve())
@@ -223,6 +358,7 @@ def _download_dataset_file(dataset_repo: str, filename: str) -> Path:
     from huggingface_hub import hf_hub_download
 
     _ensure_hf_env()
+    _ensure_transformers_sklearn_stub()
     token = _get_hf_token()
     print(f"[*] hf_hub_download(dataset) start: {dataset_repo}::{filename}", flush=True)
     return Path(
@@ -241,7 +377,7 @@ def _find_cached_dataset_file(dataset_repo: str, filename: str) -> Path | None:
     # directly instead of calling hf_hub_download (which can still do network
     # metadata checks).
     try:
-        cache_root = Path("/root/hf_cache/hub")
+        cache_root = _HF_HOME_DIR / "hub"
         repo_dir = cache_root / f"datasets--{dataset_repo.replace('/', '--')}" / "snapshots"
         if not repo_dir.exists():
             return None
@@ -895,10 +1031,10 @@ def collect_calib_packs_eaft_single(
     max_cpu_mem_gb: float,
     offload_folder: str,
 ) -> dict[str, Any]:
+    _ensure_hf_env()
+    _ensure_transformers_sklearn_stub()
     import sglang as sgl
     from transformers import AutoTokenizer
-
-    _ensure_hf_env()
     try:
         model_volume.reload()
         hf_cache_volume.reload()
@@ -1139,6 +1275,10 @@ def main(
     seq_lens = [int(s.strip()) for s in str(seq_lens_csv).split(",") if s.strip()]
     if not seq_lens:
         raise SystemExit("Empty --seq-lens-csv")
+
+    # Kaggle/Versa: keep offload paths writable (the default Modal path is /root).
+    if str(offload_folder).rstrip("/") == "/root/model/offload":
+        offload_folder = str(_MODEL_DIR / "offload")
 
     # CPU-first: download weights + packs into Modal volumes before any GPU container starts.
     if not bool(skip_predownload):

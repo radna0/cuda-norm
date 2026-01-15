@@ -52,9 +52,13 @@ def _predownload_model_and_data(*, model_id: str, dataset_repo: str, train_files
     from huggingface_hub import hf_hub_download, snapshot_download
 
     token = os.environ.get("HF_TOKEN") or os.environ.get("HUGGINGFACE_HUB_TOKEN")
+    print("[train] predownload: model snapshot_download start", flush=True)
     snapshot_download(repo_id=str(model_id), repo_type="model", token=token)
+    print("[train] predownload: model snapshot_download done", flush=True)
     for f in train_files:
+        print(f"[train] predownload: dataset hf_hub_download start: {f}", flush=True)
         hf_hub_download(repo_id=str(dataset_repo), repo_type="dataset", filename=str(f), token=token)
+    print("[train] predownload: dataset downloads done", flush=True)
 
 
 def _download_dataset_file(dataset_repo: str, filename: str) -> Path:
@@ -69,6 +73,58 @@ def _download_dataset_file(dataset_repo: str, filename: str) -> Path:
             token=token,
         )
     )
+
+def _download_model_file(model_id: str, filename: str) -> Path:
+    from huggingface_hub import hf_hub_download
+
+    token = os.environ.get("HF_TOKEN") or os.environ.get("HUGGINGFACE_HUB_TOKEN")
+    return Path(
+        hf_hub_download(
+            repo_id=str(model_id),
+            repo_type="model",
+            filename=str(filename),
+            token=token,
+        )
+    )
+
+
+def _load_target_config_json(model_id: str) -> dict:
+    import json
+
+    cfg_path = _download_model_file(model_id, "config.json")
+    cfg = json.loads(cfg_path.read_text(encoding="utf-8"))
+    if not isinstance(cfg, dict):
+        raise ValueError("Invalid target config.json")
+    return cfg
+
+
+class _Tokenizer:
+    def __init__(self, tok_json: Path, *, eos_token: str, pad_token: str) -> None:
+        from tokenizers import Tokenizer
+
+        self._tok = Tokenizer.from_file(str(tok_json))
+        self.eos_token = str(eos_token)
+        self.pad_token = str(pad_token)
+        self.eos_token_id = self._tok.token_to_id(self.eos_token)
+        self.pad_token_id = self._tok.token_to_id(self.pad_token)
+        if self.eos_token_id is None or self.pad_token_id is None:
+            raise ValueError("Failed to resolve eos/pad token ids from tokenizer.json")
+
+    def encode(self, text: str) -> list[int]:
+        return list(self._tok.encode(text).ids)
+
+
+def _load_tokenizer(model_id: str) -> _Tokenizer:
+    import json
+
+    tok_json = _download_model_file(model_id, "tokenizer.json")
+    special_path = _download_model_file(model_id, "special_tokens_map.json")
+    special = json.loads(special_path.read_text(encoding="utf-8"))
+    eos = (special.get("eos_token") or {}).get("content") if isinstance(special.get("eos_token"), dict) else special.get("eos_token")
+    pad = (special.get("pad_token") or {}).get("content") if isinstance(special.get("pad_token"), dict) else special.get("pad_token")
+    eos = eos or "<|eos|>"
+    pad = pad or "<|pad|>"
+    return _Tokenizer(tok_json, eos_token=str(eos), pad_token=str(pad))
 
 
 def _iter_parquet_texts(parquet_path: Path, *, text_column: str = "text") -> Iterable[str]:
@@ -99,12 +155,11 @@ def _union_round_robin(iters: list[Iterable[str]]) -> Iterable[str]:
 @dataclass(frozen=True)
 class TrainBatch:
     context_ids: "torch.LongTensor"
-    block_ids: "torch.LongTensor"
-    noise_block_ids: "torch.LongTensor"
+    target_ids: "torch.LongTensor"
 
 
 def _make_training_stream(
-    tok,
+    tok: _Tokenizer,
     *,
     eos_id: int | None,
     seq_len: int,
@@ -114,10 +169,15 @@ def _make_training_stream(
 ) -> Iterable[TrainBatch]:
     import torch
 
-    need = int(seq_len) + int(block_size)
+    # In SGLang DFLASH, `block_size` counts the anchor token (verified_id) + (block_size-1)
+    # drafted tokens. Training should match that regime:
+    #   - input block token0 = last token of context (verified_id)
+    #   - input block token1..B-1 = mask
+    #   - labels are the *next* (B-1) tokens after the context.
+    need = int(seq_len) + max(1, int(block_size) - 1)
     buf: list[int] = []
     for t in texts:
-        ids = tok(t, add_special_tokens=False).input_ids
+        ids = tok.encode(t)
         if eos_id is not None:
             ids = ids + [int(eos_id)]
         buf.extend(ids)
@@ -125,22 +185,12 @@ def _make_training_stream(
             chunk = buf[:need]
             buf = buf[need:]
             context = torch.tensor(chunk[:seq_len], dtype=torch.long)
-            block = torch.tensor(chunk[seq_len:], dtype=torch.long)
-
-            # Inference-time DFlash regime: token0 is anchor/current token; all future tokens masked.
-            noise = block.clone()
-            noise[1:] = int(mask_token_id)
-
-            yield TrainBatch(context_ids=context, block_ids=block, noise_block_ids=noise)
+            targets = torch.tensor(chunk[seq_len:], dtype=torch.long)
+            yield TrainBatch(context_ids=context, target_ids=targets)
 
 
 def _infer_mask_token_id(tok) -> int:
-    # For GPT-OSS + SGLang we must not resize vocab. Use an existing token id.
-    if getattr(tok, "mask_token_id", None) is not None:
-        return int(tok.mask_token_id)
-    if getattr(tok, "pad_token_id", None) is not None:
-        return int(tok.pad_token_id)
-    raise ValueError("Tokenizer must define pad_token_id or mask_token_id")
+    return int(tok.pad_token_id)
 
 
 def main() -> None:
@@ -170,6 +220,15 @@ def main() -> None:
     if not train_files:
         raise ValueError("No train files provided")
 
+    token_present = bool(os.environ.get("HF_TOKEN") or os.environ.get("HUGGINGFACE_HUB_TOKEN"))
+    print(
+        "[train] start "
+        f"target_model={args.target_model} seq_len={int(args.seq_len)} block_size={int(args.block_size)} "
+        f"hidden_layers={int(args.num_hidden_layers)} max_steps={int(args.max_steps)} "
+        f"teacher_backend={args.teacher_attn_backend} hf_token_present={token_present}",
+        flush=True,
+    )
+
     _predownload_model_and_data(
         model_id=str(args.target_model),
         dataset_repo=str(args.dataset_repo),
@@ -183,23 +242,33 @@ def main() -> None:
 
     import torch
     from torch.nn import functional as F
-    from transformers import AutoConfig, AutoTokenizer
 
-    from dflash_gptoss.modeling_gptoss_dflash import GptOssDFlashDraftModel
     from dflash_gptoss.sglang_inproc_teacher import SGLangInprocTeacher
+    from dflash_gptoss.torch_draft import GptOssDFlashDraftConfig, TorchGptOssDFlashDraftModel
 
-    tok = AutoTokenizer.from_pretrained(str(args.target_model))
-    eos_id = int(tok.eos_token_id) if tok.eos_token_id is not None else None
+    tok = _load_tokenizer(str(args.target_model))
+    eos_id = int(tok.eos_token_id)
     mask_token_id = _infer_mask_token_id(tok)
 
-    cfg = AutoConfig.from_pretrained(str(args.target_model))
-    draft = GptOssDFlashDraftModel.from_target_config(
+    tcfg = _load_target_config_json(str(args.target_model))
+    dcfg = GptOssDFlashDraftConfig(
         target_model_id=str(args.target_model),
-        target_config=cfg,
+        vocab_size=int(tcfg.get("vocab_size", 0)),
+        hidden_size=int(tcfg["hidden_size"]),
+        num_attention_heads=int(tcfg["num_attention_heads"]),
+        num_key_value_heads=int(tcfg.get("num_key_value_heads", tcfg["num_attention_heads"])),
+        head_dim=int(tcfg.get("head_dim", int(tcfg["hidden_size"]) // int(tcfg["num_attention_heads"]))),
+        max_position_embeddings=int(tcfg.get("max_position_embeddings", 0)),
+        rope_theta=float(tcfg.get("rope_theta", 150000.0)),
+        rms_norm_eps=float(tcfg.get("rms_norm_eps", 1e-5)),
+        attention_bias=bool(tcfg.get("attention_bias", True)),
         num_hidden_layers=int(args.num_hidden_layers),
+        num_target_layers=int(tcfg.get("num_hidden_layers", 0)),
         block_size=int(args.block_size),
         mlp_ratio=float(args.mlp_ratio),
-    ).to(device="cuda:0", dtype=torch.bfloat16)
+        hidden_act=str(tcfg.get("hidden_act", "silu")),
+    )
+    draft = TorchGptOssDFlashDraftModel(dcfg).to(device="cuda:0", dtype=torch.bfloat16)
     draft.train()
 
     opt = torch.optim.AdamW(
@@ -257,13 +326,29 @@ def main() -> None:
         batch = next(stream)
         device = torch.device("cuda:0")
         context_ids = batch.context_ids.unsqueeze(0).to(device)
-        block_ids = batch.block_ids.unsqueeze(0).to(device)
-        noise_block_ids = batch.noise_block_ids.unsqueeze(0).to(device)
+        target_ids = batch.target_ids.unsqueeze(0).to(device)
+
+        # DFlash/SGLang regime: token0 is the last verified token in the prefix.
+        # Draft tokens are positions 1..B-1, starting at the *next* token after the prefix.
+        anchor_id = context_ids[:, -1:].contiguous()  # [1, 1]
+        noise_block_ids = torch.empty((1, int(args.block_size)), device=device, dtype=torch.long)
+        noise_block_ids[:, 0:1].copy_(anchor_id)
+        noise_block_ids[:, 1:].fill_(int(mask_token_id))
 
         # Teacher prefill features + embeddings.
         with torch.no_grad():
             t_out = teacher.prefill_hidden_states(context_ids)
             target_hidden = t_out.hidden_states.unsqueeze(0)
+            expected_feat = int(len(draft.target_layer_ids) * int(dcfg.hidden_size))
+            got_feat = int(target_hidden.shape[-1])
+            if got_feat != expected_feat:
+                raise RuntimeError(
+                    "SGLang teacher hidden-state feature dim mismatch for DFlash. "
+                    f"Expected last_dim={expected_feat} (=K*hidden, K={len(draft.target_layer_ids)}, hidden={int(dcfg.hidden_size)}), "
+                    f"but got last_dim={got_feat}. "
+                    "This usually means the SGLang target model is not capturing the requested target-layer features "
+                    "(dflash/eagle hidden capture not enabled, overlay not applied, or layers_to_capture not set)."
+                )
             base_noise_embedding = (
                 teacher.embed_tokens(noise_block_ids)
                 .reshape(1, int(args.block_size), -1)
@@ -275,21 +360,27 @@ def main() -> None:
         mask_embed = draft.mask_embedding.to(base_noise_embedding.dtype).view(1, 1, -1)
         noise_embedding = torch.where(mask, mask_embed, base_noise_embedding)
 
-        pos = torch.arange(int(args.seq_len) + int(args.block_size), device=device).unsqueeze(0)
+        rope_cos, rope_sin = draft.build_rope_for_lengths(
+            ctx_len=int(args.seq_len),
+            block_size=int(args.block_size),
+            head_dim=int(dcfg.head_dim),
+            rope_theta=float(dcfg.rope_theta),
+            device=device,
+            dtype=base_noise_embedding.dtype,
+        )
         draft_out = draft(
-            position_ids=pos,
-            attention_mask=None,
             noise_embedding=noise_embedding,
             target_hidden=target_hidden,
-            use_cache=False,
+            rope_cos=rope_cos,
+            rope_sin=rope_sin,
         )
 
         # Project to vocab using teacher lm_head weights.
-        flat = draft_out[:, 1:, :].reshape(-1, draft_out.size(-1))
+        flat = draft_out[:, 1:, :].reshape(-1, int(draft_out.size(-1)))
         flat_logits = teacher.lm_head_logits(flat)
         logits = flat_logits.view(1, -1, flat_logits.size(-1))
 
-        labels = block_ids[:, 1:]
+        labels = target_ids
         loss = F.cross_entropy(
             logits.float().reshape(-1, logits.size(-1)),
             labels.reshape(-1),
@@ -303,15 +394,44 @@ def main() -> None:
 
         if step % int(args.log_every) == 0 or step == 1:
             dt = max(1e-9, time.time() - t0)
+            # proxy tokens/sec (teacher prefill tokens + draft block tokens)
             tok_s = (step * int(args.seq_len + args.block_size)) / dt
             print(f"[step {step}] loss={loss.item():.4f} tok_s(train_proxy)={tok_s:.1f}", flush=True)
 
         if step % int(args.save_every) == 0 or step == int(args.max_steps):
             ckpt = out_root / f"step_{step:06d}"
             ckpt.mkdir(parents=True, exist_ok=True)
-            # Save draft weights (HF format) and tokenizer snapshot for mask/pad metadata.
-            draft.save_pretrained(str(ckpt), safe_serialization=True)
-            tok.save_pretrained(str(ckpt))
+            # Save in HF-like layout expected by our converter (config.json + model.safetensors + tokenizer files).
+            import json
+            from safetensors.torch import save_file
+
+            cfg_out = {
+                "target_model_id": str(dcfg.target_model_id),
+                "vocab_size": int(dcfg.vocab_size),
+                "hidden_size": int(dcfg.hidden_size),
+                "num_attention_heads": int(dcfg.num_attention_heads),
+                "num_key_value_heads": int(dcfg.num_key_value_heads),
+                "head_dim": int(dcfg.head_dim),
+                "max_position_embeddings": int(dcfg.max_position_embeddings),
+                "rope_theta": float(dcfg.rope_theta),
+                "rope_scaling": None,
+                "rms_norm_eps": float(dcfg.rms_norm_eps),
+                "attention_bias": bool(dcfg.attention_bias),
+                "num_hidden_layers": int(dcfg.num_hidden_layers),
+                "num_target_layers": int(dcfg.num_target_layers),
+                "block_size": int(dcfg.block_size),
+                "mlp_ratio": float(dcfg.mlp_ratio),
+                "hidden_act": str(dcfg.hidden_act),
+            }
+            (ckpt / "config.json").write_text(json.dumps(cfg_out, indent=2), encoding="utf-8")
+
+            state = {k: v.detach().to("cpu") for k, v in draft.state_dict().items()}
+            save_file(state, str(ckpt / "model.safetensors"), metadata={"format": "torch_draft"})
+
+            # Copy tokenizer + special tokens metadata for converter mask-token resolution.
+            shutil_copy = __import__("shutil").copy2
+            shutil_copy(_download_model_file(str(args.target_model), "tokenizer.json"), ckpt / "tokenizer.json")
+            shutil_copy(_download_model_file(str(args.target_model), "special_tokens_map.json"), ckpt / "special_tokens_map.json")
             print(f"[+] saved {ckpt}", flush=True)
 
     teacher.close()
