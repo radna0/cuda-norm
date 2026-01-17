@@ -16,6 +16,19 @@ def main() -> None:
     except Exception as e:  # pragma: no cover
         raise SystemExit(f"SKIP (needs jax+flax): {e}")
 
+    # Make the repo-local EasyDeL importable without pip-install.
+    import sys
+    from pathlib import Path
+
+    repo_root = Path(__file__).resolve().parents[1]
+    sys.path.insert(0, str(repo_root))
+    local_easydel = repo_root / "external" / "EasyDeL"
+    if local_easydel.exists():
+        sys.path.insert(0, str(local_easydel))
+    import os
+
+    os.environ.setdefault("EASYDEL_SKIP_VERSION_CHECK", "1")
+
     from easydel.inference.speculative import (
         DFlashDraftModel,
         DFlashDraftModelConfig,
@@ -48,24 +61,24 @@ def main() -> None:
 
     ctx_len0 = 5
     ctx_hidden0 = jax.random.normal(jax.random.key(0), (1, ctx_len0, cfg.hidden_size), dtype=jnp.bfloat16)
-    cache0 = materialize_draft_ctx_kv(draft=draft, rope=rope, ctx_hidden=ctx_hidden0)
-    assert cache0.ctx_len == ctx_len0
+    cache0 = materialize_draft_ctx_kv(draft=draft, rope=rope, ctx_hidden=ctx_hidden0, max_len=64)
+    assert int(jax.device_get(cache0.ctx_len)) == ctx_len0
     assert len(cache0.k_full) == cfg.num_layers
     assert len(cache0.v_full) == cfg.num_layers
 
-    # Shapes: [B, ctx, H, D]
+    # Shapes: [B, max_len, H, D] with ctx_len tracked separately.
     k0 = cache0.k_full[0]
     v0 = cache0.v_full[0]
-    assert k0.shape[:2] == (1, ctx_len0)
-    assert v0.shape[:2] == (1, ctx_len0)
+    assert k0.shape[:2] == (1, cache0.max_len)
+    assert v0.shape[:2] == (1, cache0.max_len)
     assert k0.shape[2] == cfg.num_attention_heads
     assert k0.shape[3] == cfg.head_dim
 
     ctx_len_add = 3
     ctx_hidden_add = jax.random.normal(jax.random.key(1), (1, ctx_len_add, cfg.hidden_size), dtype=jnp.bfloat16)
     cache1 = append_draft_ctx_kv(draft=draft, rope=rope, cache=cache0, new_ctx_hidden=ctx_hidden_add)
-    assert cache1.ctx_len == ctx_len0 + ctx_len_add
-    assert cache1.k_full[0].shape[1] == cache1.ctx_len
+    assert int(jax.device_get(cache1.ctx_len)) == ctx_len0 + ctx_len_add
+    assert cache1.k_full[0].shape[1] == cache1.max_len
 
     anchor = jax.random.normal(jax.random.key(2), (1, cfg.hidden_size), dtype=jnp.bfloat16)
     out = draft_forward_with_ctx_kv(

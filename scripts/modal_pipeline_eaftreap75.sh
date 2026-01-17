@@ -16,6 +16,7 @@ set -euo pipefail
 # - reports/eaftreap_budgeted_keepfrac75_parity_summary.md
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+cd "${ROOT_DIR}"
 
 BUILD_LOG=""
 POLL_S="120"
@@ -69,9 +70,21 @@ while :; do
 done
 
 MANIFEST="${ROOT_DIR}/artifacts/20b_pruned_models_eaftreap_budgeted/manifest.json"
+ALT_MANIFEST="$(cd "${ROOT_DIR}/../.." && pwd)/artifacts/20b_pruned_models_eaftreap_budgeted/manifest.json"
 if [[ ! -f "${MANIFEST}" ]]; then
-  echo "[err] missing manifest: ${MANIFEST}" >&2
-  exit 3
+  if [[ -f "${ALT_MANIFEST}" ]]; then
+    echo "[!] using manifest from repo root fallback: ${ALT_MANIFEST}"
+    # Normalize artifacts into ${ROOT_DIR}/artifacts so downstream tooling can
+    # find them in the expected location.
+    mkdir -p "${ROOT_DIR}/artifacts/20b_pruned_models_eaftreap_budgeted"
+    cp -f "${ALT_MANIFEST}" "${MANIFEST}"
+    ALT_DIR="$(dirname "${ALT_MANIFEST}")"
+    cp -f "${ALT_DIR}/"*.json "${ROOT_DIR}/artifacts/20b_pruned_models_eaftreap_budgeted/" 2>/dev/null || true
+    echo "[+] copied manifest + jsons into: ${ROOT_DIR}/artifacts/20b_pruned_models_eaftreap_budgeted/"
+  else
+    echo "[err] missing manifest: ${MANIFEST}" >&2
+    exit 3
+  fi
 fi
 
 OUT_DIR="$(python - <<PY
@@ -94,7 +107,7 @@ echo "[*] EAFT base..."
 set -a
 source "${ROOT_DIR}/.env" || true
 set +a
-modal run "${ROOT_DIR}/modal/collect_calib_packs_eaft_single.py" \
+  env GPU_TYPE=B200:1 SGLANG_DISABLE_FLASHINFER_AUTOTUNE=1 modal run "${ROOT_DIR}/modal/collect_calib_packs_eaft_single.py" \
   --model-id openai/gpt-oss-20b \
   --seq-lens-csv "${SEQ_LENS_CSV}" \
   --num-blocks "${NUM_BLOCKS}" --batch-size "${BATCH_SIZE}" \
@@ -103,7 +116,7 @@ modal run "${ROOT_DIR}/modal/collect_calib_packs_eaft_single.py" \
   > "${ROOT_DIR}/unsloth_logs/modal_eaft_single_base20b_${TS}.log" 2>&1
 
 echo "[*] EAFT pruned..."
-modal run "${ROOT_DIR}/modal/collect_calib_packs_eaft_single.py" \
+env GPU_TYPE=B200:1 SGLANG_DISABLE_FLASHINFER_AUTOTUNE=1 modal run "${ROOT_DIR}/modal/collect_calib_packs_eaft_single.py" \
   --model-id eaftreap_budgeted_keepfrac075 \
   --model-path "${OUT_DIR}" \
   --seq-lens-csv "${SEQ_LENS_CSV}" \
@@ -130,4 +143,3 @@ python "${ROOT_DIR}/scripts/summarize_eaft_pair.py" \
   --gates-json "${ROOT_DIR}/pruning/near_lossless_gates.json"
 
 echo "[+] Wrote ${OUT_MD}"
-

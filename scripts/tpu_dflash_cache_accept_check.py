@@ -29,6 +29,30 @@ def _bf16_from_u16(x_u16: np.ndarray):
     return x_u16.view(ml_dtypes.bfloat16)
 
 
+def _resolve_draft_run_dir(draft_run_dir: Path) -> Path:
+    # Accept either:
+    # - a specific checkpoint directory (contains config.json), or
+    # - a checkpoint root directory containing run-*/ subdirectories.
+    if (draft_run_dir / "config.json").is_file():
+        return draft_run_dir
+
+    run_dirs = [p for p in draft_run_dir.glob("run-*") if p.is_dir() and (p / "config.json").is_file()]
+    if not run_dirs:
+        raise FileNotFoundError(
+            f"Could not find config.json in {draft_run_dir} or any run-*/ subdirectory. "
+            "Pass --draft-run-dir pointing at a specific run-### directory."
+        )
+
+    def _run_step(p: Path) -> int:
+        try:
+            return int(p.name.split("-", 1)[1])
+        except Exception:
+            return -1
+
+    run_dirs.sort(key=_run_step, reverse=True)
+    return run_dirs[0]
+
+
 def _lm_head_logits(*, hidden, lm_head):
     import jax
     import jax.numpy as jnp
@@ -51,6 +75,16 @@ def main() -> None:
     ap.add_argument("--teacher-easydel-dir", default="", help="Optional EasyDeL-native teacher dir (faster).")
     ap.add_argument("--draft-run-dir", required=True)
     ap.add_argument("--sample-idx", type=int, default=0)
+    ap.add_argument(
+        "--use-cache-labels-as-draft",
+        action="store_true",
+        help="Debug: set draft_tokens := cache_labels to test label/verify parity without draft inference.",
+    )
+    ap.add_argument(
+        "--use-ctx-kv-forward",
+        action="store_true",
+        help="Use the ctx-KV materialization path (materialize_draft_ctx_kv + draft_forward_with_ctx_kv) instead of draft(...)",
+    )
     ap.add_argument("--max-model-len", type=int, default=4096)
     ap.add_argument("--page-size", type=int, default=32)
     ap.add_argument("--hbm-utilization", type=float, default=0.20)
@@ -76,6 +110,7 @@ def main() -> None:
     from easydel.layers.rotary_embedding import get_rope
     from easydel.inference.speculative import DFlashDraftModelConfig, load_dflash_draft_from_run_dir
     from easydel.inference.speculative.dflash import dflash_accept_len_and_bonus
+    from easydel.inference.speculative.dflash_kv_cache import draft_forward_with_ctx_kv, materialize_draft_ctx_kv
 
     cache_dir = Path(args.cache_dir).resolve()
     meta = json.loads((cache_dir / "meta.json").read_text(encoding="utf-8"))
@@ -135,7 +170,7 @@ def main() -> None:
         )
 
     # Draft cfg must match the run.
-    run_dir = Path(args.draft_run_dir).resolve()
+    run_dir = _resolve_draft_run_dir(Path(args.draft_run_dir).resolve())
     draft_cfg = DFlashDraftModelConfig(**json.loads((run_dir / "config.json").read_text(encoding="utf-8")))
     draft = load_dflash_draft_from_run_dir(run_dir=run_dir, cfg=draft_cfg, mesh=teacher.mesh)
 
@@ -240,13 +275,30 @@ def main() -> None:
     # Pending anchor at position ctx_len.
     seqbuf.num_computed_tokens[0] = int(ctx_len)
 
-    with mesh:
-        ctx_feat_dev = jnp.asarray(ctx_feat, dtype=jnp.bfloat16).reshape((1, int(ctx_len), -1))
-        anchor_emb = teacher.get_embedding()(jnp.asarray([[anchor_id]], dtype=jnp.int32))[:, 0, :]
-        d_hidden = draft(context_features=ctx_feat_dev, anchor_embedding=anchor_emb.astype(jnp.bfloat16), rope=rope)
-        hs_d = d_hidden[:, 1:, :]
-        d_logits = _lm_head_logits(hidden=hs_d.astype(jnp.bfloat16), lm_head=teacher.get_lm_head())
-        draft_tokens = jnp.argmax(d_logits, axis=-1).astype(jnp.int32)[0]  # [B-1]
+    if bool(args.use_cache_labels_as_draft):
+        if int(labels.shape[0]) != int(block_size - 1):
+            raise ValueError(f"cache_labels length mismatch: {labels.shape} vs block_size={int(block_size)}")
+        draft_tokens = labels
+    else:
+        with mesh:
+            ctx_feat_dev = jnp.asarray(ctx_feat, dtype=jnp.bfloat16).reshape((1, int(ctx_len), -1))
+            anchor_emb = teacher.get_embedding()(jnp.asarray([[anchor_id]], dtype=jnp.int32))[:, 0, :]
+            if bool(args.use_ctx_kv_forward):
+                ctx_hidden = draft.project_context_features(ctx_feat_dev)
+                ctx_kv = materialize_draft_ctx_kv(draft=draft, rope=rope, ctx_hidden=ctx_hidden, max_len=int(ctx_len + block_size + 8))
+                d_hidden = draft_forward_with_ctx_kv(
+                    draft=draft,
+                    rope=rope,
+                    cache=ctx_kv,
+                    anchor_embedding=anchor_emb.astype(jnp.bfloat16),
+                    mask_embedding=draft.mask_embedding.value.astype(jnp.bfloat16),
+                    block_size=int(block_size),
+                )
+            else:
+                d_hidden = draft(context_features=ctx_feat_dev, anchor_embedding=anchor_emb.astype(jnp.bfloat16), rope=rope)
+            hs_d = d_hidden[:, 1:, :]
+            d_logits = _lm_head_logits(hidden=hs_d.astype(jnp.bfloat16), lm_head=teacher.get_lm_head())
+            draft_tokens = jnp.argmax(d_logits, axis=-1).astype(jnp.int32)[0]  # [B-1]
 
     cand = np.concatenate([np.asarray([anchor_id], dtype=np.int32), np.asarray(draft_tokens, dtype=np.int32)], axis=0)
     seqbuf.token_ids[0, int(ctx_len) : int(ctx_len) + int(block_size)] = cand

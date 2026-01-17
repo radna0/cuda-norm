@@ -119,6 +119,12 @@ def main() -> None:
         help="Override target layer ids (comma-separated). Default: evenly-spaced from model depth.",
     )
     ap.add_argument("--num-blocks", type=int, default=256)
+    ap.add_argument(
+        "--rollout-steps",
+        type=int,
+        default=1,
+        help="How many consecutive DFlash steps to simulate per base block (produces num_blocks*rollout_steps samples).",
+    )
     ap.add_argument("--batch-size", type=int, default=1, help="Blocks per host loop iteration (1 = simplest/correct).")
     ap.add_argument("--seed", type=int, default=0)
     ap.add_argument(
@@ -273,17 +279,19 @@ def main() -> None:
     k = int(len(target_layer_ids))
 
     n = int(args.num_blocks)
+    rollout_steps = int(max(1, int(args.rollout_steps)))
     # DFlash definition: context excludes the anchor token.
     ctx_len_full = int(args.ctx_len)
     ctx_len = int(max(1, ctx_len_full - 1))
     block_size = int(args.block_size)
 
     # Host arrays (bf16) in /dev/shm.
-    ctx_feats = np.empty((n, ctx_len, k * hidden), dtype=ml_dtypes.bfloat16)
-    anchor_emb = np.empty((n, hidden), dtype=ml_dtypes.bfloat16)
-    target_ids = np.empty((n, block_size - 1), dtype=np.int32)
-    anchor_ids = np.empty((n,), dtype=np.int32)
-    ctx_token_ids = np.empty((n, ctx_len), dtype=np.int32)
+    n_out = int(n * rollout_steps)
+    ctx_feats = np.empty((n_out, ctx_len, k * hidden), dtype=ml_dtypes.bfloat16)
+    anchor_emb = np.empty((n_out, hidden), dtype=ml_dtypes.bfloat16)
+    target_ids = np.empty((n_out, block_size - 1), dtype=np.int32)
+    anchor_ids = np.empty((n_out,), dtype=np.int32)
+    ctx_token_ids = np.empty((n_out, ctx_len), dtype=np.int32)
 
     input_ids = np.asarray(input_ids_np, dtype=np.int32)
 
@@ -347,8 +355,9 @@ def main() -> None:
         verify_target_layer_ids=target_layer_ids,
         verify_add_one_for_pre_layer_capture=True,
     )
+    compile_prefill_bucket = int(max(1, min(ctx_len, int(args.prefill_chunk))))
     executor.compile(
-        num_tokens_paddings=sorted({1, int(max(1, min(ctx_len, int(args.prefill_chunk))))}),
+        num_tokens_paddings=sorted({1, int(block_size), int(compile_prefill_bucket)}),
         num_reqs_max_model_len=1,
         max_pages_per_req=int(metadata.max_num_pages_per_req),
         max_num_reqs=1,
@@ -375,41 +384,37 @@ def main() -> None:
             executor.kv_pages = jax.tree_util.tree_map(_zero, executor.kv_pages)
             executor.kv_pages = jax.block_until_ready(executor.kv_pages)
 
+    if rollout_steps > 1 and int(args.batch_size) != 1:
+        raise ValueError("--batch-size must be 1 when --rollout-steps > 1 (simplify correctness-first rollout).")
+
+    prefill_chunk = int(max(1, int(args.prefill_chunk)))
+
     t0 = time.time()
-    for start in range(0, n, int(args.batch_size)):
-        end = min(n, start + int(args.batch_size))
-        for i in range(start, end):
-            # Split: context tokens (exclude anchor), anchor id, targets.
-            # Note: total_len includes ctx_len_full (= ctx_len + 1 anchor) + (block_size-1) targets.
-            ctx_ids = input_ids[i, :ctx_len].astype(np.int32)  # [ctx_len]
-            anchor_id = int(input_ids[i, ctx_len])
-            # IMPORTANT: train the draft to match the *target model's greedy*
-            # verification tokens, not raw dataset continuation tokens. DFlash
-            # acceptance compares draft tokens against target argmax under the
-            # verify forward path; using dataset tokens can yield near-zero
-            # accept rates even if the draft "looks good" in CE loss.
+    out_pos = 0
+    for i in range(int(n)):
+        # Initial state (from packed dataset tokens).
+        ctx_ids = input_ids[i, :ctx_len].astype(np.int32)  # [ctx_len]
+        anchor_id = int(input_ids[i, ctx_len])
+
+        for step_idx in range(int(rollout_steps)):
+            # Generate one training sample for this (ctx_ids, anchor_id) state.
             tgt = np.empty((int(block_size - 1),), dtype=np.int32)
 
             _reset_kv_pages()
 
-            # Build a "prompt" = context tokens + anchor token; we prefill only the context part.
             prompt_len = int(ctx_len + 1)
             seqbuf.token_ids[0, :prompt_len] = np.concatenate([ctx_ids, np.asarray([anchor_id], dtype=np.int32)], axis=0)
             seqbuf.num_tokens[0] = int(prompt_len)
             seqbuf.num_tokens_no_spec[0] = int(prompt_len)
             seqbuf.num_computed_tokens[0] = 0
-            # Greedy.
             seqbuf.temperature[0] = 0.0
             seqbuf.top_k[0] = 1
             seqbuf.top_p[0] = 1.0
             seqbuf.min_p[0] = 0.0
 
-            # Prefill ctx tokens (exclude anchor) in verify-mode chunks so the context features
-            # exactly match the inference-time DFlash verify path (eSurge).
             total = int(prompt_len - 1)
             done = 0
             parts = []
-            prefill_chunk = int(max(1, int(args.prefill_chunk)))
             prefill_bucket = int(min(prefill_chunk, total))
             while done < total:
                 step = int(min(prefill_chunk, total - done))
@@ -438,14 +443,10 @@ def main() -> None:
             if int(ctx_full.shape[0]) != int(ctx_len):
                 raise RuntimeError(f"ctx_full length mismatch: got {int(ctx_full.shape[0])}, expected {int(ctx_len)}")
 
-            # Set state for greedy continuation generation:
-            # - computed ctx tokens
-            # - pending current token = anchor
+            # Greedy decode candidates (block_size-1) using 1-token verify steps.
             seqbuf.num_computed_tokens[0] = int(ctx_len)
             seqbuf.num_tokens[0] = int(prompt_len)
             seqbuf.num_tokens_no_spec[0] = int(prompt_len)
-
-            # Generate (block_size-1) greedy labels under the same verify path.
             for j in range(int(block_size - 1)):
                 base_len = int(seqbuf.num_computed_tokens[0])
                 scheduled_full_cpu[0] = 1
@@ -467,22 +468,101 @@ def main() -> None:
                 )
                 next_id = int(np.asarray(greedy_ids)[0])
                 tgt[j] = np.int32(next_id)
-                # Commit current token, set next pending token.
                 seqbuf.token_ids[0, base_len + 1] = np.int32(next_id)
                 seqbuf.num_computed_tokens[0] = int(base_len + 1)
                 seqbuf.num_tokens[0] = int(base_len + 2)
                 seqbuf.num_tokens_no_spec[0] = int(base_len + 2)
+
+            # Compute block-verify predictions (targets) on [anchor + greedy tokens].
+            cand = np.empty((int(block_size),), dtype=np.int32)
+            cand[0] = np.int32(anchor_id)
+            cand[1:] = tgt
+
+            _reset_kv_pages()
+            seqbuf.token_ids[0, :prompt_len] = np.concatenate([ctx_ids, np.asarray([anchor_id], dtype=np.int32)], axis=0)
+            seqbuf.num_tokens[0] = int(prompt_len)
+            seqbuf.num_tokens_no_spec[0] = int(prompt_len)
+            seqbuf.num_computed_tokens[0] = 0
+            seqbuf.temperature[0] = 0.0
+            seqbuf.top_k[0] = 1
+            seqbuf.top_p[0] = 1.0
+            seqbuf.min_p[0] = 0.0
+
+            done = 0
+            while done < total:
+                step = int(min(prefill_chunk, total - done))
+                seqbuf.num_computed_tokens[0] = int(done)
+                scheduled_full_cpu[0] = int(step)
+                _ctx_unused, _greedy_unused, input_ids_buf, position_ids_buf, _m = executor.execute_verify(
+                    num_tokens=int(prefill_bucket),
+                    scheduled_full_cpu=scheduled_full_cpu,
+                    active_mask_full_cpu=active_mask_full_cpu,
+                    input_ids_buf=input_ids_buf,
+                    position_ids_buf=position_ids_buf,
+                    padded_num_reqs=1,
+                    token_ids_cpu=seqbuf.token_ids,
+                    num_computed_tokens_cpu=seqbuf.num_computed_tokens,
+                    temperature_cpu=seqbuf.temperature,
+                    top_p_cpu=seqbuf.top_p,
+                    top_k_cpu=seqbuf.top_k,
+                    min_p_cpu=seqbuf.min_p,
+                    page_table_cpu=page_table_cpu,
+                    page_table_version=page_table_version,
+                )
+                done += step
+
+            seqbuf.num_computed_tokens[0] = int(ctx_len)
+            seqbuf.token_ids[0, int(ctx_len) : int(ctx_len + int(block_size))] = cand
+            seqbuf.num_tokens[0] = int(ctx_len + int(block_size))
+            seqbuf.num_tokens_no_spec[0] = int(ctx_len + int(block_size))
+
+            scheduled_full_cpu[0] = int(block_size)
+            _ctx_v, greedy_block, input_ids_buf, position_ids_buf, _m = executor.execute_verify(
+                num_tokens=int(block_size),
+                scheduled_full_cpu=scheduled_full_cpu,
+                active_mask_full_cpu=active_mask_full_cpu,
+                input_ids_buf=input_ids_buf,
+                position_ids_buf=position_ids_buf,
+                padded_num_reqs=1,
+                token_ids_cpu=seqbuf.token_ids,
+                num_computed_tokens_cpu=seqbuf.num_computed_tokens,
+                temperature_cpu=seqbuf.temperature,
+                top_p_cpu=seqbuf.top_p,
+                top_k_cpu=seqbuf.top_k,
+                min_p_cpu=seqbuf.min_p,
+                page_table_cpu=page_table_cpu,
+                page_table_version=page_table_version,
+            )
+            greedy_block = np.asarray(greedy_block, dtype=np.int32)
+            if greedy_block.shape[0] < int(block_size):
+                raise RuntimeError(
+                    f"verify greedy_block length mismatch: got {greedy_block.shape}, expected >=({int(block_size)},)"
+                )
+            tgt_verify = greedy_block[: int(block_size) - 1].astype(np.int32)
+            bonus_next = int(greedy_block[int(block_size) - 1])
+
             with mesh:
                 ctx_full = jax.block_until_ready(ctx_full)
                 emb = model.get_embedding()(jnp.asarray([[anchor_id]], dtype=jnp.int32))[:, 0, :]
                 emb = jax.block_until_ready(emb)
 
-            ctx_feats[i] = np.asarray(jax.device_get(ctx_full.reshape((int(ctx_len), int(k * hidden)))), dtype=ml_dtypes.bfloat16)
-            anchor_emb[i] = np.asarray(jax.device_get(emb[0]), dtype=ml_dtypes.bfloat16)
-            target_ids[i] = tgt
-            anchor_ids[i] = np.int32(anchor_id)
-            ctx_token_ids[i] = ctx_ids
-        print(f"[cache] {end}/{n}", flush=True)
+            ctx_feats[out_pos] = np.asarray(
+                jax.device_get(ctx_full.reshape((int(ctx_len), int(k * hidden)))), dtype=ml_dtypes.bfloat16
+            )
+            anchor_emb[out_pos] = np.asarray(jax.device_get(emb[0]), dtype=ml_dtypes.bfloat16)
+            target_ids[out_pos] = tgt_verify
+            anchor_ids[out_pos] = np.int32(anchor_id)
+            ctx_token_ids[out_pos] = ctx_ids
+            out_pos += 1
+
+            # Roll forward in a "perfect acceptance" world:
+            # committed tokens become part of context; next current token is bonus_next.
+            hist = np.concatenate([ctx_ids, np.asarray([anchor_id], dtype=np.int32), tgt_verify], axis=0)
+            ctx_ids = hist[-int(ctx_len) :].astype(np.int32)
+            anchor_id = int(bonus_next)
+
+        if (i + 1) % 1 == 0:
+            print(f"[cache] {i + 1}/{n} (out={out_pos}/{n_out})", flush=True)
 
     out_path = Path(args.out)
     out_path.parent.mkdir(parents=True, exist_ok=True)
@@ -493,10 +573,12 @@ def main() -> None:
         "ctx_len_full": int(ctx_len_full),
         "block_size": int(block_size),
         "num_blocks": int(n),
+        "rollout_steps": int(rollout_steps),
+        "num_samples": int(n_out),
         "batch_size": int(args.batch_size),
         "target_layer_ids": target_layer_ids,
         "add_one_for_pre_layer_capture": True,
-        "target_ids_mode": "teacher_greedy_verify",
+        "target_ids_mode": "block_verify_target_predict_shifted",
         "hidden_size": int(hidden),
         "num_context_features": int(k),
         "dtype": "bf16_u16",

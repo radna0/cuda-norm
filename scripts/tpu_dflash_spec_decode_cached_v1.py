@@ -207,7 +207,12 @@ def main() -> None:
     except Exception as e:
         raise RuntimeError("Failed to build RoPE for draft.") from e
 
-    ctx_kv = materialize_draft_ctx_kv(draft=draft, rope=rope, ctx_hidden=ctx_hidden)
+    ctx_kv = materialize_draft_ctx_kv(
+        draft=draft,
+        rope=rope,
+        ctx_hidden=ctx_hidden,
+        max_len=int(max_model_len + int(args.block_size)),
+    )
 
     # Teacher embedding + lm_head for draft tokenization.
     lm_head = teacher.get_lm_head()

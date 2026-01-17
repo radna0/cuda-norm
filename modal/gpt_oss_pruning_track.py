@@ -1100,7 +1100,7 @@ class ProfileArgs:
 
 @app.function(
     image=image_no_kernels,
-    gpu="H100:1",
+    gpu="B200:1",
     timeout=21600,
     cpu=16.0,
     memory=262144,
@@ -1607,7 +1607,7 @@ def scan_domain_counts_cpu(
 
 @app.function(
     image=image_no_kernels,
-    gpu="H100:1",
+    gpu="B200:1",
     timeout=21600,
     cpu=16.0,
     memory=262144,
@@ -2007,7 +2007,7 @@ def profile_20b_reap_saliency(
 
 @app.function(
     image=image_no_kernels,
-    gpu="H100:1",
+    gpu="B200:1",
     timeout=21600,
     cpu=16.0,
     memory=262144,
@@ -2502,9 +2502,11 @@ def profile_20b_eaftreap_saliency(
 
     ranking: list[list[int]] = []
     for li in range(num_layers):
-        c = count_cpu[li].to(torch.float32).clamp_min(1.0)
-        mean = gate_norm_sum_weighted_cpu[li] / c
-        order = torch.argsort(mean, descending=True).tolist()
+        # Rank by *total* EAFT-weighted saliency mass (not mean-per-hit).
+        # For pruning, frequency matters: we prefer to keep experts that
+        # contribute across many tokens rather than rare high-norm spikes.
+        score = gate_norm_sum_weighted_cpu[li].to(torch.float32)
+        order = torch.argsort(score, descending=True).tolist()
         ranking.append([int(x) for x in order])
 
     parquet_rows: list[dict[str, Any]] = []
@@ -2579,7 +2581,7 @@ def profile_20b_eaftreap_saliency(
 
 @app.function(
     image=image,
-    gpu="H100:1",
+    gpu="B200:1",
     timeout=21600,
     cpu=16.0,
     memory=262144,
@@ -2816,6 +2818,7 @@ def structural_prune_20b_build(
     variant_name: str,
     keep_experts_by_layer_json: str,
     out_subdir: str = "20b_pruned_models",
+    max_shard_size_gb: float = 5.0,
 ):
     from safetensors.torch import safe_open
     from safetensors.torch import save_file
@@ -2891,7 +2894,7 @@ def structural_prune_20b_build(
 
     # Remove previously-generated shards if re-running in the same volume path.
     for p in out_dir.glob("*.safetensors"):
-        if p.name.startswith(("base_", "pruned_layer_", "model-")):
+        if p.name.startswith(("base_", "base_shard_", "pruned_layer_", "pruned_shard_", "model-")):
             try:
                 p.unlink()
             except Exception:
@@ -2959,8 +2962,29 @@ def structural_prune_20b_build(
         flush=True,
     )
 
-    # Build base shards (one per original shard file) containing only the
-    # remaining (non-pruned) keys.
+    # Interpret "GB" as decimal (1e9 bytes) so a default of 5.0 produces shards
+    # that are <= ~5GB, matching downstream filesystem constraints better than
+    # GiB sizing.
+    max_bytes = int(float(max_shard_size_gb) * 1_000_000_000.0)
+    if max_bytes <= 0:
+        raise ValueError("max_shard_size_gb must be > 0")
+
+    def _tensor_nbytes(t) -> int:
+        try:
+            return int(t.numel()) * int(t.element_size())
+        except Exception:
+            return 0
+
+    def _flush_shard(*, name: str, tensors: dict[str, Any], keys: list[str], meta_tag: str) -> None:
+        if not tensors:
+            return
+        save_file(tensors, str(out_dir / name), metadata={"format": "pt", "harmony": meta_tag})
+        for k in keys:
+            new_weight_map[k] = name
+        print(f"[*] wrote {name} keys={len(keys)}", flush=True)
+
+    # Build base shards (packed up to ~max_shard_size_gb) containing only the
+    # remaining (non-pruned) keys. This reduces shard count for faster IO.
     remaining_by_file: dict[str, list[str]] = {}
     for k, src_file in weight_map.items():
         if k in pruned_keys:
@@ -2973,30 +2997,46 @@ def structural_prune_20b_build(
         flush=True,
     )
 
-    for src_file, keys in remaining_by_file.items():
+    base_shard_i = 0
+    base_tensors: dict[str, Any] = {}
+    base_keys: list[str] = []
+    base_bytes = 0
+
+    # Deterministic order: by source shard filename then key.
+    for src_file in sorted(remaining_by_file.keys()):
+        keys = sorted(remaining_by_file[src_file])
         src_path = snapshot_dir / src_file
         if not src_path.exists():
             raise RuntimeError(f"Missing shard file {src_path}")
-        dst_name = f"base_{src_file}"
-        dst_path = out_dir / dst_name
-
-        tensors: dict[str, Any] = {}
         with safe_open(str(src_path), framework="pt", device="cpu") as f:
             for key in keys:
-                tensors[key] = f.get_tensor(key)
-        save_file(tensors, str(dst_path), metadata={"format": "pt", "harmony": "base"})
-        for key in keys:
-            new_weight_map[key] = dst_name
-        print(f"[*] wrote {dst_name} keys={len(keys)}", flush=True)
+                t = f.get_tensor(key)
+                nb = _tensor_nbytes(t)
+                if base_tensors and (base_bytes + nb) > max_bytes:
+                    shard_name = f"base_shard_{base_shard_i:05d}.safetensors"
+                    _flush_shard(name=shard_name, tensors=base_tensors, keys=base_keys, meta_tag="base")
+                    base_shard_i += 1
+                    base_tensors = {}
+                    base_keys = []
+                    base_bytes = 0
+                base_tensors[key] = t
+                base_keys.append(key)
+                base_bytes += nb
+
+    if base_tensors:
+        shard_name = f"base_shard_{base_shard_i:05d}.safetensors"
+        _flush_shard(name=shard_name, tensors=base_tensors, keys=base_keys, meta_tag="base")
+
+    # Pack pruned expert/router keys into shards up to ~max_shard_size_gb.
+    pruned_shard_i = 0
+    pruned_tensors: dict[str, Any] = {}
+    pruned_keys_accum: list[str] = []
+    pruned_bytes = 0
 
     for li in range(num_layers):
         keep = [int(x) for x in keep_experts_by_layer[li]]
         mapping_json[str(li)] = {str(old): int(new) for new, old in enumerate(keep)}
 
-        shard_name = f"pruned_layer_{li}.safetensors"
-        shard_path = out_dir / shard_name
-
-        tensors: dict[str, Any] = {}
         for key in pruned_keys_by_layer[li]:
             src_file = weight_map.get(key)
             if not src_file:
@@ -3012,11 +3052,22 @@ def structural_prune_20b_build(
                 raise RuntimeError(
                     f"Unexpected leading dim for {key}: shape={tuple(t.shape)} expected dim0={num_experts}"
                 )
-            tensors[key] = t[keep].contiguous()
-            new_weight_map[key] = shard_name
+            t2 = t[keep].contiguous()
+            nb = _tensor_nbytes(t2)
+            if pruned_tensors and (pruned_bytes + nb) > max_bytes:
+                shard_name = f"pruned_shard_{pruned_shard_i:05d}.safetensors"
+                _flush_shard(name=shard_name, tensors=pruned_tensors, keys=pruned_keys_accum, meta_tag="pruned")
+                pruned_shard_i += 1
+                pruned_tensors = {}
+                pruned_keys_accum = []
+                pruned_bytes = 0
+            pruned_tensors[key] = t2
+            pruned_keys_accum.append(key)
+            pruned_bytes += nb
 
-        save_file(tensors, str(shard_path), metadata={"format": "pt", "harmony": "pruned"})
-        print(f"[*] wrote {shard_name} keys={len(tensors)}", flush=True)
+    if pruned_tensors:
+        shard_name = f"pruned_shard_{pruned_shard_i:05d}.safetensors"
+        _flush_shard(name=shard_name, tensors=pruned_tensors, keys=pruned_keys_accum, meta_tag="pruned")
 
     idx["weight_map"] = new_weight_map
     idx_out = out_dir / "model.safetensors.index.json"
@@ -3037,7 +3088,7 @@ def structural_prune_20b_build(
 
 @app.function(
     image=image,
-    gpu="H100:1",
+    gpu="B200:1",
     timeout=21600,
     cpu=16.0,
     memory=262144,
@@ -3213,18 +3264,30 @@ def validate_pruned_expert_shards(model_dir: str):
 
     num_layers = int(cfg.get("num_hidden_layers") or 0)
     mismatches = []
+    ok = 0
+    checked = 0
     for li in range(num_layers):
-        expected = f"pruned_layer_{li}.safetensors"
         prefix = f"model.layers.{li}.mlp."
         for k, v in wm.items():
             if not k.startswith(prefix):
                 continue
             if ".router." not in k and ".experts." not in k:
                 continue
-            if v != expected:
-                mismatches.append({"layer": li, "key": k, "file": v, "expected": expected})
-                if len(mismatches) >= 50:
-                    break
+            checked += 1
+            # New packed format: pruned keys live in pruned_shard_*.safetensors.
+            # Legacy format: pruned keys lived in pruned_layer_{li}.safetensors.
+            is_ok = False
+            if isinstance(v, str):
+                if v.startswith("pruned_shard_") and v.endswith(".safetensors"):
+                    is_ok = True
+                if v == f"pruned_layer_{li}.safetensors":
+                    is_ok = True
+            if is_ok:
+                ok += 1
+                continue
+            mismatches.append({"layer": li, "key": k, "file": v})
+            if len(mismatches) >= 50:
+                break
         if len(mismatches) >= 50:
             break
 
@@ -3232,9 +3295,45 @@ def validate_pruned_expert_shards(model_dir: str):
         "model_dir": str(model_path),
         "config_num_local_experts": int(cfg.get("num_local_experts") or 0),
         "config_num_layers": int(num_layers),
+        "checked": int(checked),
+        "ok": int(ok),
         "mismatch_count_capped": len(mismatches),
         "mismatches_sample": mismatches,
     }
+
+
+@app.function(
+    image=image,
+    timeout=21600,
+    cpu=8.0,
+    memory=65536,
+    volumes={
+        "/root/model": model_volume,
+        "/root/hf_cache": hf_cache_volume,
+    },
+    secrets=_secrets,
+)
+def list_artifact_files(model_dir: str, max_files: int = 200):
+    try:
+        model_volume.reload()
+        hf_cache_volume.reload()
+    except Exception:
+        pass
+    model_path = Path(model_dir)
+    if not model_path.exists():
+        raise RuntimeError(f"model_dir not found: {model_dir}")
+    rows = []
+    for p in sorted(model_path.iterdir(), key=lambda x: x.name):
+        if not p.is_file():
+            continue
+        try:
+            size = int(p.stat().st_size)
+        except Exception:
+            size = -1
+        rows.append({"name": p.name, "bytes": size})
+        if len(rows) >= int(max_files):
+            break
+    return {"model_dir": str(model_path), "files": rows, "capped": len(rows) >= int(max_files)}
 
 
 def _manual_gpt_oss_experts_forward(
@@ -3419,7 +3518,16 @@ def main(
     - predownload_20b: CPU-only download base 20B model into volumes (new Modal profile safe)
     - predownload_calib_packs: CPU-only download calib pack parquet files into HF cache volume
     - sample_calib_packs: CPU-only deterministic JSONL sample from calib packs into data volume
+    - inspect_eaftreap_budgeted: validate + list files for latest budgeted prune (debug artifacts/shards)
     """
+
+    # Ensure local outputs (reports/, artifacts/, data/) land under the project
+    # root (harmony/cuda-norm) instead of the caller's CWD.
+    try:
+        if not _KAGGLE_WORKDIR.exists():
+            os.chdir(Path(__file__).resolve().parents[1])
+    except Exception:
+        pass
 
     if task == "predownload_20b":
         out_report = Path("reports/predownload_20b.md")
@@ -3507,6 +3615,42 @@ def main(
             encoding="utf-8",
         )
         print(f"[+] Wrote {out_report}")
+        return
+
+    if task == "inspect_eaftreap_budgeted":
+        manifest_path = Path("artifacts/20b_pruned_models_eaftreap_budgeted/manifest.json")
+        if not manifest_path.exists():
+            raise SystemExit(f"Missing manifest: {manifest_path}")
+        manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+        out_dir = str(manifest.get("out_dir") or "")
+        if not out_dir:
+            raise SystemExit(f"out_dir missing in manifest: {manifest_path}")
+        files = _invoke(list_artifact_files, out_dir, max_files=500)
+        shard_check = _invoke(validate_pruned_expert_shards, out_dir)
+        rep = Path("reports/inspect_eaftreap_budgeted.md")
+        rep.parent.mkdir(parents=True, exist_ok=True)
+        rep.write_text(
+            "\n".join(
+                [
+                    "# Inspect EAFT-REAP budgeted prune artifacts",
+                    "",
+                    f"- manifest: `{manifest_path}`",
+                    f"- out_dir: `{out_dir}`",
+                    "",
+                    "## Shard mapping sanity",
+                    "",
+                    f"- checked: {shard_check.get('checked')}",
+                    f"- ok: {shard_check.get('ok')}",
+                    f"- mismatches_capped: {shard_check.get('mismatch_count_capped')}",
+                    "",
+                    "## Files (name, bytes)",
+                    "",
+                ]
+                + [f"- `{r['name']}`: {r['bytes']}" for r in (files.get("files") or [])]
+            ),
+            encoding="utf-8",
+        )
+        print(f"[+] Wrote {rep}")
         return
 
     if task == "validate_expert_math_toy":
@@ -4969,8 +5113,11 @@ def main(
         return
 
     if task == "build_pruned_20b_eaftreap_budgeted":
-        # Build a single keep_frac prune using per-layer budgeting derived from
-        # EAFT-weighted saliency mass (no finetune).
+        # Build a single keep_frac prune (one-shot, no finetune).
+        #
+        # IMPORTANT: GPT-OSS requires a single `num_local_experts` across all layers.
+        # So even if we compute per-layer sensitivity metrics, the pruned model must
+        # keep the SAME number of experts in every layer.
         pack_files = _parse_csv(str(calib_pack_files_csv or "")) or list(DEFAULT_CALIB_PACK_FILES)
         if not pack_files:
             raise SystemExit("No calib pack files specified.")
@@ -5012,6 +5159,30 @@ def main(
         if num_experts <= 0 or num_layers <= 0:
             raise SystemExit(f"Invalid EAFT-REAP meta: num_layers={num_layers} num_experts={num_experts}")
 
+        import math as _math
+
+        keep_n = int(_math.ceil(float(keep_frac) * float(num_experts)))
+        keep_n = max(1, min(int(keep_n), int(num_experts)))
+
+        # Checkpoint profiling outputs early so a long run is not "lost" if the
+        # structural rewrite step fails later.
+        artifacts_dir = Path("artifacts/20b_pruned_models_eaftreap_budgeted")
+        artifacts_dir.mkdir(parents=True, exist_ok=True)
+        (artifacts_dir / "eaftreap_saliency.parquet").write_bytes(prof["parquet_bytes"])
+        (artifacts_dir / "eaftreap_ranking_by_layer.json").write_text(
+            json.dumps(ranking, indent=2), encoding="utf-8"
+        )
+        (artifacts_dir / "profile_meta.json").write_text(
+            json.dumps(meta, indent=2, sort_keys=True), encoding="utf-8"
+        )
+        (artifacts_dir / "sample.json").write_text(
+            json.dumps(sample, indent=2, sort_keys=True), encoding="utf-8"
+        )
+        (artifacts_dir / "keep_n.json").write_text(
+            json.dumps({"keep_n": keep_n, "num_experts": num_experts}, indent=2),
+            encoding="utf-8",
+        )
+
         # Read per-layer mass from parquet we just produced.
         parquet_path = Path("/tmp") / f"eaftreap_saliency_{int(time.time())}.parquet"
         parquet_path.write_bytes(prof["parquet_bytes"])
@@ -5028,28 +5199,35 @@ def main(
             count_top_m=int(core_count_top_m),
         )
         neff_by_layer = [float(_compute_layer_neff(m)) for m in mass_by_layer]
-        keep_counts = _budgeted_keep_counts(
-            mass_by_layer=mass_by_layer,
-            num_experts=num_experts,
-            keep_frac=float(keep_frac),
-            min_keep=int(min_keep_per_layer),
-            max_keep=int(max_keep_per_layer),
-        )
         keep_by_layer = []
         for li in range(num_layers):
-            keep_n = int(keep_counts[li])
             core = [int(x) for x in (core_by_layer[li] if li < len(core_by_layer) else [])]
-            if len(core) > keep_n:
-                core = core[:keep_n]
-            core_set = set(core)
-            keep_set = set(int(x) for x in ranking[li][:keep_n]) | core_set
             chosen: list[int] = []
-            for e in ranking[li]:
+            seen: set[int] = set()
+
+            # Safety core MUST be included first (otherwise it is a no-op).
+            for e in core:
                 ei = int(e)
-                if ei in keep_set:
+                if 0 <= ei < num_experts and ei not in seen:
                     chosen.append(ei)
+                    seen.add(ei)
                 if len(chosen) >= keep_n:
                     break
+
+            # Fill remaining slots by EAFT-REAP ranking.
+            if len(chosen) < keep_n:
+                for e in ranking[li]:
+                    ei = int(e)
+                    if 0 <= ei < num_experts and ei not in seen:
+                        chosen.append(ei)
+                        seen.add(ei)
+                    if len(chosen) >= keep_n:
+                        break
+
+            if len(chosen) != keep_n:
+                raise RuntimeError(
+                    f"Failed to choose keep_n={keep_n} experts for layer {li}: got {len(chosen)}"
+                )
             keep_by_layer.append(chosen)
 
         variant_name = (
@@ -5064,16 +5242,11 @@ def main(
             out_subdir="20b_pruned_models_eaftreap",
         )
 
-        artifacts_dir = Path("artifacts/20b_pruned_models_eaftreap_budgeted")
-        artifacts_dir.mkdir(parents=True, exist_ok=True)
         (artifacts_dir / "neff_by_layer.json").write_text(
             json.dumps(neff_by_layer, indent=2), encoding="utf-8"
         )
         (artifacts_dir / "core_experts_by_layer.json").write_text(
             json.dumps(core_by_layer, indent=2), encoding="utf-8"
-        )
-        (artifacts_dir / "keep_counts_by_layer.json").write_text(
-            json.dumps(keep_counts, indent=2), encoding="utf-8"
         )
         (artifacts_dir / "keep_experts_by_layer.json").write_text(
             json.dumps(keep_by_layer, indent=2), encoding="utf-8"
@@ -5085,9 +5258,7 @@ def main(
                     "variant_name": str(variant_name),
                     "out_dir": str(out_dir),
                     "keep_frac": float(keep_frac),
-                    "min_keep_per_layer": int(min_keep_per_layer),
-                    "max_keep_per_layer": int(max_keep_per_layer),
-                    "keep_counts_by_layer": keep_counts,
+                    "keep_n": int(keep_n),
                     "neff_by_layer": neff_by_layer,
                     "core_pos_top_m": int(core_pos_top_m),
                     "core_count_top_m": int(core_count_top_m),
@@ -5117,7 +5288,7 @@ def main(
                     f"- Output dir: `{out_dir}`",
                     f"- keep_frac: {float(keep_frac):.2f}",
                     f"- safety core: pos_top_m={int(core_pos_top_m)} count_top_m={int(core_count_top_m)}",
-                    f"- keep_counts_by_layer: `{artifacts_dir/'keep_counts_by_layer.json'}`",
+                    f"- keep_n (uniform across layers): {int(keep_n)}/{int(num_experts)}",
                     "",
                 ]
             ),

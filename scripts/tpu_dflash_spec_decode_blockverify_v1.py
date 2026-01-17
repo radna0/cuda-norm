@@ -260,7 +260,12 @@ def main() -> None:
         add_one_for_pre_layer_capture=bool(add_one),
     )  # [1, S, K*hidden]
     ctx_hidden = draft.project_context_features(ctx_feats)  # [1, S, hidden]
-    ctx_kv = materialize_draft_ctx_kv(draft=draft, rope=rope, ctx_hidden=ctx_hidden)
+    ctx_kv = materialize_draft_ctx_kv(
+        draft=draft,
+        rope=rope,
+        ctx_hidden=ctx_hidden,
+        max_len=int(args.max_model_len + int(args.block_size)),
+    )
 
     # Teacher embedding + lm_head for draft tokenization.
     lm_head = teacher.get_lm_head()

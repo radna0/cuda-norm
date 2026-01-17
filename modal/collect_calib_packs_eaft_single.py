@@ -53,6 +53,11 @@ _MODEL_DIR = Path(os.environ.get("EAFT_MODEL_DIR", str(_EAFT_CACHE_ROOT / "model
 _DATA_DIR = Path(os.environ.get("EAFT_DATA_DIR", str(_EAFT_CACHE_ROOT / "data")))
 
 
+def _env_true(name: str, default: str = "0") -> bool:
+    v = (os.environ.get(name, default) or "").strip().lower()
+    return v in ("1", "true", "yes", "y", "on")
+
+
 def _ensure_transformers_sklearn_stub() -> None:
     """
     Kaggle images can ship a broken `scikit-learn` wheel (ABI mismatch vs NumPy),
@@ -1231,6 +1236,13 @@ def collect_calib_packs_eaft_single(
         "disable_cuda_graph": True,
         "allow_auto_truncate": True,
     }
+    # FlashInfer autotuning can take a long time (or hang) on some kernels,
+    # especially for pruned/rewritten checkpoints. For EAFT diagnostics we
+    # prefer determinism and fast turnaround over peak throughput.
+    if _env_true("SGLANG_DISABLE_FLASHINFER_AUTOTUNE", default="1") or _env_true(
+        "DISABLE_FLASHINFER_AUTOTUNE", default="0"
+    ):
+        engine_kwargs["disable_flashinfer_autotune"] = True
     if bool(trust_remote_code):
         engine_kwargs["trust_remote_code"] = True
     if quantization:

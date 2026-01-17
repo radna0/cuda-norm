@@ -71,7 +71,7 @@ def main() -> None:
         )
         draft = DFlashDraftModel(cfg, rngs=nnx.Rngs(0))
         ctx_hidden0 = jax.random.normal(jax.random.key(0), (1, 5, cfg.hidden_size), dtype=jnp.bfloat16)
-        cache0 = materialize_draft_ctx_kv(draft=draft, rope=rope, ctx_hidden=ctx_hidden0)
+        cache0 = materialize_draft_ctx_kv(draft=draft, rope=rope, ctx_hidden=ctx_hidden0, max_len=int(ctx_hidden0.shape[1] + 64))
         ctx_hidden_add = jax.random.normal(jax.random.key(1), (1, 2, cfg.hidden_size), dtype=jnp.bfloat16)
         cache1 = append_draft_ctx_kv(draft=draft, rope=rope, cache=cache0, new_ctx_hidden=ctx_hidden_add)
         anchor = jax.random.normal(jax.random.key(2), (1, cfg.hidden_size), dtype=jnp.bfloat16)

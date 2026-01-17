@@ -14,6 +14,7 @@ set -euo pipefail
 #   BLOCK_SIZE=8
 #   NUM_CONTEXT_FEATURES=4
 #   NUM_BLOCKS=256
+#   ROLLOUT_STEPS=1
 #   BATCH_SIZE=1
 #   PAGE_SIZE=128
 #   HBM_UTILIZATION=0.20
@@ -40,6 +41,7 @@ CTX_LEN="${CTX_LEN:-1024}"
 BLOCK_SIZE="${BLOCK_SIZE:-8}"
 NUM_CONTEXT_FEATURES="${NUM_CONTEXT_FEATURES:-4}"
 NUM_BLOCKS="${NUM_BLOCKS:-256}"
+ROLLOUT_STEPS="${ROLLOUT_STEPS:-1}"
 BATCH_SIZE="${BATCH_SIZE:-1}"
 PAGE_SIZE="${PAGE_SIZE:-128}"
 HBM_UTILIZATION="${HBM_UTILIZATION:-0.20}"
@@ -73,6 +75,7 @@ nohup "${VENV_PY}" -u "${BUILD_PY}" \
   --block-size "${BLOCK_SIZE}" \
   --num-context-features "${NUM_CONTEXT_FEATURES}" \
   --num-blocks "${NUM_BLOCKS}" \
+  --rollout-steps "${ROLLOUT_STEPS}" \
   --batch-size "${BATCH_SIZE}" \
   --page-size "${PAGE_SIZE}" \
   --hbm-utilization "${HBM_UTILIZATION}" \

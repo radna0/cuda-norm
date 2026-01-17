@@ -22,6 +22,28 @@ from pathlib import Path
 import numpy as np
 
 
+def _resolve_draft_run_dir(draft_run_dir: Path) -> Path:
+    """Accept either a specific run dir (contains config.json) or a checkpoint root (run-*)."""
+    if (draft_run_dir / "config.json").is_file():
+        return draft_run_dir
+
+    run_dirs = [p for p in draft_run_dir.glob("run-*") if p.is_dir() and (p / "config.json").is_file()]
+    if not run_dirs:
+        raise FileNotFoundError(
+            f"Could not find config.json in {draft_run_dir} or any run-*/ subdirectory. "
+            "Pass --draft-run-dir pointing at a specific run-### directory."
+        )
+
+    def _run_step(p: Path) -> int:
+        try:
+            return int(p.name.split("-", 1)[1])
+        except Exception:
+            return -1
+
+    run_dirs.sort(key=_run_step, reverse=True)
+    return run_dirs[0]
+
+
 def _bf16_from_u16(x_u16: np.ndarray):
     import ml_dtypes
 
@@ -51,6 +73,8 @@ def main() -> None:
     ap.add_argument("--draft-run-dir", required=True)
     ap.add_argument("--sample-idx", type=int, default=0)
     ap.add_argument("--blocks", type=int, default=32, help="How many verify blocks to run in the bench loop.")
+    ap.add_argument("--warmup-blocks", type=int, default=2, help="Warmup blocks (excluded from timing) to amortize JIT.")
+    ap.add_argument("--debug", action="store_true", help="Print per-block accept_len and token IDs (slow).")
     ap.add_argument("--prefill-chunk", type=int, default=256)
     ap.add_argument("--page-size", type=int, default=128)
     ap.add_argument("--hbm-utilization", type=float, default=0.20)
@@ -140,7 +164,7 @@ def main() -> None:
         dtype=jnp.bfloat16,
     )
 
-    run_dir = Path(args.draft_run_dir).resolve()
+    run_dir = _resolve_draft_run_dir(Path(args.draft_run_dir).resolve())
     draft_cfg = DFlashDraftModelConfig(**json.loads((run_dir / "config.json").read_text(encoding="utf-8")))
     draft = load_dflash_draft_from_run_dir(run_dir=run_dir, cfg=draft_cfg, mesh=teacher.mesh)
 
@@ -219,42 +243,56 @@ def main() -> None:
     seqbuf.top_p[0] = 1.0
     seqbuf.min_p[0] = 0.0
 
-    # Prefill ctx tokens into target KV (no feature capture used here).
-    done = 0
-    while done < int(ctx_len):
-        step = int(min(prefill_bucket, int(ctx_len) - done))
-        seqbuf.num_computed_tokens[0] = int(done)
-        scheduled_full_cpu[0] = int(step)
-        _ctx_unused, _greedy_unused, input_ids_buf, position_ids_buf, _m = executor.execute_verify(
-            num_tokens=int(prefill_bucket),
-            scheduled_full_cpu=scheduled_full_cpu,
-            active_mask_full_cpu=active_mask_full_cpu,
-            input_ids_buf=input_ids_buf,
-            position_ids_buf=position_ids_buf,
-            padded_num_reqs=1,
-            token_ids_cpu=seqbuf.token_ids,
-            num_computed_tokens_cpu=seqbuf.num_computed_tokens,
-            temperature_cpu=seqbuf.temperature,
-            top_p_cpu=seqbuf.top_p,
-            top_k_cpu=seqbuf.top_k,
-            min_p_cpu=seqbuf.min_p,
-            page_table_cpu=page_table_cpu,
-            page_table_version=page_table_version,
-        )
-        done += step
+    def _prefill_from_scratch() -> None:
+        nonlocal input_ids_buf, position_ids_buf
+        done = 0
+        scheduled_full_cpu[0] = 0
+        while done < int(ctx_len):
+            step = int(min(prefill_bucket, int(ctx_len) - done))
+            seqbuf.num_computed_tokens[0] = int(done)
+            scheduled_full_cpu[0] = int(step)
+            _ctx_unused, _greedy_unused, input_ids_buf, position_ids_buf, _m = executor.execute_verify(
+                num_tokens=int(prefill_bucket),
+                scheduled_full_cpu=scheduled_full_cpu,
+                active_mask_full_cpu=active_mask_full_cpu,
+                input_ids_buf=input_ids_buf,
+                position_ids_buf=position_ids_buf,
+                padded_num_reqs=1,
+                token_ids_cpu=seqbuf.token_ids,
+                num_computed_tokens_cpu=seqbuf.num_computed_tokens,
+                temperature_cpu=seqbuf.temperature,
+                top_p_cpu=seqbuf.top_p,
+                top_k_cpu=seqbuf.top_k,
+                min_p_cpu=seqbuf.min_p,
+                page_table_cpu=page_table_cpu,
+                page_table_version=page_table_version,
+            )
+            done += step
+        seqbuf.num_computed_tokens[0] = int(ctx_len)
 
-    # Set pending anchor.
-    seqbuf.num_computed_tokens[0] = int(ctx_len)
+    # Prefill ctx tokens into target KV (no feature capture used here).
+    _prefill_from_scratch()
 
     # Draft ctx KV from cached ctx features.
     with mesh:
-        ctx_hidden = draft.project_context_features(jnp.asarray(ctx_feat, dtype=jnp.bfloat16))
-        ctx_kv = materialize_draft_ctx_kv(draft=draft, rope=rope, ctx_hidden=ctx_hidden)
+        ctx_feat_dev_full = jnp.asarray(ctx_feat, dtype=jnp.bfloat16)
+        ctx_hidden = draft.project_context_features(ctx_feat_dev_full)
+        # IMPORTANT: draft attention currently operates over the full allocated
+        # ctx-KV buffer length. Keep this buffer as small as possible for the
+        # benchmark (enough for ctx + a few blocks), otherwise we pay O(max_len)
+        # attention cost even when ctx_len is small.
+        draft_need = int(ctx_len + int(block_size) * (int(args.blocks) + int(args.warmup_blocks) + 8))
+        draft_max_len = int(min(int(max_model_len + int(block_size)), max(int(ctx_len), draft_need)))
+        ctx_kv = materialize_draft_ctx_kv(draft=draft, rope=rope, ctx_hidden=ctx_hidden, max_len=int(draft_max_len))
+        jax.block_until_ready(ctx_kv.k_full[0])
 
     # ---- DFlash loop ----
-    dflash_tokens = 0
-    t0 = time.time()
-    for _ in range(int(args.blocks)):
+    active_mask_full_cpu[:] = False
+    active_mask_full_cpu[0] = True
+    scheduled_full_cpu[:] = 0
+
+    def _dflash_one_block() -> tuple[int, int]:
+        nonlocal ctx_kv, input_ids_buf, position_ids_buf
         base_len = int(seqbuf.num_computed_tokens[0])
         cur_id = int(seqbuf.token_ids[0, base_len])
         with mesh:
@@ -301,22 +339,117 @@ def main() -> None:
         accept_len, bonus = dflash_accept_len_and_bonus(candidates=cand_j, target_predict=greedy_ids)
         n_acc = int(jnp.asarray(accept_len)[0])
         keep = 1 + n_acc
+        if bool(args.debug):
+            tgt0 = np.asarray(jax.device_get(greedy_ids[0]))[: int(block_size)]
+            print(
+                f"[debug] base_len={base_len} cur_id={cur_id} accept_len={n_acc} "
+                f"cand1..3={cand[1:4].tolist()} tgt0..2={tgt0[:3].tolist()} bonus={int(jax.device_get(bonus[0]))}",
+                flush=True,
+            )
 
         ctx_commit_feat = jnp.asarray(ctx_part)[:keep, :].reshape((1, keep, -1)).astype(jnp.bfloat16)
+        if bool(args.debug) and int(base_len) == int(ctx_len):
+            # Diagnose whether the problem is in ctx_part->features or in KV append:
+            # compute the next-block draft tokens using the *direct* draft(...) path
+            # with context_features := [ctx_feat_dev_full + commit_features].
+            with mesh:
+                ctx2 = jnp.concatenate([ctx_feat_dev_full, ctx_commit_feat], axis=1)
+                bonus_id2 = jnp.asarray(bonus[0], dtype=jnp.int32)
+                anchor2 = teacher.get_embedding()(bonus_id2.reshape((1, 1)))[:, 0, :]
+                d2 = draft(context_features=ctx2, anchor_embedding=anchor2.astype(jnp.bfloat16), rope=rope)
+                d2_logits = _lm_head_logits(hidden=d2[:, 1:, :].astype(jnp.bfloat16), lm_head=teacher.get_lm_head())
+                d2_tok = jnp.argmax(d2_logits, axis=-1).astype(jnp.int32)[0]
+                print(f"[debug] direct-next cand1..3={np.asarray(jax.device_get(d2_tok))[:3].tolist()}", flush=True)
         with mesh:
             new_ctx_hidden = draft.project_context_features(ctx_commit_feat)
             ctx_kv = append_draft_ctx_kv(draft=draft, rope=rope, cache=ctx_kv, new_ctx_hidden=new_ctx_hidden)
+            jax.block_until_ready(ctx_kv.k_full[0])
 
         seqbuf.num_computed_tokens[0] = int(base_len + keep)
         seqbuf.token_ids[0, int(base_len + keep)] = np.int32(jnp.asarray(bonus)[0])
         seqbuf.num_tokens[0] = int(base_len + keep + 1)
         seqbuf.num_tokens_no_spec[0] = int(base_len + keep + 1)
-        dflash_tokens += keep
+        # Emitted tokens per DFlash step: accepted draft tokens + 1 bonus token.
+        # (The anchor is the current token being verified; it is not counted as "new".)
+        return int(n_acc + 1), int(n_acc)
+
+    # Warmup excluded from timing (compiles / stabilizes executors).
+    for _ in range(int(args.warmup_blocks)):
+        _dflash_one_block()
+
+    # Reset back to the original (ctx + pending anchor) state so warmup doesn't
+    # contaminate the timed acceptance (append_draft_ctx_kv mutates ctx_kv).
+    seqbuf.token_ids[0, :ctx_len] = ctx_ids
+    seqbuf.token_ids[0, ctx_len] = np.int32(anchor_id)
+    seqbuf.num_tokens[0] = int(prompt_len)
+    seqbuf.num_tokens_no_spec[0] = int(prompt_len)
+    seqbuf.num_computed_tokens[0] = 0
+    seqbuf.temperature[0] = 0.0
+    seqbuf.top_k[0] = 1
+    seqbuf.top_p[0] = 1.0
+    seqbuf.min_p[0] = 0.0
+    _prefill_from_scratch()
+    with mesh:
+        ctx_hidden = draft.project_context_features(jnp.asarray(ctx_feat, dtype=jnp.bfloat16))
+        draft_need = int(ctx_len + int(block_size) * (int(args.blocks) + 8))
+        draft_max_len = int(min(int(max_model_len + int(block_size)), max(int(ctx_len), draft_need)))
+        ctx_kv = materialize_draft_ctx_kv(draft=draft, rope=rope, ctx_hidden=ctx_hidden, max_len=int(draft_max_len))
+        jax.block_until_ready(ctx_kv.k_full[0])
+
+    dflash_tokens = 0
+    accept_lens: list[int] = []
+    t0 = time.time()
+    for _ in range(int(args.blocks)):
+        emitted, n_acc = _dflash_one_block()
+        dflash_tokens += int(emitted)
+        accept_lens.append(int(n_acc))
 
     dflash_s = max(1e-9, time.time() - t0)
 
     # ---- Baseline: token-by-token verify for same number of emitted tokens ----
     baseline_tokens = int(dflash_tokens)
+    # Reset the request back to the original (ctx + pending anchor) state and
+    # re-prefill, so baseline starts from the same prompt distribution.
+    seqbuf.token_ids[0, :ctx_len] = ctx_ids
+    seqbuf.token_ids[0, ctx_len] = np.int32(anchor_id)
+    seqbuf.num_tokens[0] = int(prompt_len)
+    seqbuf.num_tokens_no_spec[0] = int(prompt_len)
+    seqbuf.num_computed_tokens[0] = 0
+    seqbuf.temperature[0] = 0.0
+    seqbuf.top_k[0] = 1
+    seqbuf.top_p[0] = 1.0
+    seqbuf.min_p[0] = 0.0
+    _prefill_from_scratch()
+
+    active_mask_full_cpu[:] = True
+    scheduled_full_cpu[:] = 0
+
+    # Warmup excluded from timing.
+    for _ in range(int(args.warmup_blocks) * int(block_size)):
+        scheduled_full_cpu[0] = 1
+        _ctx_unused, greedy_ids, input_ids_buf, position_ids_buf, _m = executor.execute_verify(
+            num_tokens=1,
+            scheduled_full_cpu=scheduled_full_cpu,
+            active_mask_full_cpu=active_mask_full_cpu,
+            input_ids_buf=input_ids_buf,
+            position_ids_buf=position_ids_buf,
+            padded_num_reqs=1,
+            token_ids_cpu=seqbuf.token_ids,
+            num_computed_tokens_cpu=seqbuf.num_computed_tokens,
+            temperature_cpu=seqbuf.temperature,
+            top_p_cpu=seqbuf.top_p,
+            top_k_cpu=seqbuf.top_k,
+            min_p_cpu=seqbuf.min_p,
+            page_table_cpu=page_table_cpu,
+            page_table_version=page_table_version,
+        )
+        next_id = int(np.asarray(greedy_ids)[0])
+        base_len = int(seqbuf.num_computed_tokens[0])
+        seqbuf.token_ids[0, base_len + 1] = np.int32(next_id)
+        seqbuf.num_computed_tokens[0] = int(base_len + 1)
+        seqbuf.num_tokens[0] = int(base_len + 2)
+        seqbuf.num_tokens_no_spec[0] = int(base_len + 2)
+
     t1 = time.time()
     for _ in range(baseline_tokens):
         scheduled_full_cpu[0] = 1
@@ -343,6 +476,7 @@ def main() -> None:
         seqbuf.num_tokens[0] = int(base_len + 2)
         seqbuf.num_tokens_no_spec[0] = int(base_len + 2)
     baseline_s = max(1e-9, time.time() - t1)
+    accept_mean = float(sum(accept_lens)) / float(max(1, len(accept_lens)))
 
     print(
         json.dumps(
@@ -354,6 +488,7 @@ def main() -> None:
                 "dflash_tokens": int(dflash_tokens),
                 "dflash_s": float(dflash_s),
                 "dflash_tok_s": float(dflash_tokens) / float(dflash_s),
+                "accept_len_mean": float(accept_mean),
                 "baseline_tokens": int(baseline_tokens),
                 "baseline_s": float(baseline_s),
                 "baseline_tok_s": float(baseline_tokens) / float(baseline_s),
