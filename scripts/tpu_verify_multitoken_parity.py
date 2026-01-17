@@ -161,15 +161,18 @@ def main() -> None:
     page_table_cpu = seqbuf.page_table[0].get_cpu_tensor()
     page_table_version = getattr(seqbuf.page_table[0], "cpu_version", None)
 
-    def _zero(x):
-        if isinstance(x, jax.Array):
-            return jnp.zeros_like(x)
-        return x
+    def _reset_kv_pages() -> None:
+        def _zero(x):
+            if isinstance(x, jax.Array):
+                return jnp.zeros_like(x)
+            return x
+
+        with mesh:
+            executor.kv_pages = jax.tree_util.tree_map(_zero, executor.kv_pages)
+            executor.kv_pages = jax.block_until_ready(executor.kv_pages)
 
     # Ensure KV is empty before the first prefill (match cache builder).
-    with mesh:
-        executor.kv_pages = jax.tree_util.tree_map(_zero, executor.kv_pages)
-        executor.kv_pages = jax.block_until_ready(executor.kv_pages)
+    _reset_kv_pages()
 
     # Absolute position offset (must match the cache builder, otherwise
     # multi-token verify predictions will not match cached targets).
@@ -242,6 +245,45 @@ def main() -> None:
     )
     next1 = int(np.asarray(greedy1)[0])
 
+    # IMPORTANT: do not reuse KV from the 1-token step when rolling out a full
+    # candidate block. Rebuild the exact same prefill state as the cache builder
+    # (fresh KV + ctx-only prefill), otherwise the rollout can diverge and make
+    # cached targets appear "wrong" when they are actually consistent with the
+    # builder's rollout.
+    _reset_kv_pages()
+    seqbuf.token_ids[0, :prompt_len] = prompt_ids
+    seqbuf.num_tokens[0] = int(prompt_len)
+    seqbuf.num_tokens_no_spec[0] = int(prompt_len)
+    seqbuf.num_computed_tokens[0] = 0
+    seqbuf.temperature[0] = 0.0
+    seqbuf.top_k[0] = 1
+    seqbuf.top_p[0] = 1.0
+    seqbuf.min_p[0] = 0.0
+    done = 0
+    while done < int(ctx_len):
+        step = int(min(prefill_bucket, int(ctx_len) - done))
+        seqbuf.num_computed_tokens[0] = int(done)
+        scheduled_full_cpu[0] = int(step)
+        _ctx_unused, _greedy_unused, input_ids_buf, position_ids_buf, _m = executor.execute_verify(
+            num_tokens=int(prefill_bucket),
+            scheduled_full_cpu=scheduled_full_cpu,
+            active_mask_full_cpu=active_mask_full_cpu,
+            input_ids_buf=input_ids_buf,
+            position_ids_buf=position_ids_buf,
+            padded_num_reqs=1,
+            token_ids_cpu=seqbuf.token_ids,
+            num_computed_tokens_cpu=seqbuf.num_computed_tokens,
+            position_offset_cpu=pos_off_cpu,
+            temperature_cpu=seqbuf.temperature,
+            top_p_cpu=seqbuf.top_p,
+            top_k_cpu=seqbuf.top_k,
+            min_p_cpu=seqbuf.min_p,
+            page_table_cpu=page_table_cpu,
+            page_table_version=page_table_version,
+        )
+        done += step
+    seqbuf.num_computed_tokens[0] = int(ctx_len)
+
     # Build candidate block by rolling out (block_size-1) 1-token steps (like cache builder).
     # Reset to ctx_len computed tokens.
     seqbuf.num_computed_tokens[0] = int(ctx_len)
@@ -281,9 +323,7 @@ def main() -> None:
     cand[1:] = tgt
 
     # Reset KV and re-prefill, then verify the whole block at once.
-    with mesh:
-        executor.kv_pages = jax.tree_util.tree_map(_zero, executor.kv_pages)
-        executor.kv_pages = jax.block_until_ready(executor.kv_pages)
+    _reset_kv_pages()
 
     seqbuf.token_ids[0, :prompt_len] = prompt_ids
     seqbuf.num_tokens[0] = int(prompt_len)
@@ -343,6 +383,70 @@ def main() -> None:
     if greedy_block.shape[0] < int(args.block_size):
         raise RuntimeError(f"greedy_block shape {greedy_block.shape} < block_size")
 
+    # Probe: does block0 depend on *future* draft tokens?
+    #
+    # For a correct causal verify implementation, the greedy token for position 0
+    # (anchor) must be invariant to the content of cand[1:].
+    cand_zero = cand.copy()
+    cand_zero[1:] = np.int32(0)
+
+    _reset_kv_pages()
+    seqbuf.token_ids[0, :prompt_len] = prompt_ids
+    seqbuf.num_tokens[0] = int(prompt_len)
+    seqbuf.num_tokens_no_spec[0] = int(prompt_len)
+    seqbuf.num_computed_tokens[0] = 0
+    seqbuf.temperature[0] = 0.0
+    seqbuf.top_k[0] = 1
+    seqbuf.top_p[0] = 1.0
+    seqbuf.min_p[0] = 0.0
+    done = 0
+    while done < int(ctx_len):
+        step = int(min(prefill_bucket, int(ctx_len) - done))
+        seqbuf.num_computed_tokens[0] = int(done)
+        scheduled_full_cpu[0] = int(step)
+        _ctx_unused, _greedy_unused, input_ids_buf, position_ids_buf, _m = executor.execute_verify(
+            num_tokens=int(prefill_bucket),
+            scheduled_full_cpu=scheduled_full_cpu,
+            active_mask_full_cpu=active_mask_full_cpu,
+            input_ids_buf=input_ids_buf,
+            position_ids_buf=position_ids_buf,
+            padded_num_reqs=1,
+            token_ids_cpu=seqbuf.token_ids,
+            num_computed_tokens_cpu=seqbuf.num_computed_tokens,
+            position_offset_cpu=pos_off_cpu,
+            temperature_cpu=seqbuf.temperature,
+            top_p_cpu=seqbuf.top_p,
+            top_k_cpu=seqbuf.top_k,
+            min_p_cpu=seqbuf.min_p,
+            page_table_cpu=page_table_cpu,
+            page_table_version=page_table_version,
+        )
+        done += step
+    seqbuf.num_computed_tokens[0] = int(ctx_len)
+    seqbuf.token_ids[0, int(ctx_len) : int(ctx_len + int(args.block_size))] = cand_zero
+    seqbuf.num_tokens[0] = int(ctx_len + int(args.block_size))
+    seqbuf.num_tokens_no_spec[0] = int(ctx_len + int(args.block_size))
+    scheduled_full_cpu[0] = int(args.block_size)
+    _ctx_unused, greedy_block_zero, input_ids_buf, position_ids_buf, _m = executor.execute_verify(
+        num_tokens=int(args.block_size),
+        scheduled_full_cpu=scheduled_full_cpu,
+        active_mask_full_cpu=active_mask_full_cpu,
+        input_ids_buf=input_ids_buf,
+        position_ids_buf=position_ids_buf,
+        padded_num_reqs=1,
+        token_ids_cpu=seqbuf.token_ids,
+        num_computed_tokens_cpu=seqbuf.num_computed_tokens,
+        position_offset_cpu=pos_off_cpu,
+        temperature_cpu=seqbuf.temperature,
+        top_p_cpu=seqbuf.top_p,
+        top_k_cpu=seqbuf.top_k,
+        min_p_cpu=seqbuf.min_p,
+        page_table_cpu=page_table_cpu,
+        page_table_version=page_table_version,
+    )
+    greedy_block_zero = np.asarray(greedy_block_zero, dtype=np.int32)
+    block0_changes_with_future = bool(int(greedy_block_zero[0]) != int(greedy_block[0]))
+
     print(
         json.dumps(
             {
@@ -351,10 +455,14 @@ def main() -> None:
                 "position_offset": int(pos_off),
                 "anchor_id": int(anchor_id),
                 "cached_target_ids": [int(x) for x in cached_targets.tolist()],
+                "rollout_target_ids": [int(x) for x in tgt.tolist()],
                 "next_token_1tok": int(next1),
                 "cand_tokens": [int(x) for x in cand.tolist()],
+                "cand_zero_tokens": [int(x) for x in cand_zero.tolist()],
                 "verify_block_greedy": [int(x) for x in greedy_block[: int(args.block_size)].tolist()],
+                "verify_block_zero_greedy": [int(x) for x in greedy_block_zero[: int(args.block_size)].tolist()],
                 "verify_block_head": [int(x) for x in greedy_block[:3].tolist()],
+                "verify_block0_changes_with_future": bool(block0_changes_with_future),
                 "match_1tok_vs_block0": bool(int(next1) == int(greedy_block[0])),
                 "match_cached_targets_vs_verify": bool(
                     cached_targets.shape[0] == (int(args.block_size) - 1)

@@ -77,6 +77,31 @@ def main() -> None:
     from easydel.inference.speculative import bench_esurge_dflash_decode_single
     from easydel.inference.speculative import DFlashDraftModelConfig
 
+    def _load_lm_head_weight(snapshot_dir: Path):
+        from safetensors import safe_open
+
+        name_candidates = ("lm_head.weight", "model.lm_head.weight")
+        index_path = snapshot_dir / "model.safetensors.index.json"
+        if index_path.exists():
+            idx = json.loads(index_path.read_text(encoding="utf-8"))
+            weight_map = idx.get("weight_map", {})
+            for name in name_candidates:
+                shard = weight_map.get(name)
+                if shard is None:
+                    continue
+                with safe_open(str(snapshot_dir / shard), framework="flax") as f:
+                    return f.get_tensor(name)
+            raise KeyError(f"Missing {name_candidates} in {index_path.name}")
+
+        single_path = snapshot_dir / "model.safetensors"
+        if not single_path.exists():
+            raise FileNotFoundError(f"Missing {index_path.name} and {single_path.name} in {snapshot_dir}")
+        with safe_open(str(single_path), framework="flax") as f:
+            for name in name_candidates:
+                if name in f.keys():
+                    return f.get_tensor(name)
+        raise KeyError(f"Missing {name_candidates} in {single_path.name}")
+
     teacher_snapshot = Path(args.teacher_snapshot_dir).resolve()
     prompt_from_cache_dir = str(args.prompt_from_cache_dir).strip()
     position_offset = 0
@@ -146,6 +171,9 @@ def main() -> None:
         rope_scaling=cfg.get("rope_scaling"),
         dtype=jnp.bfloat16,
     )
+    # Use the same frozen LM head weights as DFlash training, so draft-token
+    # argmax is comparable to training semantics.
+    lm_w = _load_lm_head_weight(teacher_snapshot)
 
     # Draft cfg must match the training run. Load it from run_dir/config.json so
     # we don't silently benchmark with a mismatched architecture (K/layers/etc.).
@@ -186,6 +214,7 @@ def main() -> None:
         draft_run_dir=str(run_dir),
         draft_cfg=draft_cfg,
         target_rope=rope,
+        lm_head_weight=lm_w,
         position_offset=int(position_offset),
         block_size=int(args.block_size),
         max_new_tokens=int(args.max_new_tokens),

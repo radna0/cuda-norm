@@ -3574,9 +3574,15 @@ def main(
 
     # Ensure local outputs (reports/, artifacts/, data/) land under the project
     # root (harmony/cuda-norm) instead of the caller's CWD.
+    #
+    # - Kaggle/VERSA: the synced checkout lives at `/kaggle/working/harmony/cuda-norm`.
+    # - Modal workers: this file is copied to `/root/<script>.py` (no repo checkout).
+    #
+    # Only chdir when we can prove the repo layout exists next to this file.
     try:
-        if not _KAGGLE_WORKDIR.exists():
-            os.chdir(Path(__file__).resolve().parents[1])
+        repo_root = Path(__file__).resolve().parents[1]
+        if (repo_root / "modal" / "gpt_oss_pruning_track.py").exists():
+            os.chdir(repo_root)
     except Exception:
         pass
 

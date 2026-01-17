@@ -165,6 +165,12 @@ python -m versa run \
   --bootstrap-cmd "python -m pip uninstall -y kernels || true" \
   --env-file "${PRUNING_ENV_FILE}" \
   --env "PRUNING_LOCAL_MODE=1" \
+  --env "PRUNING_CACHE_ROOT=/kaggle/working/pruning_cache" \
+  --env "PRUNING_MODEL_DIR=/kaggle/working/pruning_cache/model" \
+  --env "PRUNING_DATA_DIR=/kaggle/working/pruning_cache/data" \
+  --env "PRUNING_HF_HOME=/kaggle/working/pruning_cache/hf_cache" \
+  --env "PRUNING_ARTIFACTS_DIR=/kaggle/working/harmony/cuda-norm/artifacts" \
+  --env "PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True" \
   --env "MODEL_DIR_20B=/kaggle/input/gpt-oss-20b/transformers/default/1" \
   "${ROOT_DIR}/modal/gpt_oss_pruning_track.py::main" -- \
     --task "${TASK}" \
