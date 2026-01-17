@@ -17,6 +17,7 @@ TRAIN_PY="${ROOT}/harmony/cuda-norm/scripts/tpu_dflash_train_with_easydel_traine
 : "${TEACHER_SNAPSHOT:?Set TEACHER_SNAPSHOT=/dev/shm/hf/hub/.../snapshots/<sha>}"
 : "${RUN_NAME:=dflash_run}"
 : "${MODEL_NAME:=${RUN_NAME}}"
+: "${RESUME_PATH:=}"
 
 LOG_DIR="${ROOT}/harmony/cuda-norm/logs/tpu_dflash"
 # Always checkpoint to /dev/shm (requested) to avoid root-FS pressure and to
@@ -51,12 +52,18 @@ MLP_RATIO="${MLP_RATIO:-4.0}"
 QK_NORM="${QK_NORM:-true}"
 REMAT="${REMAT:-true}"
 
+EXTRA_ARGS=()
+if [[ -n "${RESUME_PATH}" ]]; then
+  EXTRA_ARGS+=(--resume-path "${RESUME_PATH}")
+fi
+
 set -x
 nohup "${VENV_PY}" -u "${TRAIN_PY}" \
   --cache-dir "${CACHE_DIR}" \
   --teacher-snapshot-dir "${TEACHER_SNAPSHOT}" \
   --save-directory "${CKPT_DIR}" \
   --model-name "${MODEL_NAME}" \
+  "${EXTRA_ARGS[@]}" \
   --max-training-steps "${MAX_TRAINING_STEPS}" \
   --total-batch-size "${TOTAL_BATCH_SIZE}" \
   --grad-accum-steps "${GRAD_ACCUM_STEPS}" \

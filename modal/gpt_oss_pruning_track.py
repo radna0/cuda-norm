@@ -561,6 +561,7 @@ def sample_calib_packs_rows_cpu(
     num_rows: int,
     seed: int,
     strategy: str = "per_file",
+    pack_weights: list[float] | None = None,
 ) -> dict[str, Any]:
     """
     Deterministically sample `num_rows` rows from a set of parquet pack files in
@@ -569,6 +570,9 @@ def sample_calib_packs_rows_cpu(
     Sampling strategies:
     - per_file (default): allocate ~equal quota per pack file, then merge.
       This prevents one pack dominating the pruning signal.
+    - per_file_weighted: like per_file, but allocate per-file quotas according to
+      `pack_weights` (same order as `pack_files`). Useful when one pack's
+      downstream metric (e.g. tool/agentic JS2D) dominates and must be preserved.
     - global: a single global min-hash sample across all files.
 
     Writes a JSONL file into the data volume and returns its path.
@@ -600,14 +604,32 @@ def sample_calib_packs_rows_cpu(
     seed = int(seed)
     text_col = str(text_column or "text")
     strategy = str(strategy or "per_file").strip().lower()
-    if strategy not in ("per_file", "global"):
-        raise ValueError("strategy must be one of: per_file, global")
+    if strategy not in ("per_file", "per_file_weighted", "global"):
+        raise ValueError("strategy must be one of: per_file, per_file_weighted, global")
+
+    weights: list[float] = []
+    if strategy == "per_file_weighted":
+        raw = list(pack_weights or [])
+        if len(raw) != len(files):
+            raise ValueError("pack_weights must match pack_files length for per_file_weighted")
+        for w in raw:
+            try:
+                wf = float(w)
+            except Exception:
+                wf = 0.0
+            weights.append(max(0.0, wf))
+        if sum(weights) <= 0:
+            raise ValueError("pack_weights must sum to > 0 for per_file_weighted")
 
     # Keep a fixed-size "max heap" (implemented as a min-heap over negative scores).
     # Include a numeric tiebreaker so Python never tries to compare dicts.
     heap: list[tuple[int, int, dict[str, Any]]] = []
     scanned = 0
     kept = 0
+    valid_by_file: dict[str, int] = {str(p): 0 for p in files}
+    nonstr_by_file: dict[str, int] = {str(p): 0 for p in files}
+    empty_by_file: dict[str, int] = {str(p): 0 for p in files}
+    sample_types: dict[str, str] = {}
 
     def _score(s: str) -> int:
         # Use a stable 64-bit score to select the smallest hashes.
@@ -624,10 +646,18 @@ def sample_calib_packs_rows_cpu(
         if int(score) < int(worst_score):
             heapq.heapreplace(heap_ref, (-int(score), int(scanned), row))
 
-    # Compute a per-file cap for stratified sampling.
+    # Compute per-file caps for stratified sampling.
     per_file_cap = int(num_rows)
+    per_file_caps: dict[str, int] = {}
     if strategy == "per_file":
         per_file_cap = int(math.ceil(float(num_rows) / float(len(files))))
+        for p in files:
+            per_file_caps[str(p)] = int(per_file_cap)
+    elif strategy == "per_file_weighted":
+        total_w = float(sum(weights))
+        for p, w in zip(files, weights):
+            cap = int(math.ceil(float(num_rows) * float(w) / total_w))
+            per_file_caps[str(p)] = max(1, int(cap))
 
     # We keep small per-file heaps when stratifying, then merge into a global heap
     # of size num_rows to enforce the exact requested count.
@@ -651,26 +681,40 @@ def sample_calib_packs_rows_cpu(
                 except Exception:
                     row_i += 1
                     continue
-                if not isinstance(text, str) or not text.strip():
+                if not isinstance(text, str):
+                    nonstr_by_file[str(pack_path)] = int(nonstr_by_file.get(str(pack_path), 0)) + 1
+                    if str(pack_path) not in sample_types:
+                        sample_types[str(pack_path)] = str(type(text))
                     row_i += 1
                     continue
+                if not text.strip():
+                    empty_by_file[str(pack_path)] = int(empty_by_file.get(str(pack_path), 0)) + 1
+                    row_i += 1
+                    continue
+                valid_by_file[str(pack_path)] = int(valid_by_file.get(str(pack_path), 0)) + 1
                 row = {"text": text, "source_file": str(pack_path), "row_i": int(row_i)}
                 score = _score(text)
                 if strategy == "global":
                     _push(heap, score, row, cap=num_rows)
                 else:
                     h = per_file_heaps.setdefault(str(pack_path), [])
-                    _push(h, score, row, cap=per_file_cap)
+                    cap = int(per_file_caps.get(str(pack_path), per_file_cap))
+                    _push(h, score, row, cap=cap)
                 row_i += 1
 
-    if strategy == "per_file":
+    if strategy in ("per_file", "per_file_weighted"):
         for pack_path, h in per_file_heaps.items():
             for s, t, r in h:
                 # `s` is negative score (max-heap stored as min-heap), restore.
                 _push(heap, -int(s), r, cap=num_rows)
 
     if len(heap) < num_rows:
-        raise RuntimeError(f"Only sampled {len(heap)} rows from calib packs; expected {num_rows}. scanned={scanned}")
+        raise RuntimeError(
+            "Only sampled "
+            f"{len(heap)} rows from calib packs; expected {num_rows}. scanned={scanned} "
+            f"valid_by_file={valid_by_file} nonstr_by_file={nonstr_by_file} empty_by_file={empty_by_file} "
+            f"sample_types={sample_types}"
+        )
 
     # Sort by score asc for determinism.
     out_rows = [r for _, _, r in sorted([(-s, t, r) for (s, t, r) in heap], key=lambda x: (x[0], x[1]))]
@@ -695,6 +739,7 @@ def sample_calib_packs_rows_cpu(
         "rows_jsonl_path": str(out_path),
         "dataset_repo": repo,
         "pack_files": files,
+        "pack_weights": weights if strategy == "per_file_weighted" else None,
         "text_column": text_col,
         "num_rows": num_rows,
         "seed": seed,
@@ -3492,7 +3537,9 @@ def main(
     calib_packs_repo: str = DEFAULT_CALIB_PACKS_REPO,
     calib_pack_files_csv: str = ",".join(DEFAULT_CALIB_PACK_FILES),
     calib_pack_sample_strategy: str = "per_file",
+    calib_pack_weights_csv: str = "",
     keep_fracs_csv: str = "0.75",
+    keep_n_round: str = "ceil",
     keep_frac: float = 0.75,
     min_keep_per_layer: int = 16,
     max_keep_per_layer: int = 32,
@@ -3587,6 +3634,14 @@ def main(
         pack_files = _parse_csv(str(calib_pack_files_csv or "")) or list(DEFAULT_CALIB_PACK_FILES)
         if not pack_files:
             raise SystemExit("No calib pack files specified.")
+        pack_weights: list[float] | None = None
+        if str(calib_pack_weights_csv or "").strip():
+            pack_weights = []
+            for s in _parse_csv(str(calib_pack_weights_csv)):
+                try:
+                    pack_weights.append(float(s))
+                except Exception:
+                    pack_weights.append(0.0)
         sample = _invoke(
             sample_calib_packs_rows_cpu,
             dataset_repo=str(calib_packs_repo),
@@ -3595,6 +3650,7 @@ def main(
             num_rows=int(num_rows),
             seed=int(seed),
             strategy=str(calib_pack_sample_strategy),
+            pack_weights=pack_weights,
         )
         out_report = Path("reports/sample_calib_packs.md")
         out_report.parent.mkdir(parents=True, exist_ok=True)
@@ -4986,12 +5042,22 @@ def main(
 
         import math as _math
 
+        round_mode = str(keep_n_round or "ceil").strip().lower()
+        if round_mode not in ("ceil", "floor", "round"):
+            raise SystemExit("--keep-n-round must be one of: ceil,floor,round")
+
         variants: dict[str, str] = {}
         keep_by_variant: dict[str, Any] = {}
         for keep_frac in keep_fracs:
             if not (0.0 < float(keep_frac) <= 1.0):
                 raise SystemExit(f"Invalid keep_frac={keep_frac} (must be 0<k<=1)")
-            keep_n = int(_math.ceil(float(keep_frac) * float(num_experts)))
+            raw = float(keep_frac) * float(num_experts)
+            if round_mode == "ceil":
+                keep_n = int(_math.ceil(raw))
+            elif round_mode == "floor":
+                keep_n = int(_math.floor(raw))
+            else:
+                keep_n = int(round(raw))
             keep_n = max(1, min(int(keep_n), int(num_experts)))
             keep_by_layer = []
             for li in range(num_layers):
@@ -5031,6 +5097,7 @@ def main(
             "variants": variants,
             "keep": keep_by_variant,
             "keep_fracs_csv": str(keep_fracs_csv),
+            "keep_n_round": str(round_mode),
         }
         (artifacts_dir / "manifest_eaftreap_keepfrac.json").write_text(
             json.dumps(manifest, indent=2, sort_keys=True),
@@ -5123,6 +5190,14 @@ def main(
             raise SystemExit("No calib pack files specified.")
 
         _ = _invoke(predownload_model, str(model_id_20b))
+        pack_weights: list[float] | None = None
+        if str(calib_pack_weights_csv or "").strip():
+            pack_weights = []
+            for s in _parse_csv(str(calib_pack_weights_csv)):
+                try:
+                    pack_weights.append(float(s))
+                except Exception:
+                    pack_weights.append(0.0)
         sample = _invoke(
             sample_calib_packs_rows_cpu,
             dataset_repo=str(calib_packs_repo),
@@ -5131,6 +5206,7 @@ def main(
             num_rows=int(num_rows),
             seed=int(seed),
             strategy=str(calib_pack_sample_strategy),
+            pack_weights=pack_weights,
         )
 
         prof = _invoke(

@@ -34,7 +34,6 @@ fi
 
 echo "log=${LOG_PATH}"
 echo "--- tail (cache/train progress) ---"
-rg -n "\\[cache\\]|training process:|Saving checkpoint at step|Traceback|Error|Exception|OOM|out of memory" -S "${LOG_PATH}" | tail -n 20 || true
+rg -n "\\[cache\\]|\\[done\\]|training process:|Saving checkpoint at step|Traceback|Error|Exception|OOM|out of memory" -S "${LOG_PATH}" | tail -n 40 || true
 echo "--- tail (raw) ---"
 tail -n 60 "${LOG_PATH}" || true
-

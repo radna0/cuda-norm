@@ -75,10 +75,25 @@ def main() -> None:
     ap.add_argument("--blocks", type=int, default=32, help="How many verify blocks to run in the bench loop.")
     ap.add_argument("--warmup-blocks", type=int, default=2, help="Warmup blocks (excluded from timing) to amortize JIT.")
     ap.add_argument("--debug", action="store_true", help="Print per-block accept_len and token IDs (slow).")
+    ap.add_argument(
+        "--draft-mode",
+        default="ctx_kv",
+        choices=["ctx_kv", "direct_window"],
+        help=(
+            "Draft execution mode. "
+            "'ctx_kv' caches draft ctx KV and appends committed tokens (ctx length grows). "
+            "'direct_window' recomputes draft(...) each block on a fixed ctx_len sliding window (cache/training parity)."
+        ),
+    )
     ap.add_argument("--prefill-chunk", type=int, default=256)
-    ap.add_argument("--page-size", type=int, default=128)
+    ap.add_argument("--page-size", type=int, default=32)
     ap.add_argument("--hbm-utilization", type=float, default=0.20)
-    ap.add_argument("--max-model-len", type=int, default=8192)
+    ap.add_argument(
+        "--max-model-len",
+        type=int,
+        default=0,
+        help="0 auto-sets to ctx_len_full + (block_size-1) to match cache builder.",
+    )
     args = ap.parse_args()
 
     repo_root = Path(__file__).resolve().parents[1]
@@ -172,6 +187,11 @@ def main() -> None:
     mesh = teacher.mesh
     empty_sharding = jax.NamedSharding(mesh, jax.sharding.PartitionSpec())
     max_model_len = int(args.max_model_len)
+    if max_model_len <= 0:
+        # Match the cache builder's SequenceBuffer sizing:
+        # max_model_len = ctx_len_full + (block_size-1).
+        ctx_len_full = int(meta.get("ctx_len_full", int(ctx_len) + 1))
+        max_model_len = int(ctx_len_full + max(1, int(block_size) - 1))
 
     text_cfg = teacher.config.get_text_config()
     vocab_size = int(text_cfg.vocab_size)
@@ -276,15 +296,20 @@ def main() -> None:
     # Draft ctx KV from cached ctx features.
     with mesh:
         ctx_feat_dev_full = jnp.asarray(ctx_feat, dtype=jnp.bfloat16)
-        ctx_hidden = draft.project_context_features(ctx_feat_dev_full)
-        # IMPORTANT: draft attention currently operates over the full allocated
-        # ctx-KV buffer length. Keep this buffer as small as possible for the
-        # benchmark (enough for ctx + a few blocks), otherwise we pay O(max_len)
-        # attention cost even when ctx_len is small.
-        draft_need = int(ctx_len + int(block_size) * (int(args.blocks) + int(args.warmup_blocks) + 8))
-        draft_max_len = int(min(int(max_model_len + int(block_size)), max(int(ctx_len), draft_need)))
-        ctx_kv = materialize_draft_ctx_kv(draft=draft, rope=rope, ctx_hidden=ctx_hidden, max_len=int(draft_max_len))
-        jax.block_until_ready(ctx_kv.k_full[0])
+        ctx_feat_win = ctx_feat_dev_full
+        ctx_kv = None
+        if str(args.draft_mode) == "ctx_kv":
+            ctx_hidden = draft.project_context_features(ctx_feat_dev_full)
+            # IMPORTANT: draft attention currently operates over the full allocated
+            # ctx-KV buffer length. Keep this buffer as small as possible for the
+            # benchmark (enough for ctx + a few blocks), otherwise we pay O(max_len)
+            # attention cost even when ctx_len is small.
+            draft_need = int(ctx_len + int(block_size) * (int(args.blocks) + int(args.warmup_blocks) + 8))
+            draft_max_len = int(min(int(max_model_len + int(block_size)), max(int(ctx_len), draft_need)))
+            ctx_kv = materialize_draft_ctx_kv(
+                draft=draft, rope=rope, ctx_hidden=ctx_hidden, max_len=int(draft_max_len)
+            )
+            jax.block_until_ready(ctx_kv.k_full[0])
 
     # ---- DFlash loop ----
     active_mask_full_cpu[:] = False
@@ -292,19 +317,26 @@ def main() -> None:
     scheduled_full_cpu[:] = 0
 
     def _dflash_one_block() -> tuple[int, int]:
-        nonlocal ctx_kv, input_ids_buf, position_ids_buf
+        nonlocal ctx_kv, ctx_feat_win, input_ids_buf, position_ids_buf
         base_len = int(seqbuf.num_computed_tokens[0])
         cur_id = int(seqbuf.token_ids[0, base_len])
         with mesh:
             anchor_emb = teacher.get_embedding()(jnp.asarray([[cur_id]], dtype=jnp.int32))[:, 0, :]
-            d_hidden = draft_forward_with_ctx_kv(
-                draft=draft,
-                rope=rope,
-                cache=ctx_kv,
-                anchor_embedding=anchor_emb.astype(jnp.bfloat16),
-                mask_embedding=draft.mask_embedding.value.astype(jnp.bfloat16),
-                block_size=int(block_size),
-            )
+            if str(args.draft_mode) == "ctx_kv":
+                d_hidden = draft_forward_with_ctx_kv(
+                    draft=draft,
+                    rope=rope,
+                    cache=ctx_kv,
+                    anchor_embedding=anchor_emb.astype(jnp.bfloat16),
+                    mask_embedding=draft.mask_embedding.value.astype(jnp.bfloat16),
+                    block_size=int(block_size),
+                )
+            else:
+                d_hidden = draft(
+                    context_features=ctx_feat_win,
+                    anchor_embedding=anchor_emb.astype(jnp.bfloat16),
+                    rope=rope,
+                )
             hs_d = d_hidden[:, 1:, :]
             d_logits = _lm_head_logits(hidden=hs_d.astype(jnp.bfloat16), lm_head=teacher.get_lm_head())
             draft_tokens = jnp.argmax(d_logits, axis=-1).astype(jnp.int32)[0]
@@ -361,9 +393,14 @@ def main() -> None:
                 d2_tok = jnp.argmax(d2_logits, axis=-1).astype(jnp.int32)[0]
                 print(f"[debug] direct-next cand1..3={np.asarray(jax.device_get(d2_tok))[:3].tolist()}", flush=True)
         with mesh:
-            new_ctx_hidden = draft.project_context_features(ctx_commit_feat)
-            ctx_kv = append_draft_ctx_kv(draft=draft, rope=rope, cache=ctx_kv, new_ctx_hidden=new_ctx_hidden)
-            jax.block_until_ready(ctx_kv.k_full[0])
+            if str(args.draft_mode) == "ctx_kv":
+                new_ctx_hidden = draft.project_context_features(ctx_commit_feat)
+                ctx_kv = append_draft_ctx_kv(draft=draft, rope=rope, cache=ctx_kv, new_ctx_hidden=new_ctx_hidden)
+                jax.block_until_ready(ctx_kv.k_full[0])
+            else:
+                ctx_feat_win = jnp.concatenate([ctx_feat_win, ctx_commit_feat], axis=1)
+                ctx_feat_win = ctx_feat_win[:, -int(ctx_len) :, :]
+                jax.block_until_ready(ctx_feat_win)
 
         seqbuf.num_computed_tokens[0] = int(base_len + keep)
         seqbuf.token_ids[0, int(base_len + keep)] = np.int32(jnp.asarray(bonus)[0])
@@ -390,11 +427,15 @@ def main() -> None:
     seqbuf.min_p[0] = 0.0
     _prefill_from_scratch()
     with mesh:
-        ctx_hidden = draft.project_context_features(jnp.asarray(ctx_feat, dtype=jnp.bfloat16))
-        draft_need = int(ctx_len + int(block_size) * (int(args.blocks) + 8))
-        draft_max_len = int(min(int(max_model_len + int(block_size)), max(int(ctx_len), draft_need)))
-        ctx_kv = materialize_draft_ctx_kv(draft=draft, rope=rope, ctx_hidden=ctx_hidden, max_len=int(draft_max_len))
-        jax.block_until_ready(ctx_kv.k_full[0])
+        ctx_feat_dev_full = jnp.asarray(ctx_feat, dtype=jnp.bfloat16)
+        ctx_feat_win = ctx_feat_dev_full
+        ctx_kv = None
+        if str(args.draft_mode) == "ctx_kv":
+            ctx_hidden = draft.project_context_features(ctx_feat_dev_full)
+            draft_need = int(ctx_len + int(block_size) * (int(args.blocks) + 8))
+            draft_max_len = int(min(int(max_model_len + int(block_size)), max(int(ctx_len), draft_need)))
+            ctx_kv = materialize_draft_ctx_kv(draft=draft, rope=rope, ctx_hidden=ctx_hidden, max_len=int(draft_max_len))
+            jax.block_until_ready(ctx_kv.k_full[0])
 
     dflash_tokens = 0
     accept_lens: list[int] = []

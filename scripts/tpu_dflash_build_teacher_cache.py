@@ -396,6 +396,7 @@ def main() -> None:
         ctx_ids = input_ids[i, :ctx_len].astype(np.int32)  # [ctx_len]
         anchor_id = int(input_ids[i, ctx_len])
 
+        block_t0 = time.time()
         for step_idx in range(int(rollout_steps)):
             # Generate one training sample for this (ctx_ids, anchor_id) state.
             tgt = np.empty((int(block_size - 1),), dtype=np.int32)
@@ -560,6 +561,19 @@ def main() -> None:
             hist = np.concatenate([ctx_ids, np.asarray([anchor_id], dtype=np.int32), tgt_verify], axis=0)
             ctx_ids = hist[-int(ctx_len) :].astype(np.int32)
             anchor_id = int(bonus_next)
+
+            # Heartbeat for long rollouts: print a stable progress line without spamming.
+            if (step_idx + 1) % 8 == 0 or (step_idx + 1) == int(rollout_steps):
+                elapsed = max(1e-6, float(time.time() - block_t0))
+                done_steps = int(step_idx + 1)
+                total_steps = int(rollout_steps)
+                rate = float(done_steps) / float(elapsed)
+                remaining_s = float(total_steps - done_steps) / max(1e-9, rate)
+                print(
+                    f"[cache] block={i + 1}/{n} rollout={done_steps}/{total_steps} "
+                    f"(out={out_pos}/{n_out}) rate={rate:.2f} steps/s eta={remaining_s:.0f}s",
+                    flush=True,
+                )
 
         if (i + 1) % 1 == 0:
             print(f"[cache] {i + 1}/{n} (out={out_pos}/{n_out})", flush=True)
