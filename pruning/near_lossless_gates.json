@@ -1,0 +1,18 @@
+{
+  "version": 1,
+  "name": "near-lossless-v1",
+  "primary_pack": "UNION",
+  "primary_seq_lens": ["1024", "2048"],
+  "notes": [
+    "These gates are intentionally strict: pruning must not measurably degrade quality on curated calib packs.",
+    "We evaluate completion-only PPL + EAFT confident-conflict deltas and distribution shift (JS2D) on the packed regime."
+  ],
+  "thresholds": {
+    "max_rel_delta_ppl": 0.05,
+    "max_abs_delta_ppl": 0.25,
+    "max_abs_delta_cc_rate": 0.002,
+    "max_abs_delta_mean_prob": 0.02,
+    "max_js2d": 0.02
+  }
+}
+

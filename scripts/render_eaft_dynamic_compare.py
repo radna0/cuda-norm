@@ -24,6 +24,16 @@ def _load_one(path: Path) -> dict:
     return {"model_id": str(model_id), "run_id": str(run_id), "meta": meta, "packs": packs}
 
 
+def _load_gates() -> dict:
+    gates_path = Path(__file__).resolve().parents[1] / "pruning" / "near_lossless_gates.json"
+    if not gates_path.exists():
+        return {}
+    try:
+        return json.loads(gates_path.read_text(encoding="utf-8"))
+    except Exception:
+        return {}
+
+
 def _merge_runs(paths: list[Path]) -> dict:
     models = {}
     meta_ref = None
@@ -36,6 +46,7 @@ def _merge_runs(paths: list[Path]) -> dict:
         if meta_ref is None:
             meta_ref = d["meta"]
     meta_ref = meta_ref or {}
+    gates = _load_gates()
     # union packs + seq_lens across models
     pack_names = sorted({pack for m in models.values() for pack in m["packs"].keys()})
     seq_lens = sorted({seq for m in models.values() for pack in m["packs"].values() for seq in pack.keys()}, key=lambda x: int(x))
@@ -43,6 +54,7 @@ def _merge_runs(paths: list[Path]) -> dict:
         "meta": {
             "dataset_repo": meta_ref.get("dataset_repo", ""),
             "pack_files": meta_ref.get("pack_files", []),
+            "top_k": meta_ref.get("top_k", meta_ref.get("topK", "")),
             "axes": meta_ref.get("axes", {"x": "p_t", "y": "H_topK/ln(K)"}),
             "prob_scale": meta_ref.get("prob_scale", "linear"),
             "x_min": meta_ref.get("x_min", 0.0),
@@ -51,6 +63,7 @@ def _merge_runs(paths: list[Path]) -> dict:
             "cc_quantile": meta_ref.get("cc_quantile", 0.15),
             "seq_lens": seq_lens,
             "pack_names": pack_names,
+            "gates": gates,
         },
         "models": models,
     }
@@ -1553,9 +1566,24 @@ def _render_html(payload: dict) -> str:
       const deltaCC = rightCC - leftCC;
       const deltaMeanP = right.mean_prob - left.mean_prob;
       const js2d = jsDivergence(left.hist2d_x_H.counts, right.hist2d_x_H.counts);
+
+      // Near-lossless gate (strict pass/fail).
+      const gates = (DATA.meta && DATA.meta.gates) ? DATA.meta.gates : null;
+      const thr = (gates && gates.thresholds) ? gates.thresholds : null;
+      let gatePass = null;
+      let gateWhy = "";
+      if (thr) {{
+        const relOk = Math.abs(deltaPpl) <= Math.max(Number(thr.max_abs_delta_ppl || 0), Math.abs(left.ppl) * Number(thr.max_rel_delta_ppl || 0));
+        const ccOk = Math.abs(deltaCC) <= Number(thr.max_abs_delta_cc_rate || 0);
+        const mpOk = Math.abs(deltaMeanP) <= Number(thr.max_abs_delta_mean_prob || 0);
+        const jsOk = js2d <= Number(thr.max_js2d || 0);
+        gatePass = relOk && ccOk && mpOk && jsOk;
+        gateWhy = `ΔPPL<=max(abs=${thr.max_abs_delta_ppl}, rel=${thr.max_rel_delta_ppl}) & |ΔCC|<=${thr.max_abs_delta_cc_rate} & |Δmean_p|<=${thr.max_abs_delta_mean_prob} & JS2D<=${thr.max_js2d}`;
+      }}
       const winner = (deltaPpl < 0 && deltaCC < 0 && js2d < 0.02 && deltaMeanP > 0) ? "RIGHT better" :
                      (deltaPpl > 0 && deltaCC > 0 && js2d > 0.02 && deltaMeanP < 0) ? "LEFT better" : "MIXED";
       const hero = [
+        ...(gatePass === null ? [] : [{{ label: "Near‑Lossless Gate", value: gatePass ? "PASS" : "FAIL", sub: gateWhy, cls: gatePass ? "good" : "bad" }}]),
         {{ label: "Winner", value: winner, sub: "based on ΔPPL + ΔCC + JS2D + Δmean_p", cls: winner === "RIGHT better" ? "good" : (winner === "LEFT better" ? "bad" : "") }},
         {{ label: "ΔPPL", value: fmtSigned(deltaPpl,3), sub: `right - left (${fmtSigned(deltaPplPct,1)}%)`, cls: deltaPpl > 0 ? "bad" : "good" }},
         {{ label: "ΔCC (pp)", value: fmtSigned(deltaCC*100,2), sub: "right - left (left thresholds)", cls: deltaCC > 0 ? "bad" : "good" }},

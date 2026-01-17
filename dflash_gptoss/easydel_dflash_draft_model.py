@@ -18,6 +18,10 @@ class DFlashDraftModelConfig:
     rms_norm_eps: float
     block_size: int
     num_context_features: int
+    # Required for parity between training cache and inference-time verification.
+    # Stored in config.json inside EasyDeL run-* checkpoints.
+    target_layer_ids: list[int] | None = None
+    add_one_for_pre_layer_capture: bool = True
     qk_norm: bool = True
     remat: bool = True
 
@@ -98,13 +102,20 @@ class DFlashDraftModel(nnx.Module):
             self.layers.append(_DFlashBlock(cfg, rngs=rngs))
         self.final_norm = nnx.RMSNorm(int(cfg.hidden_size), epsilon=float(cfg.rms_norm_eps), rngs=rngs)
 
+    def project_context_features(self, context_features):
+        """Project raw context features into draft hidden space.
+
+        context_features: [B, ctx, K*hidden] -> ctx_hidden: [B, ctx, hidden]
+        """
+        return self.hidden_norm(self.fc(context_features))
+
     def __call__(self, *, context_features, anchor_embedding, rope):
         import jax.numpy as jnp
 
         c = self.cfg
         b = int(anchor_embedding.shape[0])
 
-        ctx = self.hidden_norm(self.fc(context_features))
+        ctx = self.project_context_features(context_features)
 
         # token0 = anchor, token1..B-1 = mask embedding
         mask = jnp.broadcast_to(
@@ -148,6 +159,88 @@ class _DFlashAttention(nnx.Module):
         self.k_proj = nnx.Linear(int(c.hidden_size), int(c.num_key_value_heads) * int(c.head_dim), use_bias=True, rngs=rngs)
         self.v_proj = nnx.Linear(int(c.hidden_size), int(c.num_key_value_heads) * int(c.head_dim), use_bias=True, rngs=rngs)
         self.o_proj = nnx.Linear(int(c.num_attention_heads) * int(c.head_dim), int(c.hidden_size), use_bias=True, rngs=rngs)
+
+    def materialize_ctx_kv(self, *, rope, ctx_hidden):
+        """Precompute K/V for ctx tokens for this layer.
+
+        Returns:
+          k_full_ctx: [B, ctx, H, D] (repeated to full heads, RoPE + optional qk_norm applied)
+          v_full_ctx: [B, ctx, H, D] (repeated to full heads)
+        """
+        import jax.numpy as jnp
+
+        c = self.cfg
+        ctx_len = int(ctx_hidden.shape[1])
+        k_ctx = _split_heads(self.k_proj(ctx_hidden), int(c.num_key_value_heads), int(c.head_dim))
+        v_ctx = _split_heads(self.v_proj(ctx_hidden), int(c.num_key_value_heads), int(c.head_dim))
+
+        pos_ctx = jnp.arange(ctx_len, dtype=jnp.int32)[None, :]
+        # Apply RoPE to keys only by passing k as both q and k.
+        _, k_ctx_rope = rope(pos_ctx, k_ctx, k_ctx)
+        if bool(c.qk_norm):
+            k_ctx_rope = _per_head_rms_norm(k_ctx_rope, eps=float(c.rms_norm_eps))
+
+        rep = int(c.num_attention_heads) // int(c.num_key_value_heads)
+        k_full_ctx = _repeat_kv(k_ctx_rope, rep)
+        v_full_ctx = _repeat_kv(v_ctx, rep)
+        return k_full_ctx, v_full_ctx
+
+    def append_ctx_kv(self, *, rope, ctx_k_full, ctx_v_full, new_ctx_hidden, start_pos: int):
+        """Append new ctx tokens to an existing ctx KV cache for this layer."""
+        import jax.numpy as jnp
+
+        c = self.cfg
+        n_new = int(new_ctx_hidden.shape[1])
+        if n_new <= 0:
+            return ctx_k_full, ctx_v_full
+
+        k_new = _split_heads(self.k_proj(new_ctx_hidden), int(c.num_key_value_heads), int(c.head_dim))
+        v_new = _split_heads(self.v_proj(new_ctx_hidden), int(c.num_key_value_heads), int(c.head_dim))
+
+        pos_new = (jnp.arange(n_new, dtype=jnp.int32) + int(start_pos))[None, :]
+        _, k_new_rope = rope(pos_new, k_new, k_new)
+        if bool(c.qk_norm):
+            k_new_rope = _per_head_rms_norm(k_new_rope, eps=float(c.rms_norm_eps))
+
+        rep = int(c.num_attention_heads) // int(c.num_key_value_heads)
+        k_new_full = _repeat_kv(k_new_rope, rep)
+        v_new_full = _repeat_kv(v_new, rep)
+        return jnp.concatenate([ctx_k_full, k_new_full], axis=1), jnp.concatenate([ctx_v_full, v_new_full], axis=1)
+
+    def forward_with_ctx_kv(self, *, rope, ctx_k_full, ctx_v_full, noise_hidden):
+        """Compute attention for the draft block using pre-materialized ctx KV."""
+        import jax
+        import jax.numpy as jnp
+
+        c = self.cfg
+        ctx_len = int(ctx_k_full.shape[1])
+        q_len = int(noise_hidden.shape[1])
+
+        q = _split_heads(self.q_proj(noise_hidden), int(c.num_attention_heads), int(c.head_dim))
+        k_noise = _split_heads(self.k_proj(noise_hidden), int(c.num_key_value_heads), int(c.head_dim))
+        v_noise = _split_heads(self.v_proj(noise_hidden), int(c.num_key_value_heads), int(c.head_dim))
+
+        pos = (jnp.arange(q_len, dtype=jnp.int32) + ctx_len)[None, :]
+        q_rope, _ = rope(pos, q, q)
+        _, k_noise_rope = rope(pos, k_noise, k_noise)
+
+        if bool(c.qk_norm):
+            q_rope = _per_head_rms_norm(q_rope, eps=float(c.rms_norm_eps))
+            k_noise_rope = _per_head_rms_norm(k_noise_rope, eps=float(c.rms_norm_eps))
+
+        rep = int(c.num_attention_heads) // int(c.num_key_value_heads)
+        k_noise_full = _repeat_kv(k_noise_rope, rep)
+        v_noise_full = _repeat_kv(v_noise, rep)
+
+        k_all = jnp.concatenate([ctx_k_full, k_noise_full], axis=1)
+        v_all = jnp.concatenate([ctx_v_full, v_noise_full], axis=1)
+
+        scale = float(int(c.head_dim) ** -0.5)
+        attn = jnp.einsum("bqhd,bkhd->bhqk", q_rope, k_all, precision=jax.lax.Precision.HIGHEST) * scale
+        attn = attn - jnp.max(attn, axis=-1, keepdims=True)
+        probs = jax.nn.softmax(attn, axis=-1)
+        out = jnp.einsum("bhqk,bkhd->bqhd", probs, v_all, precision=jax.lax.Precision.HIGHEST)
+        return self.o_proj(_merge_heads(out))
 
     def __call__(self, *, rope, ctx_hidden, noise_hidden):
         import jax
@@ -215,5 +308,28 @@ class _DFlashBlock(nnx.Module):
     def __call__(self, *, rope, ctx_hidden, noise_hidden):
         x = noise_hidden
         x = x + self.attn(rope=rope, ctx_hidden=ctx_hidden, noise_hidden=self.in_norm(x))
+        x = x + self.mlp(self.post_norm(x))
+        return x
+
+    def materialize_ctx_kv(self, *, rope, ctx_hidden):
+        return self.attn.materialize_ctx_kv(rope=rope, ctx_hidden=ctx_hidden)
+
+    def append_ctx_kv(self, *, rope, ctx_k_full, ctx_v_full, new_ctx_hidden, start_pos: int):
+        return self.attn.append_ctx_kv(
+            rope=rope,
+            ctx_k_full=ctx_k_full,
+            ctx_v_full=ctx_v_full,
+            new_ctx_hidden=new_ctx_hidden,
+            start_pos=start_pos,
+        )
+
+    def forward_with_ctx_kv(self, *, rope, ctx_k_full, ctx_v_full, noise_hidden):
+        x = noise_hidden
+        x = x + self.attn.forward_with_ctx_kv(
+            rope=rope,
+            ctx_k_full=ctx_k_full,
+            ctx_v_full=ctx_v_full,
+            noise_hidden=self.in_norm(x),
+        )
         x = x + self.mlp(self.post_norm(x))
         return x

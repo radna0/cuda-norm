@@ -18,13 +18,15 @@ TRAIN_PY="${ROOT}/harmony/cuda-norm/scripts/tpu_dflash_train_with_easydel_traine
 : "${RUN_NAME:=dflash_run}"
 
 LOG_DIR="${ROOT}/harmony/cuda-norm/logs/tpu_dflash"
-CKPT_DIR="${ROOT}/harmony/cuda-norm/checkpoints"
+# Always checkpoint to /dev/shm (requested) to avoid root-FS pressure and to
+# maximize checkpoint write throughput.
+CKPT_DIR="${CKPT_DIR:-/dev/shm/dflash-checkpoints}"
 mkdir -p "${LOG_DIR}" "${CKPT_DIR}"
 
 export HF_HOME="${HF_HOME:-/dev/shm/hf}"
 export HF_HUB_CACHE="${HF_HUB_CACHE:-/dev/shm/hf/hub}"
 export XDG_CACHE_HOME="${XDG_CACHE_HOME:-/dev/shm/xdg}"
-export JAX_COMPILATION_CACHE_DIR="${JAX_COMPILATION_CACHE_DIR:-/dev/shm/jax_compilation_cache_dflash}"
+export JAX_COMPILATION_CACHE_DIR="${JAX_COMPILATION_CACHE_DIR:-/dev/shm/jax_compilation_cache_dflash/${RUN_NAME}}"
 export TMPDIR="${TMPDIR:-/dev/shm/tmp}"
 mkdir -p "${HF_HOME}" "${HF_HUB_CACHE}" "${XDG_CACHE_HOME}" "${JAX_COMPILATION_CACHE_DIR}" "${TMPDIR}"
 
@@ -49,7 +51,7 @@ QK_NORM="${QK_NORM:-true}"
 REMAT="${REMAT:-true}"
 
 set -x
-nohup "${VENV_PY}" "${TRAIN_PY}" \
+nohup "${VENV_PY}" -u "${TRAIN_PY}" \
   --cache-dir "${CACHE_DIR}" \
   --teacher-snapshot-dir "${TEACHER_SNAPSHOT}" \
   --save-directory "${CKPT_DIR}" \

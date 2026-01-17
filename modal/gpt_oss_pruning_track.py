@@ -20,6 +20,95 @@ import modal
 
 APP_NAME = "gpt-oss-pruning-track"
 
+_KAGGLE_WORKDIR = Path("/kaggle/working")
+
+
+def _default_pruning_cache_root() -> Path:
+    override = (os.environ.get("PRUNING_CACHE_ROOT") or "").strip()
+    if override:
+        return Path(override)
+    if _KAGGLE_WORKDIR.exists():
+        # Kaggle: /kaggle/working is only ~20GB; keep large artifacts in /tmp.
+        return Path("/tmp/harmony_pruning_cache")
+    return Path("/root")
+
+
+_PRUNING_CACHE_ROOT = _default_pruning_cache_root()
+_HF_HOME_DIR = Path(os.environ.get("PRUNING_HF_HOME", str(_PRUNING_CACHE_ROOT / "hf_cache")))
+_MODEL_DIR = Path(os.environ.get("PRUNING_MODEL_DIR", str(_PRUNING_CACHE_ROOT / "model")))
+_DATA_DIR = Path(os.environ.get("PRUNING_DATA_DIR", str(_PRUNING_CACHE_ROOT / "data")))
+_ARTIFACTS_DIR = Path(os.environ.get("PRUNING_ARTIFACTS_DIR", str(_MODEL_DIR / "artifacts")))
+
+
+def _ensure_transformers_sklearn_stub() -> None:
+    """
+    Kaggle images can ship a broken `scikit-learn` wheel (ABI mismatch vs NumPy),
+    which can crash `import transformers` even though we don't use sklearn.
+    Ensure `from sklearn.metrics import roc_curve` succeeds via a tiny stub.
+    """
+    try:
+        import sklearn  # noqa: F401
+
+        return
+    except Exception:
+        pass
+
+    # Put a minimal `sklearn` package on disk so spawned subprocesses can import it.
+    try:
+        stub_root = _KAGGLE_WORKDIR if _KAGGLE_WORKDIR.exists() else Path("/tmp/versa_sklearn_stub")
+        (stub_root / "sklearn" / "metrics").mkdir(parents=True, exist_ok=True)
+        (stub_root / "sklearn" / "__init__.py").write_text(
+            "'''Minimal sklearn stub to avoid ABI crashes (Kaggle).'''\n"
+            "__all__ = ['metrics']\n",
+            encoding="utf-8",
+        )
+        (stub_root / "sklearn" / "metrics" / "__init__.py").write_text(
+            "def roc_curve(*args, **kwargs):\n"
+            "    raise ImportError('sklearn is unavailable (stubbed).')\n",
+            encoding="utf-8",
+        )
+        prev = os.environ.get("PYTHONPATH", "")
+        stub_str = str(stub_root)
+        if prev:
+            parts = [p for p in prev.split(":") if p]
+            if stub_str not in parts:
+                os.environ["PYTHONPATH"] = stub_str + ":" + prev
+        else:
+            os.environ["PYTHONPATH"] = stub_str
+    except Exception:
+        pass
+
+    import sys
+    import types
+
+    import importlib.machinery
+
+    sklearn_mod = types.ModuleType("sklearn")
+    sklearn_mod.__path__ = []  # mark as package
+    sklearn_mod.__spec__ = importlib.machinery.ModuleSpec("sklearn", loader=None, is_package=True)
+    metrics_mod = types.ModuleType("sklearn.metrics")
+    metrics_mod.__spec__ = importlib.machinery.ModuleSpec("sklearn.metrics", loader=None, is_package=False)
+
+    def roc_curve(*_args: Any, **_kwargs: Any) -> None:
+        raise ImportError("sklearn is unavailable (stubbed).")
+
+    metrics_mod.roc_curve = roc_curve  # type: ignore[attr-defined]
+    sklearn_mod.metrics = metrics_mod  # type: ignore[attr-defined]
+    sys.modules["sklearn"] = sklearn_mod
+    sys.modules["sklearn.metrics"] = metrics_mod
+
+
+os.environ.setdefault("TRANSFORMERS_NO_TF", "1")
+os.environ.setdefault("TRANSFORMERS_NO_FLAX", "1")
+os.environ.setdefault("USE_TF", "0")
+os.environ.setdefault("USE_FLAX", "0")
+os.environ.setdefault("USE_JAX", "0")
+
+try:
+    _ensure_transformers_sklearn_stub()
+except Exception:
+    pass
+
 def _maybe_load_repo_dotenv() -> None:
     # Keep local runs reproducible without requiring manual `source .env` before
     # `modal run ...`. Never overrides already-set environment variables.
@@ -62,6 +151,15 @@ DEFAULT_MATH_TEXT_COLUMN = os.environ.get("MATH_TEXT_COLUMN", "text")
 
 DEFAULT_20B_MODEL_ID = os.environ.get("MODEL_ID_20B", "openai/gpt-oss-20b")
 DEFAULT_120B_MODEL_ID = os.environ.get("MODEL_ID_120B", "openai/gpt-oss-120b")
+DEFAULT_20B_MODEL_DIR = (os.environ.get("MODEL_DIR_20B") or "").strip()
+
+# Curated calibration packs (used for parity EAFT/PPL + recommended for pruning calibration).
+DEFAULT_CALIB_PACKS_REPO = os.environ.get("CALIB_PACKS_DATASET", "radna0/harmony-qwen3-calib-packs-v2-20260113")
+DEFAULT_CALIB_PACK_FILES = [
+    "packs/reasoning_style_10k_v2/reasoning_style_10k_v2.parquet",
+    "tool_agentic_10k_v6.parquet",
+    "packs/calib_prompt_10000_v2/calib_prompt_10000_v2.parquet",
+]
 
 _secrets = []
 if os.environ.get("HF_TOKEN"):
@@ -120,17 +218,42 @@ image_no_kernels = (
 
 app = modal.App(APP_NAME)
 
+def _local_mode_enabled() -> bool:
+    # When this file runs inside Kaggle (via Versa / remote Jupyter), we must
+    # not submit Modal jobs. Instead, execute Modal-decorated functions in-process
+    # via `.local()` so the exact same codepath runs on the Kaggle GPU/CPU.
+    flag = (os.environ.get("PRUNING_LOCAL_MODE") or "").strip().lower()
+    if flag in ("1", "true", "yes", "y"):
+        return True
+    try:
+        return _KAGGLE_WORKDIR.exists()
+    except Exception:
+        return False
+
+
+_PRUNING_LOCAL_MODE = _local_mode_enabled()
+
+
+def _invoke(fn: Any, *args: Any, **kwargs: Any) -> Any:
+    if _PRUNING_LOCAL_MODE and hasattr(fn, "local"):
+        return fn.local(*args, **kwargs)
+    return fn.remote(*args, **kwargs)
+
 
 def _ensure_hf_env() -> None:
-    os.environ.setdefault("HF_HOME", "/root/hf_cache")
-    os.environ.setdefault("XDG_CACHE_HOME", "/root/hf_cache/.cache")
+    os.environ.setdefault("HF_HOME", str(_HF_HOME_DIR))
+    os.environ.setdefault("XDG_CACHE_HOME", str(_HF_HOME_DIR / ".cache"))
     os.environ.setdefault("HF_HUB_ENABLE_HF_TRANSFER", "1")
+    # Xet can attempt to write logs under HF_HOME/xet/logs, which sometimes fails
+    # under volume mounts. We don't need Xet for this pruning track.
+    os.environ.setdefault("HF_HUB_DISABLE_XET", "1")
     os.environ.setdefault("TOKENIZERS_PARALLELISM", "false")
     for p in (
-        "/root/hf_cache",
-        "/root/hf_cache/.cache",
-        "/root/data",
-        "/root/model",
+        str(_HF_HOME_DIR),
+        str(_HF_HOME_DIR / ".cache"),
+        str(_DATA_DIR),
+        str(_MODEL_DIR),
+        str(_ARTIFACTS_DIR),
     ):
         try:
             Path(p).mkdir(parents=True, exist_ok=True)
@@ -158,11 +281,25 @@ def _snapshot_download_model(model_id: str) -> Path:
     _ensure_hf_env()
     token = _get_hf_token()
 
-    cache_dir = Path("/root/model/.hf_cache")
+    cache_dir = _MODEL_DIR / ".hf_cache"
     cache_dir.mkdir(parents=True, exist_ok=True)
+
+    # Kaggle/Versa: allow using a pre-mounted local model directory (no hub access).
+    # - If MODEL_DIR_20B is set and model_id matches the configured 20B ID, prefer it.
+    # - If `model_id` itself is a valid local path, accept it.
+    try:
+        if DEFAULT_20B_MODEL_DIR and str(model_id) == str(DEFAULT_20B_MODEL_ID):
+            p = Path(DEFAULT_20B_MODEL_DIR)
+            if (p / "config.json").exists():
+                return p
+        p2 = Path(str(model_id))
+        if p2.exists() and (p2 / "config.json").exists():
+            return p2
+    except Exception:
+        pass
     # Avoid re-downloading in GPU containers: if the model was already
     # predownloaded into the persistent volume, use it directly.
-    local_dir = Path("/root/model") / str(model_id)
+    local_dir = _MODEL_DIR / str(model_id)
     try:
         if local_dir.exists():
             probe = local_dir / "config.json"
@@ -177,7 +314,7 @@ def _snapshot_download_model(model_id: str) -> Path:
         token=token,
         resume_download=True,
     )
-    local_dir = Path("/root/model") / str(model_id)
+    local_dir = _MODEL_DIR / str(model_id)
     local_dir.parent.mkdir(parents=True, exist_ok=True)
     if local_dir.exists() and local_dir.is_symlink():
         return Path(local_dir.resolve())
@@ -216,6 +353,53 @@ def predownload_model(model_id: str) -> str:
     except Exception:
         pass
     return str(model_dir)
+
+
+@app.function(
+    image=image,
+    timeout=21600,
+    cpu=16.0,
+    memory=65536,
+    volumes={
+        "/root/data": data_volume,
+        "/root/hf_cache": hf_cache_volume,
+    },
+    secrets=_secrets,
+)
+def predownload_calib_packs_cpu(*, dataset_repo: str, pack_files: list[str]) -> dict[str, Any]:
+    """CPU-only: download calib pack parquet files into the HF cache volume."""
+    from huggingface_hub import hf_hub_download
+
+    _ensure_hf_env()
+    try:
+        data_volume.reload()
+        hf_cache_volume.reload()
+    except Exception:
+        pass
+
+    token = _get_hf_token()
+    repo = str(dataset_repo)
+    files = [str(p) for p in (pack_files or []) if str(p).strip()]
+    if not files:
+        raise ValueError("pack_files must be a non-empty list.")
+
+    paths: list[str] = []
+    for pf in files:
+        local = hf_hub_download(
+            repo_id=repo,
+            repo_type="dataset",
+            filename=str(pf),
+            token=token,
+        )
+        paths.append(str(local))
+
+    try:
+        hf_cache_volume.commit()
+        data_volume.commit()
+    except Exception:
+        pass
+
+    return {"dataset_repo": repo, "pack_files": files, "downloaded_paths": paths}
 
 
 @app.function(
@@ -358,13 +542,264 @@ def _load_rows_jsonl(path: str, *, limit: int | None = None) -> list[dict[str, A
     return out
 
 
-def _read_reap_saliency_mass_parquet(path: Path) -> dict[int, list[float]]:
+@app.function(
+    image=image,
+    timeout=21600,
+    cpu=16.0,
+    memory=65536,
+    volumes={
+        "/root/data": data_volume,
+        "/root/hf_cache": hf_cache_volume,
+    },
+    secrets=_secrets,
+)
+def sample_calib_packs_rows_cpu(
+    *,
+    dataset_repo: str,
+    pack_files: list[str],
+    text_column: str,
+    num_rows: int,
+    seed: int,
+    strategy: str = "per_file",
+) -> dict[str, Any]:
+    """
+    Deterministically sample `num_rows` rows from a set of parquet pack files in
+    a HF dataset repo.
+
+    Sampling strategies:
+    - per_file (default): allocate ~equal quota per pack file, then merge.
+      This prevents one pack dominating the pruning signal.
+    - global: a single global min-hash sample across all files.
+
+    Writes a JSONL file into the data volume and returns its path.
+    Each JSONL row has at least: {"text": <harmony packed str>, "source_file": <pack path>}.
+    """
+    import hashlib
+    import heapq
+    import math
+
+    import pyarrow.parquet as pq
+    from huggingface_hub import hf_hub_download
+
+    _ensure_hf_env()
+    try:
+        data_volume.reload()
+        hf_cache_volume.reload()
+    except Exception:
+        pass
+
+    token = _get_hf_token()
+    repo = str(dataset_repo)
+    files = [str(p) for p in (pack_files or []) if str(p).strip()]
+    if not files:
+        raise ValueError("pack_files must be a non-empty list.")
+
+    num_rows = int(num_rows)
+    if num_rows <= 0:
+        raise ValueError("num_rows must be > 0.")
+    seed = int(seed)
+    text_col = str(text_column or "text")
+    strategy = str(strategy or "per_file").strip().lower()
+    if strategy not in ("per_file", "global"):
+        raise ValueError("strategy must be one of: per_file, global")
+
+    # Keep a fixed-size "max heap" (implemented as a min-heap over negative scores).
+    # Include a numeric tiebreaker so Python never tries to compare dicts.
+    heap: list[tuple[int, int, dict[str, Any]]] = []
+    scanned = 0
+    kept = 0
+
+    def _score(s: str) -> int:
+        # Use a stable 64-bit score to select the smallest hashes.
+        h = hashlib.blake2b((str(seed) + "\n" + s).encode("utf-8"), digest_size=8).digest()
+        return int.from_bytes(h, "big", signed=False)
+
+    def _push(heap_ref: list[tuple[int, int, dict[str, Any]]], score: int, row: dict[str, Any], cap: int) -> None:
+        nonlocal kept
+        if len(heap_ref) < int(cap):
+            heapq.heappush(heap_ref, (-int(score), int(scanned), row))
+            kept += 1
+            return
+        worst_score = -heap_ref[0][0]
+        if int(score) < int(worst_score):
+            heapq.heapreplace(heap_ref, (-int(score), int(scanned), row))
+
+    # Compute a per-file cap for stratified sampling.
+    per_file_cap = int(num_rows)
+    if strategy == "per_file":
+        per_file_cap = int(math.ceil(float(num_rows) / float(len(files))))
+
+    # We keep small per-file heaps when stratifying, then merge into a global heap
+    # of size num_rows to enforce the exact requested count.
+    per_file_heaps: dict[str, list[tuple[int, int, dict[str, Any]]]] = {}
+
+    for pack_path in files:
+        local_path = hf_hub_download(
+            repo_id=repo,
+            repo_type="dataset",
+            filename=str(pack_path),
+            token=token,
+        )
+        pqf = pq.ParquetFile(local_path)
+        row_i = 0
+        for batch in pqf.iter_batches(batch_size=8192, columns=[text_col]):
+            col = batch.column(0)
+            for j in range(batch.num_rows):
+                scanned += 1
+                try:
+                    text = col[j].as_py()
+                except Exception:
+                    row_i += 1
+                    continue
+                if not isinstance(text, str) or not text.strip():
+                    row_i += 1
+                    continue
+                row = {"text": text, "source_file": str(pack_path), "row_i": int(row_i)}
+                score = _score(text)
+                if strategy == "global":
+                    _push(heap, score, row, cap=num_rows)
+                else:
+                    h = per_file_heaps.setdefault(str(pack_path), [])
+                    _push(h, score, row, cap=per_file_cap)
+                row_i += 1
+
+    if strategy == "per_file":
+        for pack_path, h in per_file_heaps.items():
+            for s, t, r in h:
+                # `s` is negative score (max-heap stored as min-heap), restore.
+                _push(heap, -int(s), r, cap=num_rows)
+
+    if len(heap) < num_rows:
+        raise RuntimeError(f"Only sampled {len(heap)} rows from calib packs; expected {num_rows}. scanned={scanned}")
+
+    # Sort by score asc for determinism.
+    out_rows = [r for _, _, r in sorted([(-s, t, r) for (s, t, r) in heap], key=lambda x: (x[0], x[1]))]
+    prompt_hash = hashlib.blake2b(
+        ("\n".join(r["text"][:512] for r in out_rows)).encode("utf-8"), digest_size=16
+    ).hexdigest()
+
+    out_dir = _DATA_DIR / "calib_packs_samples"
+    out_dir.mkdir(parents=True, exist_ok=True)
+    out_path = out_dir / f"calib_packs_sample_{prompt_hash}_n{num_rows}.jsonl"
+    with out_path.open("w", encoding="utf-8") as f:
+        for r in out_rows:
+            f.write(json.dumps(r, ensure_ascii=False) + "\n")
+
+    try:
+        data_volume.commit()
+        hf_cache_volume.commit()
+    except Exception:
+        pass
+
+    return {
+        "rows_jsonl_path": str(out_path),
+        "dataset_repo": repo,
+        "pack_files": files,
+        "text_column": text_col,
+        "num_rows": num_rows,
+        "seed": seed,
+        "strategy": strategy,
+        "scanned": int(scanned),
+        "prompt_hash": str(prompt_hash),
+    }
+
+
+def _compute_layer_neff(mass: list[float]) -> float:
+    # Effective number of experts (inverse Simpson index).
+    s = float(sum(float(x) for x in mass)) or 0.0
+    if s <= 0:
+        return 0.0
+    p2 = 0.0
+    for x in mass:
+        px = float(x) / s
+        p2 += px * px
+    return float((1.0 / max(1e-12, p2)))
+
+
+def _budgeted_keep_counts(
+    *,
+    mass_by_layer: list[list[float]],
+    num_experts: int,
+    keep_frac: float,
+    min_keep: int,
+    max_keep: int,
+) -> list[int]:
+    """
+    Allocate a global keep budget across layers (no finetune) based on how
+    "spread" saliency mass is within each layer.
+
+    Output: keep_n per layer such that sum(keep_n) == round(keep_frac * L * E)
+    with per-layer clamps [min_keep, max_keep].
+    """
+    L = len(mass_by_layer)
+    if L <= 0:
+        raise ValueError("mass_by_layer is empty")
+    E = int(num_experts)
+    if E <= 0:
+        raise ValueError("num_experts must be > 0")
+    keep_frac = float(keep_frac)
+    if not (0.0 < keep_frac <= 1.0):
+        raise ValueError("keep_frac must be in (0,1]")
+
+    min_keep = max(1, min(int(min_keep), E))
+    max_keep = max(min_keep, min(int(max_keep), E))
+
+    budget = int(round(keep_frac * float(L * E)))
+    budget = max(L * min_keep, min(L * max_keep, budget))
+
+    neffs = [max(1e-6, _compute_layer_neff(m)) for m in mass_by_layer]
+    mean_neff = float(sum(neffs)) / float(max(1, L))
+
+    # Start near uniform, then scale by neff ratio.
+    base = float(budget) / float(L)
+    raw = []
+    for neff in neffs:
+        scale = float(neff) / max(1e-6, mean_neff)
+        raw.append(base * scale)
+
+    # Round + clamp, then fix sum by distributing deltas deterministically.
+    keep = [max(min_keep, min(max_keep, int(round(x)))) for x in raw]
+    cur = sum(keep)
+    if cur == budget:
+        return keep
+
+    # Order layers by neff descending: add extra experts to the most spread layers first,
+    # and remove from the most concentrated layers first.
+    order_add = sorted(range(L), key=lambda i: neffs[i], reverse=True)
+    order_sub = sorted(range(L), key=lambda i: neffs[i], reverse=False)
+
+    if cur < budget:
+        need = budget - cur
+        i = 0
+        while need > 0 and i < 10_000:
+            li = order_add[i % L]
+            if keep[li] < max_keep:
+                keep[li] += 1
+                need -= 1
+            i += 1
+    else:
+        need = cur - budget
+        i = 0
+        while need > 0 and i < 10_000:
+            li = order_sub[i % L]
+            if keep[li] > min_keep:
+                keep[li] -= 1
+                need -= 1
+            i += 1
+
+    if sum(keep) != budget:
+        raise RuntimeError(f"budgeting failed: got {sum(keep)} expected {budget}")
+    return keep
+
+
+def _read_reap_saliency_mass_parquet(path: Path, *, mass_column: str = "gate_norm_sum") -> dict[int, list[float]]:
     import pyarrow.parquet as pq
 
-    table = pq.read_table(str(path), columns=["layer", "expert", "gate_norm_sum"])
+    mass_col = str(mass_column or "gate_norm_sum")
+    table = pq.read_table(str(path), columns=["layer", "expert", mass_col])
     layers = table.column("layer").to_pylist()
     experts = table.column("expert").to_pylist()
-    masses = table.column("gate_norm_sum").to_pylist()
+    masses = table.column(mass_col).to_pylist()
     by_layer: dict[int, dict[int, float]] = {}
     max_expert = 0
     for li, ei, mi in zip(layers, experts, masses):
@@ -380,6 +815,54 @@ def _read_reap_saliency_mass_parquet(path: Path) -> dict[int, list[float]]:
                 vec[int(e)] = float(m)
         out[int(li)] = vec
     return out
+
+
+def _core_experts_from_eaft_parquet(
+    path: Path,
+    *,
+    num_layers: int,
+    num_experts: int,
+    pos_top_m: int,
+    count_top_m: int = 0,
+) -> list[list[int]]:
+    """
+    Build a conservative per-layer "always keep" core from EAFT-REAP profiling.
+
+    We intentionally base this on *positive* contribution mass (pos_gate_norm_sum)
+    and optionally raw selection count, so we don't accidentally prune experts
+    that are important on easy / high-confidence tokens.
+    """
+    import pyarrow.parquet as pq
+
+    pos_top_m = max(0, min(int(pos_top_m), int(num_experts)))
+    count_top_m = max(0, min(int(count_top_m), int(num_experts)))
+    if pos_top_m == 0 and count_top_m == 0:
+        return [[] for _ in range(int(num_layers))]
+
+    table = pq.read_table(str(path), columns=["layer", "expert", "pos_gate_norm_sum", "count"])
+    layers = table.column("layer").to_pylist()
+    experts = table.column("expert").to_pylist()
+    pos_mass = table.column("pos_gate_norm_sum").to_pylist()
+    counts = table.column("count").to_pylist()
+
+    by_layer: dict[int, list[tuple[int, float, int]]] = {}
+    for li, ei, pm, c in zip(layers, experts, pos_mass, counts):
+        by_layer.setdefault(int(li), []).append((int(ei), float(pm), int(c)))
+
+    core: list[list[int]] = []
+    for li in range(int(num_layers)):
+        rows = by_layer.get(int(li), [])
+        core_set: set[int] = set()
+        if pos_top_m > 0:
+            for e, _, _ in sorted(rows, key=lambda t: t[1], reverse=True)[:pos_top_m]:
+                if 0 <= int(e) < int(num_experts):
+                    core_set.add(int(e))
+        if count_top_m > 0:
+            for e, _, _ in sorted(rows, key=lambda t: t[2], reverse=True)[:count_top_m]:
+                if 0 <= int(e) < int(num_experts):
+                    core_set.add(int(e))
+        core.append(sorted(core_set))
+    return core
 
 
 def _coverage_set(mass: list[float], cov: float) -> list[int]:
@@ -1034,7 +1517,7 @@ def sample_domain_rows_cpu(
         + ("\n".join(r["text"] for r in selected)).encode("utf-8", errors="ignore")
     ).hexdigest()
 
-    out_dir = Path("/root/data/reap_domain_samples") / str(dataset_id).replace("/", "__") / str(dataset_split)
+    out_dir = _DATA_DIR / "reap_domain_samples" / str(dataset_id).replace("/", "__") / str(dataset_split)
     out_dir.mkdir(parents=True, exist_ok=True)
     dom_safe = "".join(ch if ch.isalnum() or ch in ("-", "_") else "_" for ch in (dom or "all"))
     out_path = out_dir / f"{dom_safe}_seed{seed}_n{num_rows}.jsonl"
@@ -2346,23 +2829,34 @@ def structural_prune_20b_build(
 
     t0 = time.time()
 
+    snapshot_dir = _snapshot_download_model(model_id)
     # NOTE: We previously symlinked snapshot files into the pruned output dir and
     # then overwrote `config.json` / `model.safetensors.index.json`, which can
     # mutate the underlying HF snapshot via symlink-following writes.
-    # Force-refresh these small metadata files before we proceed.
-    token = _get_hf_token()
-    cache_dir = Path("/root/model/.hf_cache")
-    for fname in ("config.json", "model.safetensors.index.json"):
-        hf_hub_download(
-            repo_id=str(model_id),
-            repo_type="model",
-            filename=fname,
-            cache_dir=str(cache_dir),
-            token=token,
-            force_download=True,
-        )
+    #
+    # If we are using an on-disk model override (Kaggle inputs, local mirror),
+    # do NOT call the Hub at all.
+    using_local_override = False
+    try:
+        if DEFAULT_20B_MODEL_DIR and str(model_id) == str(DEFAULT_20B_MODEL_ID):
+            using_local_override = Path(DEFAULT_20B_MODEL_DIR).resolve() == snapshot_dir.resolve()
+        if Path(str(model_id)).exists():
+            using_local_override = True
+    except Exception:
+        using_local_override = False
 
-    snapshot_dir = _snapshot_download_model(model_id)
+    if not using_local_override:
+        token = _get_hf_token()
+        cache_dir = _MODEL_DIR / ".hf_cache"
+        for fname in ("config.json", "model.safetensors.index.json"):
+            hf_hub_download(
+                repo_id=str(model_id),
+                repo_type="model",
+                filename=fname,
+                cache_dir=str(cache_dir),
+                token=token,
+                force_download=True,
+            )
     idx_path = snapshot_dir / "model.safetensors.index.json"
     if not idx_path.exists():
         raise RuntimeError(f"Missing safetensors index at {idx_path}")
@@ -2392,7 +2886,7 @@ def structural_prune_20b_build(
         if len(keep_experts_by_layer[li]) != keep_n:
             raise ValueError("All layers must keep the same number of experts.")
 
-    out_dir = Path("/root/model/artifacts") / str(out_subdir) / variant_name
+    out_dir = _ARTIFACTS_DIR / str(out_subdir) / variant_name
     out_dir.mkdir(parents=True, exist_ok=True)
 
     # Remove previously-generated shards if re-running in the same volume path.
@@ -2743,6 +3237,135 @@ def validate_pruned_expert_shards(model_dir: str):
     }
 
 
+def _manual_gpt_oss_experts_forward(
+    *,
+    hidden_states: "torch.Tensor",
+    router_indices: "torch.Tensor",
+    routing_weights: "torch.Tensor",
+    gate_up_proj: "torch.Tensor",
+    gate_up_proj_bias: "torch.Tensor",
+    down_proj: "torch.Tensor",
+    down_proj_bias: "torch.Tensor",
+    alpha: float = 1.702,
+    limit: float = 7.0,
+) -> "torch.Tensor":
+    import torch
+
+    if hidden_states.dim() != 3:
+        raise ValueError(f"hidden_states must be [bs, seq, hidden], got {tuple(hidden_states.shape)}")
+    bs, seq, hidden = hidden_states.shape
+    flat = hidden_states.reshape(-1, hidden)
+    num_tokens = int(flat.shape[0])
+    num_experts = int(routing_weights.shape[1])
+    if router_indices.shape[0] != num_tokens:
+        raise ValueError("router_indices must be flattened [num_tokens, top_k]")
+    if routing_weights.shape[0] != num_tokens:
+        raise ValueError("routing_weights must be flattened [num_tokens, num_experts]")
+
+    next_states = torch.zeros_like(flat)
+    expert_mask = torch.nn.functional.one_hot(router_indices, num_classes=num_experts + 1).permute(2, 1, 0)
+    expert_hit = torch.greater(expert_mask.sum(dim=(-1, -2)), 0).nonzero()
+    for expert_idx_t in expert_hit[:]:
+        expert_idx = int(expert_idx_t[0])
+        if expert_idx == num_experts:
+            continue
+        _, token_idx = torch.where(expert_mask[expert_idx])
+        current_state = flat[token_idx]
+        gate_up = current_state @ gate_up_proj[expert_idx] + gate_up_proj_bias[expert_idx]
+        gate, up = gate_up[..., ::2], gate_up[..., 1::2]
+        gate = gate.clamp(max=float(limit))
+        up = up.clamp(min=-float(limit), max=float(limit))
+        glu = gate * torch.sigmoid(gate * float(alpha))
+        gated_output = (up + 1) * glu
+        out = gated_output @ down_proj[expert_idx] + down_proj_bias[expert_idx]
+        weighted_output = out * routing_weights[token_idx, expert_idx, None]
+        next_states.index_add_(0, token_idx, weighted_output.to(flat.dtype))
+    return next_states.view(bs, seq, hidden)
+
+
+def _routing_weights_from_topk(
+    *, router_indices: "torch.Tensor", topk_weights: "torch.Tensor", num_experts: int
+) -> "torch.Tensor":
+    import torch
+
+    if router_indices.dim() != 2 or topk_weights.dim() != 2:
+        raise ValueError("router_indices/topk_weights must be 2D [num_tokens, top_k]")
+    if router_indices.shape != topk_weights.shape:
+        raise ValueError("router_indices and topk_weights must have same shape")
+    if int(num_experts) <= 0:
+        raise ValueError("num_experts must be > 0")
+    num_tokens = int(router_indices.shape[0])
+    routing_weights = torch.zeros((num_tokens, int(num_experts)), device=topk_weights.device, dtype=topk_weights.dtype)
+    routing_weights.scatter_add_(1, router_indices.to(torch.int64), topk_weights)
+    return routing_weights
+
+
+def _validate_gpt_oss_expert_math_toy(
+    *,
+    device: str,
+    trials: int = 10,
+    seed: int = 3407,
+    hidden_size: int = 256,
+    intermediate_size: int = 512,
+    num_experts: int = 8,
+    top_k: int = 2,
+    batch_size: int = 2,
+    seq_len: int = 4,
+) -> dict[str, float]:
+    import math
+    from types import SimpleNamespace
+
+    import torch
+    from transformers.models.gpt_oss.modeling_gpt_oss import GptOssExperts
+
+    torch.manual_seed(int(seed))
+    device_t = torch.device(device)
+    cfg = SimpleNamespace(
+        hidden_size=int(hidden_size),
+        intermediate_size=int(intermediate_size),
+        num_local_experts=int(num_experts),
+    )
+    experts = GptOssExperts(cfg).to(device_t)
+    experts.eval()
+
+    with torch.no_grad():
+        for p in experts.parameters():
+            p.normal_(mean=0.0, std=0.02)
+
+    max_abs = 0.0
+    max_rel = 0.0
+    for i in range(int(trials)):
+        hs = torch.randn((int(batch_size), int(seq_len), int(hidden_size)), device=device_t, dtype=torch.float32)
+        num_tokens = int(batch_size * seq_len)
+        router_indices = torch.randint(
+            low=0, high=int(num_experts), size=(num_tokens, int(top_k)), device=device_t, dtype=torch.int64
+        )
+        w = torch.rand((num_tokens, int(top_k)), device=device_t, dtype=torch.float32)
+        w = w / w.sum(dim=-1, keepdim=True).clamp_min(1e-9)
+        routing_weights = _routing_weights_from_topk(router_indices=router_indices, topk_weights=w, num_experts=int(num_experts))
+
+        with torch.no_grad():
+            out_ref = experts(hs, router_indices=router_indices, routing_weights=routing_weights)
+            out_manual = _manual_gpt_oss_experts_forward(
+                hidden_states=hs,
+                router_indices=router_indices,
+                routing_weights=routing_weights,
+                gate_up_proj=experts.gate_up_proj,
+                gate_up_proj_bias=experts.gate_up_proj_bias,
+                down_proj=experts.down_proj,
+                down_proj_bias=experts.down_proj_bias,
+                alpha=float(experts.alpha),
+                limit=float(experts.limit),
+            )
+        diff = (out_ref - out_manual).abs()
+        max_abs = max(max_abs, float(diff.max().item()))
+        denom = out_ref.abs().clamp_min(1e-8)
+        max_rel = max(max_rel, float((diff / denom).max().item()))
+        if math.isnan(max_abs) or math.isnan(max_rel):
+            raise RuntimeError("NaN encountered in expert-math validation.")
+    return {"max_abs": float(max_abs), "max_rel": float(max_rel)}
+
+
 @app.local_entrypoint()
 def main(
     task: str = "profile_20b",
@@ -2767,6 +3390,15 @@ def main(
     eaft_w_good: float = 1.0,
     eaft_w_uncertain: float = 0.25,
     eaft_w_conflict: float = -2.0,
+    calib_packs_repo: str = DEFAULT_CALIB_PACKS_REPO,
+    calib_pack_files_csv: str = ",".join(DEFAULT_CALIB_PACK_FILES),
+    calib_pack_sample_strategy: str = "per_file",
+    keep_fracs_csv: str = "0.75",
+    keep_frac: float = 0.75,
+    min_keep_per_layer: int = 16,
+    max_keep_per_layer: int = 32,
+    core_pos_top_m: int = 4,
+    core_count_top_m: int = 0,
 ):
     """
     Pruning-track tasks:
@@ -2779,8 +3411,136 @@ def main(
     - build_pruned_20b_freq: produce `artifacts/20b_pruned_models_freq/manifest_freq.json` (frequency-based)
     - build_pruned_20b_reap: produce `artifacts/20b_pruned_models_reap/manifest_reap.json` (REAP-ranked)
     - build_pruned_20b_eaftreap: produce `artifacts/20b_pruned_models_eaftreap/manifest_eaftreap.json` (EAFT-REAP ranked)
+    - build_pruned_20b_eaftreap_keepfrac: build EAFT-REAP structural prunes on calib packs at keep_fracs (fixed top_k)
+    - build_pruned_20b_eaftreap_budgeted: build a keep_frac=0.75 prune with per-layer keep_n allocation (fixed top_k)
+    - build_pruned_20b_noop_rewrite: rewrite model shards while keeping all experts (sanity: must be lossless)
     - scan_domain_values_20b: scan `DOMAIN_COLUMN` and report counts (debug data availability)
+    - validate_expert_math_toy: validate our manual GPT-OSS expert math matches Transformers (toy config)
+    - predownload_20b: CPU-only download base 20B model into volumes (new Modal profile safe)
+    - predownload_calib_packs: CPU-only download calib pack parquet files into HF cache volume
+    - sample_calib_packs: CPU-only deterministic JSONL sample from calib packs into data volume
     """
+
+    if task == "predownload_20b":
+        out_report = Path("reports/predownload_20b.md")
+        out_report.parent.mkdir(parents=True, exist_ok=True)
+        t0 = time.time()
+        model_dir = _invoke(predownload_model, str(model_id_20b))
+        out_report.write_text(
+            "\n".join(
+                [
+                    "# Predownload 20B (CPU)",
+                    "",
+                    f"- Model: `{model_id_20b}`",
+                    f"- Local dir: `{model_dir}`",
+                    f"- dt_s: {time.time() - t0:.1f}",
+                    "",
+                ]
+            ),
+            encoding="utf-8",
+        )
+        print(f"[+] Wrote {out_report}")
+        return
+
+    if task == "predownload_calib_packs":
+        pack_files = _parse_csv(str(calib_pack_files_csv or "")) or list(DEFAULT_CALIB_PACK_FILES)
+        if not pack_files:
+            raise SystemExit("No calib pack files specified.")
+
+        out_report = Path("reports/predownload_calib_packs.md")
+        out_report.parent.mkdir(parents=True, exist_ok=True)
+        t0 = time.time()
+        res = _invoke(
+            predownload_calib_packs_cpu,
+            dataset_repo=str(calib_packs_repo),
+            pack_files=list(pack_files),
+        )
+        paths = list(res.get("downloaded_paths") or [])
+
+        out_report.write_text(
+            "\n".join(
+                [
+                    "# Predownload calib packs (CPU)",
+                    "",
+                    f"- Dataset repo: `{calib_packs_repo}`",
+                    f"- Files: {', '.join(pack_files)}",
+                    f"- Downloaded: {len(paths)}",
+                    f"- dt_s: {time.time() - t0:.1f}",
+                    "",
+                ]
+                + [f"- `{p}`" for p in paths[:50]]
+            ),
+            encoding="utf-8",
+        )
+        print(f"[+] Wrote {out_report}")
+        return
+
+    if task == "sample_calib_packs":
+        pack_files = _parse_csv(str(calib_pack_files_csv or "")) or list(DEFAULT_CALIB_PACK_FILES)
+        if not pack_files:
+            raise SystemExit("No calib pack files specified.")
+        sample = _invoke(
+            sample_calib_packs_rows_cpu,
+            dataset_repo=str(calib_packs_repo),
+            pack_files=list(pack_files),
+            text_column=str(text_column),
+            num_rows=int(num_rows),
+            seed=int(seed),
+            strategy=str(calib_pack_sample_strategy),
+        )
+        out_report = Path("reports/sample_calib_packs.md")
+        out_report.parent.mkdir(parents=True, exist_ok=True)
+        out_report.write_text(
+            "\n".join(
+                [
+                    "# Sample calib packs (CPU)",
+                    "",
+                    f"- Dataset repo: `{calib_packs_repo}`",
+                    f"- Files: {', '.join(pack_files)}",
+                    f"- num_rows: {int(num_rows)} seed={int(seed)} strategy=`{calib_pack_sample_strategy}`",
+                    f"- rows_jsonl_path: `{sample.get('rows_jsonl_path')}`",
+                    f"- prompt_hash: `{sample.get('prompt_hash')}`",
+                    f"- scanned: {sample.get('scanned')}",
+                    "",
+                ]
+            ),
+            encoding="utf-8",
+        )
+        print(f"[+] Wrote {out_report}")
+        return
+
+    if task == "validate_expert_math_toy":
+        out_report = Path("reports/validate_gpt_oss_expert_math_toy.md")
+        out_report.parent.mkdir(parents=True, exist_ok=True)
+
+        import torch
+
+        device = "cuda" if torch.cuda.is_available() else "cpu"
+        res = _validate_gpt_oss_expert_math_toy(device=device, trials=20)
+        lines = [
+            "# GPT-OSS experts math equivalence (toy)",
+            "",
+            "This is a unit-style check to ensure our manual loop implementation matches",
+            "`transformers.models.gpt_oss.modeling_gpt_oss.GptOssExperts.forward`.",
+            "",
+            f"- device: `{device}`",
+            f"- max_abs_error: `{res['max_abs']:.3e}`",
+            f"- max_rel_error: `{res['max_rel']:.3e}`",
+            "",
+            "## Interpretation",
+            "",
+            "- Expect ~0 (within FP32 noise). If this fails, our EAFT-REAP norm/saliency math is suspect.",
+            "",
+            "## Reproduce",
+            "",
+            "```bash",
+            "python modal/gpt_oss_pruning_track.py --task validate_expert_math_toy",
+            "```",
+            "",
+        ]
+        out_report.write_text("\n".join(lines), encoding="utf-8")
+        print(f"[+] Wrote {out_report} (max_abs={res['max_abs']:.3e}, max_rel={res['max_rel']:.3e})")
+        return
 
     if task == "profile_20b":
         suffix = ""
@@ -3142,8 +3902,8 @@ def main(
             keep_experts_by_layer_json=json.dumps(keepagg),
             out_subdir="20b_union_pruned",
         )
-        ok50 = sanity_infer_model_dir.remote(model_dir=union50_dir)
-        okagg = sanity_infer_model_dir.remote(model_dir=unionagg_dir)
+        ok50 = _invoke(sanity_infer_model_dir, model_dir=union50_dir)
+        okagg = _invoke(sanity_infer_model_dir, model_dir=unionagg_dir)
 
         artifacts_dir = Path("artifacts/20b_union_pruned")
         artifacts_dir.mkdir(parents=True, exist_ok=True)
@@ -3201,9 +3961,10 @@ def main(
         out_report.parent.mkdir(parents=True, exist_ok=True)
 
         # CPU predownload to avoid spending GPU time on HF downloads.
-        _ = predownload_model.remote(str(model_id_20b))
+        _ = _invoke(predownload_model, str(model_id_20b))
 
-        res = profile_20b_reap_saliency.remote(
+        res = _invoke(
+            profile_20b_reap_saliency,
             model_id=model_id_20b,
             dataset_id=dataset_id,
             dataset_split=dataset_split,
@@ -3288,9 +4049,10 @@ def main(
         out_report.parent.mkdir(parents=True, exist_ok=True)
 
         # CPU predownload to avoid spending GPU time on HF downloads.
-        _ = predownload_model.remote(str(model_id_20b))
+        _ = _invoke(predownload_model, str(model_id_20b))
 
-        res = profile_20b_eaftreap_saliency.remote(
+        res = _invoke(
+            profile_20b_eaftreap_saliency,
             model_id=model_id_20b,
             dataset_id=dataset_id,
             dataset_split=dataset_split,
@@ -3416,6 +4178,66 @@ def main(
             "",
             "```bash",
             "modal run modal/gpt_oss_pruning_track.py --task soft_prune_20b",
+            "```",
+            "",
+        ]
+        out_report.write_text("\n".join(lines), encoding="utf-8")
+        print(f"[+] Wrote {out_report}")
+        return
+
+    if task == "soft_prune_20b_eaftreap":
+        # Soft-prune using EAFT-REAP ranking (correctness-aware), rather than
+        # frequency ranking. This is the preferred A/B before structural prune.
+        ranking_path = Path("data/20b_eaftreap_saliency_ranking_by_layer.json")
+        if not ranking_path.exists():
+            raise SystemExit(
+                f"Missing `{ranking_path}`. Run --task eaftreap_saliency_20b first."
+            )
+        expert_ranking_by_layer_json = ranking_path.read_text(encoding="utf-8")
+        res = soft_prune_20b_eval.remote(
+            model_id=model_id_20b,
+            dataset_id=dataset_id,
+            dataset_split=dataset_split,
+            text_column=text_column,
+            expert_ranking_by_layer_json=expert_ranking_by_layer_json,
+            keep_fracs_csv="1.0,0.5,0.25",
+            top_ks_csv="4,2",
+            eval_rows=256,
+            max_seq_length=int(max_seq_length),
+        )
+        out_report = Path("reports/20b_soft_prune_eval_eaftreap.md")
+        out_report.parent.mkdir(parents=True, exist_ok=True)
+
+        results = res["results"]
+        baseline = None
+        for r in results:
+            if r["keep_frac"] == 1.0 and r["top_k"] == 4:
+                baseline = r
+                break
+        if baseline is None:
+            baseline = results[0]
+
+        lines = [
+            "# 20B soft prune eval (EAFT-REAP ranking, inference-only)",
+            "",
+            f"- Model: `{res['meta']['model_id']}`",
+            f"- Dataset: `{res['meta']['dataset_id']}` split `{res['meta']['dataset_split']}`",
+            f"- Eval rows: {results[0]['eval_rows']} | Max seq length: {results[0]['max_seq_length']}",
+            "",
+            "| kept_experts | keep_frac | top_k | ppl | ppl_delta | tokens/s |",
+            "|---:|---:|---:|---:|---:|---:|",
+        ]
+        for r in sorted(results, key=lambda x: (x["keep_frac"], x["top_k"])):
+            ppl_delta = float(r["ppl"]) - float(baseline["ppl"])
+            lines.append(
+                f"| {r['keep_n']} | {r['keep_frac']:.2f} | {r['top_k']} | {r['ppl']:.3f} | {ppl_delta:+.3f} | {r['tokens_per_s']:.0f} |"
+            )
+        lines += [
+            "",
+            "## Reproduce",
+            "",
+            "```bash",
+            "modal run modal/gpt_oss_pruning_track.py --task soft_prune_20b_eaftreap",
             "```",
             "",
         ]
@@ -3789,9 +4611,10 @@ def main(
         # - math: keep 8/32 (uses a math-only dataset by default)
 
         # CPU predownload to avoid spending GPU time on HF downloads.
-        _ = predownload_model.remote(str(model_id_20b))
+        _ = _invoke(predownload_model, str(model_id_20b))
 
-        general_prof = profile_20b_eaftreap_saliency.remote(
+        general_prof = _invoke(
+            profile_20b_eaftreap_saliency,
             model_id=model_id_20b,
             dataset_id=dataset_id,
             dataset_split=dataset_split,
@@ -3807,7 +4630,8 @@ def main(
             w_uncertain=float(eaft_w_uncertain),
             w_conflict=float(eaft_w_conflict),
         )
-        math_prof = profile_20b_eaftreap_saliency.remote(
+        math_prof = _invoke(
+            profile_20b_eaftreap_saliency,
             model_id=model_id_20b,
             dataset_id=math_dataset_id,
             dataset_split=math_dataset_split,
@@ -3830,21 +4654,23 @@ def main(
         general_keep = [layer[:16] for layer in general_rank]
         math_keep = [layer[:8] for layer in math_rank]
 
-        general_dir = structural_prune_20b_build.remote(
+        general_dir = _invoke(
+            structural_prune_20b_build,
             model_id=model_id_20b,
             variant_name="general_50pct_experts_eaftreap",
             keep_experts_by_layer_json=json.dumps(general_keep),
             out_subdir="20b_pruned_models_eaftreap",
         )
-        math_dir = structural_prune_20b_build.remote(
+        math_dir = _invoke(
+            structural_prune_20b_build,
             model_id=model_id_20b,
             variant_name="math_25pct_experts_eaftreap",
             keep_experts_by_layer_json=json.dumps(math_keep),
             out_subdir="20b_pruned_models_eaftreap",
         )
 
-        general_ok = sanity_infer_model_dir.remote(model_dir=general_dir)
-        math_ok = sanity_infer_model_dir.remote(model_dir=math_dir)
+        general_ok = _invoke(sanity_infer_model_dir, model_dir=general_dir)
+        math_ok = _invoke(sanity_infer_model_dir, model_dir=math_dir)
 
         artifacts_dir = Path("artifacts/20b_pruned_models_eaftreap")
         artifacts_dir.mkdir(parents=True, exist_ok=True)
@@ -3952,19 +4778,368 @@ def main(
         print(f"[+] Wrote {out_report}")
         return
 
+    if task == "build_pruned_20b_eaftreap_keepfrac":
+        # Calib-packs EAFT-REAP pruning sweep (keep_frac only; top_k unchanged).
+        # This is the recommended regime to match our evaluation harness.
+        keep_fracs: list[float] = []
+        for s in _parse_csv(str(keep_fracs_csv or "")):
+            try:
+                keep_fracs.append(float(s))
+            except Exception:
+                continue
+        if not keep_fracs:
+            raise SystemExit("--keep-fracs-csv must contain at least one float like 0.75,0.60")
+
+        pack_files = _parse_csv(str(calib_pack_files_csv or "")) or list(DEFAULT_CALIB_PACK_FILES)
+        if not pack_files:
+            raise SystemExit("No calib pack files specified.")
+
+        # CPU predownload the base model + CPU sample the pack rows into JSONL.
+        _ = _invoke(predownload_model, str(model_id_20b))
+        sample = _invoke(
+            sample_calib_packs_rows_cpu,
+            dataset_repo=str(calib_packs_repo),
+            pack_files=list(pack_files),
+            text_column=str(text_column),
+            num_rows=int(num_rows),
+            seed=int(seed),
+            strategy=str(calib_pack_sample_strategy),
+        )
+
+        prof = _invoke(
+            profile_20b_eaftreap_saliency,
+            model_id=str(model_id_20b),
+            dataset_id=str(calib_packs_repo),
+            dataset_split="__calib_packs__",  # informational only
+            text_column=str(text_column),
+            domain="",
+            num_rows=int(num_rows),
+            max_seq_length=int(max_seq_length),
+            batch_size=int(batch_size),
+            cc_quantile=float(eaft_cc_quantile),
+            uncertain_quantile=float(eaft_uncertain_quantile),
+            entropy_topk=int(eaft_entropy_topk),
+            w_good=float(eaft_w_good),
+            w_uncertain=float(eaft_w_uncertain),
+            w_conflict=float(eaft_w_conflict),
+            rows_jsonl_path=str(sample["rows_jsonl_path"]),
+        )
+
+        ranking = prof["ranking_by_layer"]
+        meta = prof.get("meta") or {}
+        num_experts = int(meta.get("num_experts") or 0)
+        num_layers = int(meta.get("num_layers") or 0)
+        if num_experts <= 0 or num_layers <= 0:
+            raise SystemExit(f"Invalid EAFT-REAP meta: num_layers={num_layers} num_experts={num_experts}")
+
+        # Save profiling artifacts for audit/debug (no finetune).
+        artifacts_dir = Path("artifacts/20b_pruned_models_eaftreap_keepfrac")
+        artifacts_dir.mkdir(parents=True, exist_ok=True)
+        (artifacts_dir / "eaftreap_saliency.parquet").write_bytes(prof["parquet_bytes"])
+        (artifacts_dir / "eaftreap_saliency_ranking_by_layer.json").write_text(
+            json.dumps(ranking, indent=2), encoding="utf-8"
+        )
+
+        import math as _math
+
+        variants: dict[str, str] = {}
+        keep_by_variant: dict[str, Any] = {}
+        for keep_frac in keep_fracs:
+            if not (0.0 < float(keep_frac) <= 1.0):
+                raise SystemExit(f"Invalid keep_frac={keep_frac} (must be 0<k<=1)")
+            keep_n = int(_math.ceil(float(keep_frac) * float(num_experts)))
+            keep_n = max(1, min(int(keep_n), int(num_experts)))
+            keep_by_layer = []
+            for li in range(num_layers):
+                layer_rank = ranking[li]
+                keep_by_layer.append([int(x) for x in layer_rank[:keep_n]])
+
+            pct = int(round(float(keep_n) * 100.0 / float(num_experts)))
+            variant_name = f"calib_union_keep{keep_n}of{num_experts}_k{pct}_eaftreap"
+            out_dir = _invoke(
+                structural_prune_20b_build,
+                model_id=str(model_id_20b),
+                variant_name=str(variant_name),
+                keep_experts_by_layer_json=json.dumps(keep_by_layer),
+                out_subdir="20b_pruned_models_eaftreap",
+            )
+            variants[str(variant_name)] = str(out_dir)
+            keep_by_variant[str(variant_name)] = {"keep_frac": float(keep_frac), "keep_n": int(keep_n)}
+
+        manifest = {
+            "base_model": str(model_id_20b),
+            "calib_packs": {
+                "dataset_repo": str(calib_packs_repo),
+                "pack_files": pack_files,
+                "sample": sample,
+            },
+            "eaft": {
+                "cc_q": float(eaft_cc_quantile),
+                "uncertain_q": float(eaft_uncertain_quantile),
+                "entropy_topk": int(eaft_entropy_topk),
+                "w_good": float(eaft_w_good),
+                "w_uncertain": float(eaft_w_uncertain),
+                "w_conflict": float(eaft_w_conflict),
+            },
+            "profile": {
+                "meta": meta,
+            },
+            "variants": variants,
+            "keep": keep_by_variant,
+            "keep_fracs_csv": str(keep_fracs_csv),
+        }
+        (artifacts_dir / "manifest_eaftreap_keepfrac.json").write_text(
+            json.dumps(manifest, indent=2, sort_keys=True),
+            encoding="utf-8",
+        )
+
+        rep = Path("reports/20b_structural_prune_build_eaftreap_keepfrac.md")
+        rep.parent.mkdir(parents=True, exist_ok=True)
+        lines = [
+            "# 20B structural prune build (EAFT-REAP, calib packs, keep_frac sweep)",
+            "",
+            f"- Base model: `{model_id_20b}`",
+            f"- Calib repo: `{calib_packs_repo}`",
+            f"- Packs: {', '.join(pack_files)}",
+            f"- Sample rows: {int(num_rows)} seed={int(seed)} sample_jsonl=`{sample.get('rows_jsonl_path','')}`",
+            f"- Max seq length: {int(max_seq_length)} | Batch size: {int(batch_size)}",
+            f"- EAFT weights: good={float(eaft_w_good)} uncertain={float(eaft_w_uncertain)} conflict={float(eaft_w_conflict)}",
+            "",
+            "## Variants",
+            "",
+        ]
+        for name, out_dir in variants.items():
+            k = keep_by_variant.get(name, {})
+            lines.append(f"- {name}: keep_frac={k.get('keep_frac')} keep_n={k.get('keep_n')} dir=`{out_dir}`")
+        lines += [
+            "",
+            "## Artifacts",
+            "",
+            f"- `{artifacts_dir/'manifest_eaftreap_keepfrac.json'}`",
+            "",
+            "## Reproduce (Kaggle/VERSA)",
+            "",
+            "```bash",
+            "bash harmony/cuda-norm/scripts/versa_run_pruning_track_kaggle.sh \\",
+            "  --task build_pruned_20b_eaftreap_keepfrac \\",
+            f"  --model-id-20b {model_id_20b} \\",
+            f"  --num-rows {int(num_rows)} --max-seq-length {int(max_seq_length)} --batch-size {int(batch_size)} \\",
+            f"  --keep-fracs-csv {keep_fracs_csv!s}",
+            "```",
+            "",
+        ]
+        rep.write_text("\n".join(lines), encoding="utf-8")
+        print(f"[+] Wrote {artifacts_dir/'manifest_eaftreap_keepfrac.json'}")
+        print(f"[+] Wrote {rep}")
+        return
+
+    if task == "build_pruned_20b_noop_rewrite":
+        # Structural rewrite while keeping all experts. This must be near-identical
+        # to the base model; otherwise our rewrite/index/mapping path is corrupt.
+        meta = _invoke(read_model_cfg_meta, str(model_id_20b))
+        num_layers = int(meta.get("num_layers") or 0)
+        num_experts = int(meta.get("num_experts") or 0)
+        if num_layers <= 0 or num_experts <= 0:
+            raise SystemExit(f"Invalid config: num_layers={num_layers} num_experts={num_experts}")
+        keep_by_layer = [list(range(num_experts)) for _ in range(num_layers)]
+        out_dir = _invoke(
+            structural_prune_20b_build,
+            model_id=str(model_id_20b),
+            variant_name="noop_rewrite_keepall_experts",
+            keep_experts_by_layer_json=json.dumps(keep_by_layer),
+            out_subdir="20b_pruned_models_noop",
+        )
+        rep = Path("reports/20b_noop_rewrite_build.md")
+        rep.parent.mkdir(parents=True, exist_ok=True)
+        rep.write_text(
+            "\n".join(
+                [
+                    "# 20B noop rewrite (keep all experts)",
+                    "",
+                    f"- Base model: `{model_id_20b}`",
+                    f"- Output dir: `{out_dir}`",
+                    "",
+                    "Next: run EAFT/PPL parity base vs this dir; deltas should be ~0.",
+                    "",
+                ]
+            ),
+            encoding="utf-8",
+        )
+        print(f"[+] Wrote {rep}")
+        return
+
+    if task == "build_pruned_20b_eaftreap_budgeted":
+        # Build a single keep_frac prune using per-layer budgeting derived from
+        # EAFT-weighted saliency mass (no finetune).
+        pack_files = _parse_csv(str(calib_pack_files_csv or "")) or list(DEFAULT_CALIB_PACK_FILES)
+        if not pack_files:
+            raise SystemExit("No calib pack files specified.")
+
+        _ = _invoke(predownload_model, str(model_id_20b))
+        sample = _invoke(
+            sample_calib_packs_rows_cpu,
+            dataset_repo=str(calib_packs_repo),
+            pack_files=list(pack_files),
+            text_column=str(text_column),
+            num_rows=int(num_rows),
+            seed=int(seed),
+            strategy=str(calib_pack_sample_strategy),
+        )
+
+        prof = _invoke(
+            profile_20b_eaftreap_saliency,
+            model_id=str(model_id_20b),
+            dataset_id=str(calib_packs_repo),
+            dataset_split="__calib_packs__",
+            text_column=str(text_column),
+            domain="",
+            num_rows=int(num_rows),
+            max_seq_length=int(max_seq_length),
+            batch_size=int(batch_size),
+            cc_quantile=float(eaft_cc_quantile),
+            uncertain_quantile=float(eaft_uncertain_quantile),
+            entropy_topk=int(eaft_entropy_topk),
+            w_good=float(eaft_w_good),
+            w_uncertain=float(eaft_w_uncertain),
+            w_conflict=float(eaft_w_conflict),
+            rows_jsonl_path=str(sample["rows_jsonl_path"]),
+        )
+
+        ranking = prof["ranking_by_layer"]
+        meta = prof.get("meta") or {}
+        num_experts = int(meta.get("num_experts") or 0)
+        num_layers = int(meta.get("num_layers") or 0)
+        if num_experts <= 0 or num_layers <= 0:
+            raise SystemExit(f"Invalid EAFT-REAP meta: num_layers={num_layers} num_experts={num_experts}")
+
+        # Read per-layer mass from parquet we just produced.
+        parquet_path = Path("/tmp") / f"eaftreap_saliency_{int(time.time())}.parquet"
+        parquet_path.write_bytes(prof["parquet_bytes"])
+        by_layer_mass = _read_reap_saliency_mass_parquet(parquet_path, mass_column="eaft_gate_norm_sum")
+        mass_by_layer = []
+        for li in range(num_layers):
+            mass_by_layer.append(by_layer_mass.get(li, [0.0] * num_experts))
+
+        core_by_layer = _core_experts_from_eaft_parquet(
+            parquet_path,
+            num_layers=num_layers,
+            num_experts=num_experts,
+            pos_top_m=int(core_pos_top_m),
+            count_top_m=int(core_count_top_m),
+        )
+        neff_by_layer = [float(_compute_layer_neff(m)) for m in mass_by_layer]
+        keep_counts = _budgeted_keep_counts(
+            mass_by_layer=mass_by_layer,
+            num_experts=num_experts,
+            keep_frac=float(keep_frac),
+            min_keep=int(min_keep_per_layer),
+            max_keep=int(max_keep_per_layer),
+        )
+        keep_by_layer = []
+        for li in range(num_layers):
+            keep_n = int(keep_counts[li])
+            core = [int(x) for x in (core_by_layer[li] if li < len(core_by_layer) else [])]
+            if len(core) > keep_n:
+                core = core[:keep_n]
+            core_set = set(core)
+            keep_set = set(int(x) for x in ranking[li][:keep_n]) | core_set
+            chosen: list[int] = []
+            for e in ranking[li]:
+                ei = int(e)
+                if ei in keep_set:
+                    chosen.append(ei)
+                if len(chosen) >= keep_n:
+                    break
+            keep_by_layer.append(chosen)
+
+        variant_name = (
+            f"calib_budget_keepfrac{float(keep_frac):.2f}_eaftreap"
+            f"_corep{int(core_pos_top_m)}c{int(core_count_top_m)}"
+        )
+        out_dir = _invoke(
+            structural_prune_20b_build,
+            model_id=str(model_id_20b),
+            variant_name=str(variant_name),
+            keep_experts_by_layer_json=json.dumps(keep_by_layer),
+            out_subdir="20b_pruned_models_eaftreap",
+        )
+
+        artifacts_dir = Path("artifacts/20b_pruned_models_eaftreap_budgeted")
+        artifacts_dir.mkdir(parents=True, exist_ok=True)
+        (artifacts_dir / "neff_by_layer.json").write_text(
+            json.dumps(neff_by_layer, indent=2), encoding="utf-8"
+        )
+        (artifacts_dir / "core_experts_by_layer.json").write_text(
+            json.dumps(core_by_layer, indent=2), encoding="utf-8"
+        )
+        (artifacts_dir / "keep_counts_by_layer.json").write_text(
+            json.dumps(keep_counts, indent=2), encoding="utf-8"
+        )
+        (artifacts_dir / "keep_experts_by_layer.json").write_text(
+            json.dumps(keep_by_layer, indent=2), encoding="utf-8"
+        )
+        (artifacts_dir / "manifest.json").write_text(
+            json.dumps(
+                {
+                    "base_model": str(model_id_20b),
+                    "variant_name": str(variant_name),
+                    "out_dir": str(out_dir),
+                    "keep_frac": float(keep_frac),
+                    "min_keep_per_layer": int(min_keep_per_layer),
+                    "max_keep_per_layer": int(max_keep_per_layer),
+                    "keep_counts_by_layer": keep_counts,
+                    "neff_by_layer": neff_by_layer,
+                    "core_pos_top_m": int(core_pos_top_m),
+                    "core_count_top_m": int(core_count_top_m),
+                    "calib": {"repo": str(calib_packs_repo), "pack_files": pack_files, "sample": sample},
+                    "eaft": {
+                        "cc_q": float(eaft_cc_quantile),
+                        "uncertain_q": float(eaft_uncertain_quantile),
+                        "entropy_topk": int(eaft_entropy_topk),
+                        "w_good": float(eaft_w_good),
+                        "w_uncertain": float(eaft_w_uncertain),
+                        "w_conflict": float(eaft_w_conflict),
+                    },
+                },
+                indent=2,
+                sort_keys=True,
+            ),
+            encoding="utf-8",
+        )
+        rep = Path("reports/20b_structural_prune_build_eaftreap_budgeted.md")
+        rep.parent.mkdir(parents=True, exist_ok=True)
+        rep.write_text(
+            "\n".join(
+                [
+                    "# 20B structural prune build (EAFT-REAP budgeted keep counts)",
+                    "",
+                    f"- Base model: `{model_id_20b}`",
+                    f"- Output dir: `{out_dir}`",
+                    f"- keep_frac: {float(keep_frac):.2f}",
+                    f"- safety core: pos_top_m={int(core_pos_top_m)} count_top_m={int(core_count_top_m)}",
+                    f"- keep_counts_by_layer: `{artifacts_dir/'keep_counts_by_layer.json'}`",
+                    "",
+                ]
+            ),
+            encoding="utf-8",
+        )
+        print(f"[+] Wrote {rep}")
+        return
+
     if task == "inspect_pruned_20b":
         # Debug helper: inspect a key's mapped file + tensor shape.
+        model_dir = str(_ARTIFACTS_DIR / "20b_pruned_models" / "general_50pct_experts")
         infos = []
         for li in (0, 1, 10, 23):
             infos.append(
                 inspect_pruned_checkpoint.remote(
-                    model_dir="/root/model/artifacts/20b_pruned_models/general_50pct_experts",
+                    model_dir=model_dir,
                     layer_idx=int(li),
                 )
             )
         infos.append(
             validate_pruned_expert_shards.remote(
-                model_dir="/root/model/artifacts/20b_pruned_models/general_50pct_experts"
+                model_dir=model_dir
             )
         )
         print(json.dumps(infos, indent=2))

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+import json
 import os
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
@@ -219,9 +220,31 @@ def main() -> None:
     finally:
         _kill(dflash_proc)
 
-    print({"baseline": base_metrics, "dflash": dflash_metrics}, flush=True)
+    speedup = float(dflash_metrics["output_toks_per_s"]) / max(float(base_metrics["output_toks_per_s"]), 1e-9)
+    accept_mean = dflash_metrics.get("spec_accept_length_mean", None)
+    accept_rate = None
+    if accept_mean is not None:
+        try:
+            accept_rate = float(accept_mean) / max(float(args.block_size), 1e-9)
+        except Exception:
+            accept_rate = None
+
+    out = {
+        "target_model": str(args.target_model),
+        "draft_model": str(args.draft_model),
+        "attention_backend": str(args.attention_backend),
+        "dtype": str(args.dtype),
+        "block_size": int(args.block_size),
+        "max_new_tokens": int(args.max_new_tokens),
+        "concurrency": int(args.concurrency),
+        "num_prompts": int(args.num_prompts),
+        "baseline": base_metrics,
+        "dflash": dflash_metrics,
+        "speedup_x": float(speedup),
+        "accept_rate_est": accept_rate,
+    }
+    print(json.dumps(out, indent=2, sort_keys=True), flush=True)
 
 
 if __name__ == "__main__":
     main()
-

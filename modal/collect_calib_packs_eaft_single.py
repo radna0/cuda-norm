@@ -278,6 +278,10 @@ def _ensure_hf_env() -> None:
     os.environ.setdefault("XDG_CACHE_HOME", str(_HF_HOME_DIR / ".cache"))
     os.environ.setdefault("HF_HUB_ENABLE_HF_TRANSFER", "1")
     os.environ.setdefault("HF_HUB_DISABLE_PROGRESS_BARS", "0")
+    # Kaggle can have intermittent DNS / outbound hiccups. Keep hub requests
+    # snappy so our retry loop can make progress instead of hanging forever.
+    os.environ.setdefault("HF_HUB_ETAG_TIMEOUT", "30")
+    os.environ.setdefault("HF_HUB_DOWNLOAD_TIMEOUT", "300")
     os.environ.setdefault("TOKENIZERS_PARALLELISM", "false")
     for p in (_HF_HOME_DIR, _HF_HOME_DIR / ".cache", _DATA_DIR, _MODEL_DIR):
         try:
@@ -289,6 +293,67 @@ def _ensure_hf_env() -> None:
 def _get_hf_token() -> str | None:
     tok = os.environ.get("HF_TOKEN")
     return tok.strip() if tok else None
+
+
+def _hf_retry(
+    fn: Callable[[], Any],
+    *,
+    desc: str,
+    retries: int = 8,
+    sleep_s: float = 5.0,
+    max_sleep_s: float = 120.0,
+) -> Any:
+    """
+    Hugging Face hub calls can intermittently fail on Kaggle (DNS, transient
+    network). Retry with exponential backoff for *network-ish* failures.
+    """
+    last_err: Exception | None = None
+    for attempt in range(1, int(retries) + 1):
+        try:
+            return fn()
+        except Exception as e:  # noqa: BLE001
+            last_err = e
+            etype = type(e).__name__
+            msg = str(e).lower()
+            transient_types = {
+                # urllib3 / requests / hf hub wrappers
+                "ConnectionError",
+                "MaxRetryError",
+                "NameResolutionError",
+                # huggingface_hub raises this after an underlying network failure
+                # when no local snapshot is present.
+                "LocalEntryNotFoundError",
+            }
+            transient = etype in transient_types or any(
+                k in msg
+                for k in (
+                    "temporary failure in name resolution",
+                    "name resolution error",
+                    "max retries exceeded",
+                    "connection aborted",
+                    "connectionerror",
+                    "read timed out",
+                    "timed out",
+                    "remote end closed connection",
+                    "connection reset by peer",
+                    "502 bad gateway",
+                    "503 service unavailable",
+                    "504 gateway timeout",
+                    "dns",
+                )
+            )
+            if not transient or attempt >= int(retries):
+                raise
+            wait = min(float(max_sleep_s), float(sleep_s) * (2.0 ** (attempt - 1)))
+            print(
+                f"[!] HF transient failure ({desc}) attempt={attempt}/{retries} "
+                f"sleep_s={wait:.1f} err={etype}: {e}",
+                flush=True,
+            )
+            time.sleep(wait)
+    if last_err is not None:
+        raise last_err
+    raise RuntimeError(f"HF retry loop failed without exception: {desc}")
 
 
 def _snapshot_download_model(model_id: str) -> Path:
@@ -327,13 +392,16 @@ def _snapshot_download_model(model_id: str) -> Path:
         th.start()
     except Exception:
         stop_evt = None  # type: ignore[assignment]
-    snap = snapshot_download(
-        repo_id=str(model_id),
-        repo_type="model",
-        cache_dir=str(cache_dir),
-        token=token,
-        resume_download=True,
-        max_workers=8,
+    snap = _hf_retry(
+        lambda: snapshot_download(
+            repo_id=str(model_id),
+            repo_type="model",
+            cache_dir=str(cache_dir),
+            token=token,
+            resume_download=True,
+            max_workers=8,
+        ),
+        desc=f"snapshot_download(model:{model_id})",
     )
     try:
         if stop_evt is not None:
@@ -362,11 +430,14 @@ def _download_dataset_file(dataset_repo: str, filename: str) -> Path:
     token = _get_hf_token()
     print(f"[*] hf_hub_download(dataset) start: {dataset_repo}::{filename}", flush=True)
     return Path(
-        hf_hub_download(
-            repo_id=str(dataset_repo),
-            repo_type="dataset",
-            filename=str(filename),
-            token=token,
+        _hf_retry(
+            lambda: hf_hub_download(
+                repo_id=str(dataset_repo),
+                repo_type="dataset",
+                filename=str(filename),
+                token=token,
+            ),
+            desc=f"hf_hub_download(dataset:{dataset_repo}::{filename})",
         )
     )
 
@@ -392,6 +463,18 @@ def _find_cached_dataset_file(dataset_repo: str, filename: str) -> Path | None:
 
 
 def _resolve_dataset_file(dataset_repo: str, filename: str) -> Path:
+    # Allow passing local paths directly (Kaggle inputs, local mirrors).
+    try:
+        p = Path(filename)
+        if p.is_absolute() and p.exists():
+            return p
+        if str(filename).startswith("./") or str(filename).startswith("../"):
+            p2 = (Path.cwd() / filename).resolve()
+            if p2.exists():
+                return p2
+    except Exception:
+        pass
+
     cached = _find_cached_dataset_file(str(dataset_repo), str(filename))
     if cached is not None:
         print(f"[+] using cached dataset file: {dataset_repo}::{filename} -> {cached}", flush=True)
@@ -548,6 +631,7 @@ class PackedBlocks:
     blocks_ids: list[list[int]]
     blocks_keep: list[list[bool]]
     rows_seen: int
+    rows_sha256: str
     wall_s: float
 
 
@@ -559,14 +643,23 @@ def _pack_blocks(
     seq_len: int,
     num_blocks: int,
 ) -> PackedBlocks:
+    import hashlib
+
     buf_ids: list[int] = []
     buf_keep: list[bool] = []
     blocks_ids: list[list[int]] = []
     blocks_keep: list[list[bool]] = []
     rows_seen = 0
+    h = hashlib.sha256()
     t0 = time.time()
     for text in text_iter():
         rows_seen += 1
+        # Deterministic content hash for reproducibility checks.
+        try:
+            h.update(text.encode("utf-8", errors="ignore"))
+            h.update(b"\0")
+        except Exception:
+            pass
         spans = _assistant_content_spans(text)
         enc = tok(text, add_special_tokens=False, truncation=False, return_offsets_mapping=True)
         ids: list[int] = enc["input_ids"]
@@ -593,7 +686,13 @@ def _pack_blocks(
     dt = time.time() - t0
     if len(blocks_ids) < num_blocks:
         raise RuntimeError(f"Only built {len(blocks_ids)}/{num_blocks} blocks (rows_seen={rows_seen}).")
-    return PackedBlocks(blocks_ids=blocks_ids, blocks_keep=blocks_keep, rows_seen=rows_seen, wall_s=float(dt))
+    return PackedBlocks(
+        blocks_ids=blocks_ids,
+        blocks_keep=blocks_keep,
+        rows_seen=rows_seen,
+        rows_sha256=h.hexdigest(),
+        wall_s=float(dt),
+    )
 
 
 def _hist1d(values, *, bins: int, vmin: float, vmax: float) -> dict[str, Any]:
@@ -1010,6 +1109,7 @@ def collect_calib_packs_eaft_single(
     dataset_repo: str,
     pack_files: list[str],
     model_id: str,
+    model_path: str,
     tp_size: int,
     attn_backend: str,
     quantization: str,
@@ -1046,7 +1146,13 @@ def collect_calib_packs_eaft_single(
     if not seq_lens:
         raise RuntimeError("seq_lens must be non-empty")
 
-    model_dir = _snapshot_download_model(str(model_id))
+    model_path = str(model_path or "").strip()
+    if model_path:
+        model_dir = Path(model_path)
+        if not model_dir.exists():
+            raise RuntimeError(f"--model-path does not exist: {model_dir}")
+    else:
+        model_dir = _snapshot_download_model(str(model_id))
     tok = AutoTokenizer.from_pretrained(str(model_dir), trust_remote_code=bool(trust_remote_code))
     if not getattr(tok, "is_fast", False):
         raise RuntimeError("Need a fast tokenizer for return_offsets_mapping=True")
@@ -1188,6 +1294,7 @@ def collect_calib_packs_eaft_single(
             )
             out["seq"][str(int(seq_len))] = {
                 "rows_seen": int(blocks.rows_seen),
+                "rows_sha256": str(blocks.rows_sha256),
                 "pack_wall_s": float(blocks.wall_s),
                 "model": metrics,
             }
@@ -1211,12 +1318,45 @@ def collect_calib_packs_eaft_single(
     except Exception:
         pass
 
+    # Best-effort runtime environment metadata (helps reproducibility on Kaggle).
+    torch_version = ""
+    try:
+        import torch
+
+        torch_version = str(getattr(torch, "__version__", ""))
+        gpu_name = str(torch.cuda.get_device_name(0)) if torch.cuda.is_available() else ""
+        sm = (
+            ".".join(str(x) for x in torch.cuda.get_device_capability(0))
+            if torch.cuda.is_available()
+            else ""
+        )
+    except Exception:
+        gpu_name, sm = "", ""
+    try:
+        import sglang as _sgl
+
+        sglang_version = getattr(_sgl, "__version__", "")
+    except Exception:
+        sglang_version = ""
+    try:
+        import transformers as _tfm
+
+        transformers_version = getattr(_tfm, "__version__", "")
+    except Exception:
+        transformers_version = ""
+
     return {
         "meta": {
             "dataset_repo": str(dataset_repo),
             "pack_files": list(pack_files),
             "model_id": str(model_id),
-            "gpu_type": str(DEFAULT_GPU_TYPE),
+            "model_path": str(model_path or ""),
+            "gpu_type": str(os.environ.get("GPU_TYPE", DEFAULT_GPU_TYPE)),
+            "gpu_name": gpu_name,
+            "gpu_sm": sm,
+            "torch": torch_version,
+            "sglang_version": str(sglang_version),
+            "transformers_version": str(transformers_version),
             "engine": "sglang",
             "top_k": int(top_k),
             "entropy_topk": int(entropy_topk),
@@ -1243,6 +1383,7 @@ def main(
     dataset_repo: str = DEFAULT_DATASET_REPO,
     pack_files_csv: str = ",".join(DEFAULT_PACK_FILES),
     model_id: str = "",
+    model_path: str = "",
     tp_size: int = 1,
     attn_backend: str = "",
     quantization: str = "",
@@ -1282,8 +1423,10 @@ def main(
 
     # CPU-first: download weights + packs into Modal volumes before any GPU container starts.
     if not bool(skip_predownload):
-        print(f"[*] CPU predownload model: {model_id}", flush=True)
-        predownload_model.remote(model_id=str(model_id))
+        model_path = str(model_path or "").strip()
+        if not model_path:
+            print(f"[*] CPU predownload model: {model_id}", flush=True)
+            predownload_model.remote(model_id=str(model_id))
         print(f"[*] CPU predownload packs: {dataset_repo} ({len(pack_files)} files)", flush=True)
         predownload_packs.remote(dataset_repo=str(dataset_repo), pack_files=pack_files)
         if bool(predownload_only):
@@ -1294,6 +1437,7 @@ def main(
         dataset_repo=str(dataset_repo),
         pack_files=pack_files,
         model_id=str(model_id),
+        model_path=str(model_path or "").strip(),
         tp_size=int(tp_size),
         attn_backend=str(attn_backend),
         quantization=str(quantization),

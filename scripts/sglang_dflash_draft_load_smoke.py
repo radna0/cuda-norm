@@ -72,6 +72,8 @@ def main() -> None:
 
     names = [n for n, _ in model.named_parameters()]
     has_mask = "mask_embedding" in names or any(n.endswith(".mask_embedding") for n in names)
+    has_fc_bias = any(n.endswith("fc.bias") for n in names)
+    has_mlp_bias = any(".mlp." in n and n.endswith(".bias") for n in names)
     print(
         json.dumps(
             {
@@ -79,6 +81,8 @@ def main() -> None:
                 "ckpt": str(model_dir),
                 "num_params": sum(p.numel() for p in model.parameters()),
                 "has_mask_embedding": bool(has_mask),
+                "has_fc_bias_param": bool(has_fc_bias),
+                "has_any_mlp_bias_param": bool(has_mlp_bias),
                 "block_size": int(getattr(model, "block_size", 0) or 0),
                 "num_context_features": int(getattr(model, "num_context_features", 0) or 0),
             },

@@ -40,8 +40,11 @@ def main() -> None:
     ap = argparse.ArgumentParser()
     ap.add_argument("--cache-dir", required=True, help="Teacher cache directory (meta.json + .npy files).")
     ap.add_argument("--teacher-snapshot-dir", required=True, help="HF snapshot dir (config.json + safetensors).")
-    ap.add_argument("--save-directory", default="/dev/shm/easydel-checkpoints", help="EasyDeL checkpoint root dir.")
+    ap.add_argument("--save-directory", default="/dev/shm/dflash-checkpoints", help="EasyDeL checkpoint root dir.")
     ap.add_argument("--model-name", default="gptoss-dflash-draft", help="Checkpoint subdir name under save-directory.")
+    ap.add_argument("--resume", type=str, default="true", help="Resume from latest complete run-* checkpoint.")
+    ap.add_argument("--resume-strict", type=str, default="false", help="Error if resume requested but no checkpoint.")
+    ap.add_argument("--resume-path", default=None, help="Explicit run-* directory to resume from.")
     ap.add_argument("--max-training-steps", type=int, default=2000)
     ap.add_argument("--total-batch-size", type=int, default=128, help="Global batch per step (must be divisible by dp).")
     ap.add_argument("--grad-accum-steps", type=int, default=1)
@@ -68,8 +71,14 @@ def main() -> None:
 
     repo_root = Path(__file__).resolve().parents[1]
     sys.path.insert(0, str(repo_root))
+    local_easydel = repo_root / "external" / "EasyDeL"
+    if local_easydel.exists():
+        sys.path.insert(0, str(local_easydel))
     _load_dotenv(repo_root / ".env")
     # Keep all caches off the root FS (often small) and inside /dev/shm.
+    # This TPU box runs older eformer/ejkernel; we carry local shims. Skip the
+    # strict EasyDeL version gate so imports work.
+    os.environ.setdefault("EASYDEL_SKIP_VERSION_CHECK", "1")
     os.environ.setdefault("HF_HOME", "/dev/shm/hf")
     os.environ.setdefault("HF_HUB_CACHE", "/dev/shm/hf/hub")
     os.environ.setdefault("XDG_CACHE_HOME", "/dev/shm/xdg")
@@ -86,9 +95,11 @@ def main() -> None:
     remat = str(args.remat).lower() in ("1", "true", "yes", "y", "on")
     do_last_save = str(args.do_last_save).lower() in ("1", "true", "yes", "y", "on")
     spmd = str(args.spmd).lower() in ("1", "true", "yes", "y", "on")
+    resume = str(args.resume).lower() in ("1", "true", "yes", "y", "on")
+    resume_strict = str(args.resume_strict).lower() in ("1", "true", "yes", "y", "on")
 
-    from dflash_gptoss.easydel_dflash_config import DFlashConfig
-    from dflash_gptoss.easydel_dflash_trainer import DFlashTrainer
+    from easydel.trainers.dflash_config import DFlashConfig
+    from easydel.trainers.dflash_trainer import DFlashTrainer
 
     cache_dir = Path(args.cache_dir).resolve()
     meta_path = cache_dir / "meta.json"
@@ -129,6 +140,38 @@ def main() -> None:
         dataloader_prefetch=int(args.prefetch),
         dataloader_workers=int(args.workers),
         device_prefetch=int(args.device_prefetch),
+        resume=bool(resume),
+        resume_strict=bool(resume_strict),
+        resume_path=str(args.resume_path) if args.resume_path else None,
+    )
+
+    # Persist a run manifest next to checkpoints for reproducibility.
+    run_dir = Path(cfg.save_directory) / str(cfg.model_name)
+    run_dir.mkdir(parents=True, exist_ok=True)
+    (run_dir / "run_config.json").write_text(
+        json.dumps(
+            {
+                "cache_dir": cfg.cache_dir,
+                "teacher_snapshot_dir": cfg.teacher_snapshot_dir,
+                "model_name": cfg.model_name,
+                "save_directory": cfg.save_directory,
+                "max_training_steps": cfg.max_training_steps,
+                "total_batch_size": cfg.total_batch_size,
+                "gradient_accumulation_steps": cfg.gradient_accumulation_steps,
+                "draft_layers": cfg.draft_layers,
+                "mlp_ratio": cfg.mlp_ratio,
+                "qk_norm": cfg.qk_norm,
+                "remat": getattr(cfg, "remat", None),
+                "vocab_chunk_size": cfg.vocab_chunk_size,
+                "dp": cfg.dp,
+                "tp": cfg.tp,
+                "spmd": cfg.spmd,
+                "dataloader_prefetch": cfg.dataloader_prefetch,
+                "dataloader_workers": getattr(cfg, "dataloader_workers", None),
+            },
+            indent=2,
+        ),
+        encoding="utf-8",
     )
 
     trainer = DFlashTrainer(arguments=cfg, processing_class=None)

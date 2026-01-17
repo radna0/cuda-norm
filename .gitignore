@@ -22,3 +22,6 @@ training_logs/
 cpu_logs/
 reports/
 .versa_sync_min/
+kaggle_fetch/
+kaggle_runs/
+logs/
