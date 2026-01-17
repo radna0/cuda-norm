@@ -121,12 +121,16 @@ def main() -> None:
     ctx_tokens = np.load(cache_dir / "ctx_token_ids.npy", mmap_mode="r")
     anchor_ids = np.load(cache_dir / "anchor_ids.npy", mmap_mode="r")
     target_ids = np.load(cache_dir / "target_ids.npy", mmap_mode="r")
+    pos_path = cache_dir / "ctx_pos_start_i32.npy"
+    ctx_pos_start_i32 = np.load(pos_path, mmap_mode="r") if pos_path.exists() else None
 
     i = int(args.sample_idx)
     ctx_feat = _bf16_from_u16(np.asarray(ctx_feats_u16[i])).astype(np.float16)  # bf16->f16 host; moved to device later
     ctx_tok = np.asarray(ctx_tokens[i]).astype(np.int32)
     anchor_id = int(np.asarray(anchor_ids[i]))
     labels = np.asarray(target_ids[i]).astype(np.int32)
+    pos_off = int(np.asarray(ctx_pos_start_i32[i])) if ctx_pos_start_i32 is not None else 0
+    pos_off_cpu = np.asarray([np.int32(pos_off)], dtype=np.int32)
 
     teacher_snapshot = Path(args.teacher_snapshot_dir).resolve()
     teacher_easydel_dir = Path(str(args.teacher_easydel_dir)).resolve() if str(args.teacher_easydel_dir).strip() else None
@@ -263,6 +267,7 @@ def main() -> None:
             padded_num_reqs=1,
             token_ids_cpu=seqbuf.token_ids,
             num_computed_tokens_cpu=seqbuf.num_computed_tokens,
+            position_offset_cpu=pos_off_cpu,
             temperature_cpu=seqbuf.temperature,
             top_p_cpu=seqbuf.top_p,
             top_k_cpu=seqbuf.top_k,
@@ -312,6 +317,7 @@ def main() -> None:
         padded_num_reqs=1,
         token_ids_cpu=seqbuf.token_ids,
         num_computed_tokens_cpu=seqbuf.num_computed_tokens,
+        position_offset_cpu=pos_off_cpu,
         temperature_cpu=seqbuf.temperature,
         top_p_cpu=seqbuf.top_p,
         top_k_cpu=seqbuf.top_k,

@@ -7,6 +7,7 @@ set -euo pipefail
 #   REMOTE_JUPYTER_URL="https://.../proxy"
 # Optional env:
 #   REMOTE_JUPYTER_TOKEN=""
+#   REMOTE_JUPYTER_KERNEL_ID="" # reuse an existing kernel
 #   GPU_TYPE="H100:1"            # metadata only (Kaggle actual GPU is fixed)
 #   EAFT_REMOTE_LOG_DIR="logs"
 #   EAFT_ENV_FILE="/home/kojoe/harmony/cuda-norm/.env"
@@ -42,9 +43,11 @@ ENTROPY_TOPK="20"
 CC_QUANTILE="0.15"
 SKIP_PREDOWNLOAD="0"
 DETACH="1"
+KERNEL_ID="${REMOTE_JUPYTER_KERNEL_ID:-}"
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
+    --kernel-id) KERNEL_ID="$2"; shift 2;;
     --model-id) MODEL_ID="$2"; shift 2;;
     --model-path) MODEL_PATH="$2"; shift 2;;
     --seq-lens-csv) SEQ_LENS_CSV="$2"; shift 2;;
@@ -86,6 +89,7 @@ python -m versa run \
   --backend jupyter \
   --url "${REMOTE_JUPYTER_URL}" \
   ${REMOTE_JUPYTER_TOKEN:+--token "${REMOTE_JUPYTER_TOKEN}"} \
+  ${KERNEL_ID:+--kernel-id "${KERNEL_ID}"} \
   --cwd "/kaggle/working" \
   --log-path "${REMOTE_LOG}" \
   ${DETACH:+--detach} \

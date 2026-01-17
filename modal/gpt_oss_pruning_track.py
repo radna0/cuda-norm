@@ -1687,6 +1687,9 @@ def profile_20b_reap_saliency(
     import hashlib
     import math
 
+    # Mitigate allocator fragmentation for large batches.
+    os.environ.setdefault("PYTORCH_CUDA_ALLOC_CONF", "expandable_segments:True")
+
     import torch
     import pyarrow as pa
     import pyarrow.parquet as pq
@@ -3540,6 +3543,7 @@ def main(
     calib_pack_weights_csv: str = "",
     keep_fracs_csv: str = "0.75",
     keep_n_round: str = "ceil",
+    keep_n_multiple_of: int = 4,
     keep_frac: float = 0.75,
     min_keep_per_layer: int = 16,
     max_keep_per_layer: int = 32,
@@ -5045,6 +5049,9 @@ def main(
         round_mode = str(keep_n_round or "ceil").strip().lower()
         if round_mode not in ("ceil", "floor", "round"):
             raise SystemExit("--keep-n-round must be one of: ceil,floor,round")
+        mult = int(keep_n_multiple_of)
+        if mult < 1:
+            raise SystemExit("--keep-n-multiple-of must be >= 1")
 
         variants: dict[str, str] = {}
         keep_by_variant: dict[str, Any] = {}
@@ -5059,6 +5066,15 @@ def main(
             else:
                 keep_n = int(round(raw))
             keep_n = max(1, min(int(keep_n), int(num_experts)))
+            # SGLang FlashInfer MXFP4 fused MoE routing expects num_experts % 4 == 0.
+            # Enforce a multiple-of constraint so pruned models can be evaluated/served
+            # with those kernels.
+            if mult > 1:
+                keep_n = int(_math.ceil(float(keep_n) / float(mult)) * int(mult))
+                if keep_n > int(num_experts):
+                    keep_n = int(_math.floor(float(num_experts) / float(mult)) * int(mult))
+                keep_n = max(int(mult), keep_n)
+                keep_n = min(int(num_experts), keep_n)
             keep_by_layer = []
             for li in range(num_layers):
                 layer_rank = ranking[li]
@@ -5074,7 +5090,12 @@ def main(
                 out_subdir="20b_pruned_models_eaftreap",
             )
             variants[str(variant_name)] = str(out_dir)
-            keep_by_variant[str(variant_name)] = {"keep_frac": float(keep_frac), "keep_n": int(keep_n)}
+            keep_by_variant[str(variant_name)] = {
+                "keep_frac_requested": float(keep_frac),
+                "keep_frac_actual": float(keep_n) / float(num_experts),
+                "keep_n": int(keep_n),
+                "keep_n_multiple_of": int(mult),
+            }
 
         manifest = {
             "base_model": str(model_id_20b),
@@ -5098,6 +5119,7 @@ def main(
             "keep": keep_by_variant,
             "keep_fracs_csv": str(keep_fracs_csv),
             "keep_n_round": str(round_mode),
+            "keep_n_multiple_of": int(mult),
         }
         (artifacts_dir / "manifest_eaftreap_keepfrac.json").write_text(
             json.dumps(manifest, indent=2, sort_keys=True),

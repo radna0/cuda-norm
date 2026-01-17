@@ -42,6 +42,16 @@ def _now_tag() -> str:
     return time.strftime("%Y%m%d_%H%M%S")
 
 
+def _parse_csv_ints(s: str) -> list[int]:
+    out: list[int] = []
+    for part in (s or "").split(","):
+        p = part.strip()
+        if not p:
+            continue
+        out.append(int(p))
+    return out
+
+
 def _tokenize_blocks(*, tokenizer_path: str, texts: list[str], total_len: int, num_blocks: int, seed: int) -> np.ndarray:
     from transformers import AutoTokenizer
 
@@ -165,6 +175,13 @@ def main() -> None:
         default="tpu",
         choices=["tpu", "cpu"],
         help="For debugging only. Use 'cpu' if TPU is busy.",
+    )
+    ap.add_argument(
+        "--position-offsets",
+        default="0",
+        help="Comma-separated absolute position offsets added to all position_ids during teacher prefill+verify. "
+        "This trains positional parity for long decode without actually decoding to 65k/131k. "
+        "Example: '0,4096,65536,131072'.",
     )
     args = ap.parse_args()
 
@@ -292,6 +309,16 @@ def main() -> None:
     target_ids = np.empty((n_out, block_size - 1), dtype=np.int32)
     anchor_ids = np.empty((n_out,), dtype=np.int32)
     ctx_token_ids = np.empty((n_out, ctx_len), dtype=np.int32)
+    # Absolute position metadata for positional-parity training.
+    # ctx positions are contiguous: [ctx_pos_start .. ctx_pos_start + ctx_len - 1]
+    # anchor token position is anchor_pos.
+    ctx_pos_start_i32 = np.empty((n_out,), dtype=np.int32)
+    anchor_pos_i32 = np.empty((n_out,), dtype=np.int32)
+
+    pos_offsets = _parse_csv_ints(str(args.position_offsets))
+    if not pos_offsets:
+        pos_offsets = [0]
+    pos_offsets = [max(0, int(x)) for x in pos_offsets]
 
     input_ids = np.asarray(input_ids_np, dtype=np.int32)
 
@@ -400,6 +427,8 @@ def main() -> None:
         for step_idx in range(int(rollout_steps)):
             # Generate one training sample for this (ctx_ids, anchor_id) state.
             tgt = np.empty((int(block_size - 1),), dtype=np.int32)
+            pos_off = int(pos_offsets[int(out_pos) % len(pos_offsets)])
+            pos_off_cpu = np.asarray([np.int32(pos_off)], dtype=np.int32)
 
             _reset_kv_pages()
 
@@ -430,6 +459,7 @@ def main() -> None:
                     padded_num_reqs=1,
                     token_ids_cpu=seqbuf.token_ids,
                     num_computed_tokens_cpu=seqbuf.num_computed_tokens,
+                    position_offset_cpu=pos_off_cpu,
                     temperature_cpu=seqbuf.temperature,
                     top_p_cpu=seqbuf.top_p,
                     top_k_cpu=seqbuf.top_k,
@@ -460,6 +490,7 @@ def main() -> None:
                     padded_num_reqs=1,
                     token_ids_cpu=seqbuf.token_ids,
                     num_computed_tokens_cpu=seqbuf.num_computed_tokens,
+                    position_offset_cpu=pos_off_cpu,
                     temperature_cpu=seqbuf.temperature,
                     top_p_cpu=seqbuf.top_p,
                     top_k_cpu=seqbuf.top_k,
@@ -503,6 +534,7 @@ def main() -> None:
                     padded_num_reqs=1,
                     token_ids_cpu=seqbuf.token_ids,
                     num_computed_tokens_cpu=seqbuf.num_computed_tokens,
+                    position_offset_cpu=pos_off_cpu,
                     temperature_cpu=seqbuf.temperature,
                     top_p_cpu=seqbuf.top_p,
                     top_k_cpu=seqbuf.top_k,
@@ -527,6 +559,7 @@ def main() -> None:
                 padded_num_reqs=1,
                 token_ids_cpu=seqbuf.token_ids,
                 num_computed_tokens_cpu=seqbuf.num_computed_tokens,
+                position_offset_cpu=pos_off_cpu,
                 temperature_cpu=seqbuf.temperature,
                 top_p_cpu=seqbuf.top_p,
                 top_k_cpu=seqbuf.top_k,
@@ -554,6 +587,8 @@ def main() -> None:
             target_ids[out_pos] = tgt_verify
             anchor_ids[out_pos] = np.int32(anchor_id)
             ctx_token_ids[out_pos] = ctx_ids
+            ctx_pos_start_i32[out_pos] = np.int32(pos_off)
+            anchor_pos_i32[out_pos] = np.int32(pos_off + int(ctx_len))
             out_pos += 1
 
             # Roll forward in a "perfect acceptance" world:
@@ -597,6 +632,10 @@ def main() -> None:
         "num_context_features": int(k),
         "dtype": "bf16_u16",
         "seed": int(args.seed),
+        "position_offsets": pos_offsets,
+        "positions_contiguous": True,
+        "ctx_pos_start_file": "ctx_pos_start_i32.npy",
+        "anchor_pos_file": "anchor_pos_i32.npy",
         "calib_repo_id": str(args.calib_repo_id),
         "calib_data_files": data_files,
         "max_rows_per_pack": int(args.max_rows_per_pack),
@@ -616,6 +655,8 @@ def main() -> None:
         np.save(out_dir / "context_features_u16.npy", ctx_feats_u16)
         np.save(out_dir / "anchor_embedding_u16.npy", anchor_emb_u16)
         np.save(out_dir / "anchor_ids.npy", anchor_ids)
+        np.save(out_dir / "ctx_pos_start_i32.npy", ctx_pos_start_i32)
+        np.save(out_dir / "anchor_pos_i32.npy", anchor_pos_i32)
         np.save(out_dir / "target_ids.npy", target_ids)
         np.save(out_dir / "ctx_token_ids.npy", ctx_token_ids)
         print(f"[done] wrote cache_dir={out_dir}", flush=True)
@@ -628,6 +669,8 @@ def main() -> None:
         context_features_u16=ctx_feats_u16,
         anchor_embedding_u16=anchor_emb_u16,
         anchor_ids=anchor_ids,
+        ctx_pos_start_i32=ctx_pos_start_i32,
+        anchor_pos_i32=anchor_pos_i32,
         target_ids=target_ids,
         ctx_token_ids=ctx_token_ids,
         meta=json.dumps(meta),

@@ -37,6 +37,7 @@ set -euo pipefail
 #     --calib-pack-files "packs/reasoning_style_10k_v2/reasoning_style_10k_v2.parquet,tool_agentic_10k_v6.parquet,packs/calib_prompt_10000_v2/calib_prompt_10000_v2.parquet" \
 #     --calib-pack-sample-strategy "per_file" \
 #     --keep-fracs-csv "0.75,0.60" \
+#     --keep-n-round "ceil" --keep-n-multiple-of 4 \
 #     --num-rows 30000 --max-seq-length 4096 --batch-size 1
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -72,6 +73,8 @@ CALIB_PACK_FILES="packs/reasoning_style_10k_v2/reasoning_style_10k_v2.parquet,to
 CALIB_PACK_SAMPLE_STRATEGY="per_file"
 KEEP_FRACS_CSV="0.75"
 KEEP_FRAC="0.75"
+KEEP_N_ROUND="ceil"
+KEEP_N_MULTIPLE_OF="4"
 MIN_KEEP_PER_LAYER="16"
 MAX_KEEP_PER_LAYER="32"
 CORE_POS_TOP_M="4"
@@ -105,6 +108,8 @@ while [[ $# -gt 0 ]]; do
     --calib-pack-sample-strategy) CALIB_PACK_SAMPLE_STRATEGY="$2"; shift 2;;
     --keep-fracs-csv) KEEP_FRACS_CSV="$2"; shift 2;;
     --keep-frac) KEEP_FRAC="$2"; shift 2;;
+    --keep-n-round) KEEP_N_ROUND="$2"; shift 2;;
+    --keep-n-multiple-of) KEEP_N_MULTIPLE_OF="$2"; shift 2;;
     --min-keep-per-layer) MIN_KEEP_PER_LAYER="$2"; shift 2;;
     --max-keep-per-layer) MAX_KEEP_PER_LAYER="$2"; shift 2;;
     --core-pos-top-m) CORE_POS_TOP_M="$2"; shift 2;;
@@ -163,6 +168,7 @@ python -m versa run \
     --eaft-w-good "${EAFT_W_GOOD}" --eaft-w-uncertain "${EAFT_W_UNCERTAIN}" --eaft-w-conflict "${EAFT_W_CONFLICT}" \
     --calib-packs-repo "${CALIB_PACKS_REPO}" --calib-pack-files-csv "${CALIB_PACK_FILES}" --calib-pack-sample-strategy "${CALIB_PACK_SAMPLE_STRATEGY}" \
     --keep-fracs-csv "${KEEP_FRACS_CSV}" \
+    --keep-n-round "${KEEP_N_ROUND}" --keep-n-multiple-of "${KEEP_N_MULTIPLE_OF}" \
     --keep-frac "${KEEP_FRAC}" --min-keep-per-layer "${MIN_KEEP_PER_LAYER}" --max-keep-per-layer "${MAX_KEEP_PER_LAYER}" \
     --core-pos-top-m "${CORE_POS_TOP_M}" --core-count-top-m "${CORE_COUNT_TOP_M}"
 

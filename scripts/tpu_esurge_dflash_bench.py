@@ -46,6 +46,18 @@ def main() -> None:
     ap.add_argument("--hbm-utilization", type=float, default=0.5)
     ap.add_argument("--prompt-len", type=int, default=256)
     ap.add_argument("--prompt-repeat", type=int, default=1, help="Repeat the prompt text to reach long contexts (tokenizer-dependent).")
+    ap.add_argument(
+        "--prompt-from-cache-dir",
+        default="",
+        help="If set, ignore the text prompt and instead use prompt ids from a DFlash teacher cache dir "
+        "(ctx_token_ids.npy + anchor_ids.npy). This is the fastest way to benchmark on training distribution.",
+    )
+    ap.add_argument(
+        "--cache-sample-idx",
+        type=int,
+        default=0,
+        help="Index into ctx_token_ids/anchor_ids when --prompt-from-cache-dir is set.",
+    )
     ap.add_argument("--also-run-baseline", action="store_true", help="Also run baseline greedy (slow) for speedup_x.")
     args = ap.parse_args()
 
@@ -66,11 +78,23 @@ def main() -> None:
     from easydel.inference.speculative import DFlashDraftModelConfig
 
     teacher_snapshot = Path(args.teacher_snapshot_dir).resolve()
-    tok = AutoTokenizer.from_pretrained(str(teacher_snapshot), local_files_only=True, use_fast=True)
-    base_prompt = "You are a helpful assistant.\n\nUser: Explain speculative decoding in one paragraph.\nAssistant:"
-    prompt = (base_prompt + "\n") * max(1, int(args.prompt_repeat))
-    enc = tok(prompt, truncation=True, max_length=int(args.prompt_len), return_tensors="np")
-    prompt_ids = enc["input_ids"][0].astype(np.int32)
+    prompt_from_cache_dir = str(args.prompt_from_cache_dir).strip()
+    if prompt_from_cache_dir:
+        cache_dir = Path(prompt_from_cache_dir).expanduser().resolve()
+        ctx_tokens = np.load(cache_dir / "ctx_token_ids.npy", mmap_mode="r")
+        anchor_ids = np.load(cache_dir / "anchor_ids.npy", mmap_mode="r")
+        i = int(args.cache_sample_idx)
+        if i < 0 or i >= int(ctx_tokens.shape[0]):
+            raise ValueError(f"--cache-sample-idx={i} out of range (0..{int(ctx_tokens.shape[0]) - 1})")
+        ctx = np.asarray(ctx_tokens[i], dtype=np.int32)
+        anchor = int(np.asarray(anchor_ids[i]))
+        prompt_ids = np.concatenate([ctx, np.asarray([anchor], dtype=np.int32)], axis=0)
+    else:
+        tok = AutoTokenizer.from_pretrained(str(teacher_snapshot), local_files_only=True, use_fast=True)
+        base_prompt = "You are a helpful assistant.\n\nUser: Explain speculative decoding in one paragraph.\nAssistant:"
+        prompt = (base_prompt + "\n") * max(1, int(args.prompt_repeat))
+        enc = tok(prompt, truncation=True, max_length=int(args.prompt_len), return_tensors="np")
+        prompt_ids = enc["input_ids"][0].astype(np.int32)
 
     teacher_easydel_dir = Path(str(args.teacher_easydel_dir)).resolve() if str(args.teacher_easydel_dir).strip() else None
     if teacher_easydel_dir is not None and teacher_easydel_dir.exists():
