@@ -1,0 +1,47 @@
+schema_version: 1
+kind: eval_base
+
+name: eaft_calib_packs_base
+description: >
+  Common EAFT parity evaluation settings on curated Harmony calib packs.
+  Child eval YAMLs should `extends: eval-base.yaml` and override only what differs.
+
+paths:
+  gates_json: harmony/cuda-norm/pruning/near_lossless_gates.json
+  collector_entrypoint: harmony/cuda-norm/modal/collect_calib_packs_eaft_single.py
+  pair_summarizer: harmony/cuda-norm/scripts/summarize_eaft_pair.py
+
+calib_packs:
+  dataset_repo: radna0/harmony-qwen3-calib-packs-v2-20260113
+  text_column: text
+  pack_files:
+    - packs/reasoning_style_10k_v2/reasoning_style_10k_v2.parquet
+    - tool_agentic_10k_v6.parquet
+    - packs/calib_prompt_10000_v2/calib_prompt_10000_v2.parquet
+  derived_union_name: UNION
+
+eaft:
+  entropy_topk: 20
+  cc_quantile: 0.15
+  prob_scale: linear
+  # For log-scale plots (optional), these bound log10(p_ref) values.
+  logp_min: -8.0
+  logp_max: 0.0
+
+collector_defaults:
+  top_k: 4
+  sample_points: 200000
+  batch_size: 1
+  # “Bigblocks” regime: enough tokens to stabilize JS2D.
+  num_blocks: 512
+  seq_lens_csv: "1024,2048"
+
+engine_defaults:
+  # Determinism / stability knobs for pruned checkpoints.
+  env:
+    SGLANG_DISABLE_FLASHINFER_AUTOTUNE: "1"
+    SGLANG_ALLOW_OVERWRITE_LONGER_CONTEXT_LEN: "1"
+    # Optional overrides (only enable when needed):
+    # MEM_FRACTION_STATIC: "0.86"
+    # CHUNKED_PREFILL_SIZE: "16384"
+

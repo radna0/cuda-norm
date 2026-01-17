@@ -28,12 +28,22 @@ mkdir -p "${LOG_DIR}" "${CKPT_DIR}"
 export HF_HOME="${HF_HOME:-/dev/shm/hf}"
 export HF_HUB_CACHE="${HF_HUB_CACHE:-/dev/shm/hf/hub}"
 export XDG_CACHE_HOME="${XDG_CACHE_HOME:-/dev/shm/xdg}"
-export JAX_COMPILATION_CACHE_DIR="${JAX_COMPILATION_CACHE_DIR:-/dev/shm/jax_compilation_cache_dflash/${RUN_NAME}}"
+# Persistent JAX compilation cache can explode in size and fill /dev/shm.
+# Default: disable (still uses in-memory compilation cache).
+# To enable explicitly:
+#   ENABLE_JAX_PERSISTENT_COMPILATION_CACHE=1 JAX_COMPILATION_CACHE_DIR=/path/...
+if [[ "${ENABLE_JAX_PERSISTENT_COMPILATION_CACHE:-0}" == "1" ]]; then
+  export JAX_COMPILATION_CACHE_DIR="${JAX_COMPILATION_CACHE_DIR:-/dev/shm/jax_compilation_cache_dflash/${RUN_NAME}}"
+else
+  unset JAX_COMPILATION_CACHE_DIR || true
+fi
 export TMPDIR="${TMPDIR:-/dev/shm/tmp}"
-mkdir -p "${HF_HOME}" "${HF_HUB_CACHE}" "${XDG_CACHE_HOME}" "${JAX_COMPILATION_CACHE_DIR}" "${TMPDIR}"
+mkdir -p "${HF_HOME}" "${HF_HUB_CACHE}" "${XDG_CACHE_HOME}" "${TMPDIR}"
 
-# Corrupted cache entries can cause zstd warnings; start clean for long runs.
-rm -rf "${JAX_COMPILATION_CACHE_DIR:?}/"* || true
+# If the persistent compilation cache is enabled, keep it across runs to reduce compile cost.
+if [[ "${ENABLE_JAX_PERSISTENT_COMPILATION_CACHE:-0}" == "1" ]]; then
+  mkdir -p "${JAX_COMPILATION_CACHE_DIR}"
+fi
 
 LOG_PATH="${LOG_DIR}/${RUN_NAME}.log"
 PID_PATH="${LOG_DIR}/${RUN_NAME}.pid"

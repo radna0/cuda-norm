@@ -1,0 +1,53 @@
+schema_version: 1
+kind: eval_recipe
+extends: eval-base.yaml
+
+name: eaft_parity_20b_base_vs_eaftreap075_longseq_tokenbudget1m
+description: >
+  Proves the keep_frac=0.75 prune is stable at longer sequence lengths while
+  holding per-pack token budget ~constant (~1,048,576 pred tokens per pack).
+  Also increases batch_size where feasible to test scalable throughput.
+
+pair:
+  left:
+    label: base_20b
+    model_id: openai/gpt-oss-20b
+  right:
+    label: eaftreap_075
+    model_id: eaftreap_budgeted_keepfrac075
+    model_path_from_manifest:
+      manifest_json: harmony/cuda-norm/artifacts/20b_pruned_models_eaftreap_budgeted/manifest.json
+      field: out_dir
+
+run_matrix:
+  # Maintain ~1,048,576 tokens per pack:
+  #   blocks = 1_048_576 / seq_len
+  - name: seq4096_blocks256_bs4
+    collector_overrides:
+      seq_lens_csv: "4096"
+      num_blocks: 256
+      batch_size: 4
+      sample_points: 200000
+      top_k: 4
+  - name: seq8192_blocks128_bs2
+    collector_overrides:
+      seq_lens_csv: "8192"
+      num_blocks: 128
+      batch_size: 2
+      sample_points: 200000
+      top_k: 4
+  - name: seq16384_blocks64_bs1
+    collector_overrides:
+      seq_lens_csv: "16384"
+      num_blocks: 64
+      batch_size: 1
+      sample_points: 200000
+      top_k: 4
+
+execution_notes:
+  - "Run each matrix entry as its own collector job (do not bundle multiple seq_lens into one job unless required)."
+  - "Use the same gates_json; we expect deltas consistent with the 1024/2048 PASS run."
+
+expected_outputs:
+  parity_summary_md: harmony/cuda-norm/reports/eaftreap75_longseq_tokenbudget1m.md
+

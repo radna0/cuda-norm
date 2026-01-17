@@ -5182,6 +5182,23 @@ def main(
             keep_experts_by_layer_json=json.dumps(keep_by_layer),
             out_subdir="20b_pruned_models_noop",
         )
+        artifacts_dir = Path("artifacts/20b_pruned_models_noop")
+        artifacts_dir.mkdir(parents=True, exist_ok=True)
+        (artifacts_dir / "manifest.json").write_text(
+            json.dumps(
+                {
+                    "base_model": str(model_id_20b),
+                    "variant_name": "noop_rewrite_keepall_experts",
+                    "keep_n": int(num_experts),
+                    "num_layers": int(num_layers),
+                    "num_experts": int(num_experts),
+                    "out_dir": str(out_dir),
+                },
+                indent=2,
+                sort_keys=True,
+            ),
+            encoding="utf-8",
+        )
         rep = Path("reports/20b_noop_rewrite_build.md")
         rep.parent.mkdir(parents=True, exist_ok=True)
         rep.write_text(
@@ -5191,6 +5208,7 @@ def main(
                     "",
                     f"- Base model: `{model_id_20b}`",
                     f"- Output dir: `{out_dir}`",
+                    f"- Manifest: `{artifacts_dir/'manifest.json'}`",
                     "",
                     "Next: run EAFT/PPL parity base vs this dir; deltas should be ~0.",
                     "",

@@ -1,0 +1,31 @@
+schema_version: 1
+kind: eval_recipe
+extends: eval-base.yaml
+
+name: eaft_lossless_check_20b_noop_rewrite_bigblocks
+description: >
+  Validates that our safetensors rewrite/index/mapping path is lossless by
+  rewriting the 20B model while keeping all experts (keep_n=32) and comparing
+  EAFT parity vs the original base model.
+
+pair:
+  left:
+    label: base_20b
+    model_id: openai/gpt-oss-20b
+  right:
+    label: noop_rewrite_keepall
+    model_id: noop_rewrite_keepall_experts
+    model_path_from_manifest:
+      manifest_json: harmony/cuda-norm/artifacts/20b_pruned_models_noop/manifest.json
+      field: out_dir
+
+collector_overrides:
+  seq_lens_csv: "1024,2048"
+  num_blocks: 512
+  batch_size: 1
+  sample_points: 200000
+  top_k: 4
+
+expected_outputs:
+  parity_summary_md: harmony/cuda-norm/reports/eaft_noop_rewrite_lossless_20b_bigblocks.md
+

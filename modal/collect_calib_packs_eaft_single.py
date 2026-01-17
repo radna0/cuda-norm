@@ -872,7 +872,14 @@ def _eaft_collect_for_plots(
     samples: list[list[float]] = []
     rng = np.random.default_rng(0)
 
-    sampling: dict[str, Any] = {"temperature": 0, "max_new_tokens": 0}
+    # Some backends can behave poorly with `max_new_tokens=0`. Keep the
+    # default as 0 (we only need teacher-forcing logprobs), but allow
+    # overriding via env for debugging/stability.
+    try:
+        max_new_tokens_env = int(os.environ.get("EAFT_MAX_NEW_TOKENS", "0"))
+    except Exception:
+        max_new_tokens_env = 0
+    sampling: dict[str, Any] = {"temperature": 0, "max_new_tokens": int(max_new_tokens_env)}
     printed_format = False
     t0 = time.time()
     last_log = t0

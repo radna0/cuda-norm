@@ -127,31 +127,20 @@ def main() -> None:
         raise ValueError(f"block_size mismatch: args={args.block_size} ckpt={dcfg.block_size}")
 
     rngs = nnx.Rngs(0)
-    draft = DFlashDraftModel(dcfg, rngs=rngs)
+    template = DFlashDraftModel(dcfg, rngs=rngs)
+    graphdef, template_graphstate, graphother = nnx.split(template, nnx.Param, ...)
 
-    # Restore nnx state from tensorstore directory layout:
-    # draft_run/model/... is zarr; rely on EasyDeL trainer's tensorstore layout.
-    # We use nnx.state()/update_state() pattern via tensorstore in TPU env.
-    draft_state = None
-    # EasyDeL helper (preferred).
-    try:
-        from easydel.trainers.base_trainer import load_state_from_checkpoint  # type: ignore
+    from easydel.inference.speculative.dflash_checkpoint import load_dflash_graphstate_from_run
 
-        draft_state = load_state_from_checkpoint(str(draft_run), state_like=nnx.state(draft))
-    except Exception:
-        draft_state = None
-    if draft_state is None:
-        # Fallback: some EasyDeL builds expose the checkpoint loader under `easydel.trainers.utils`.
-        try:
-            from easydel.trainers.utils import load_state_from_checkpoint as load2  # type: ignore
-
-            draft_state = load2(str(draft_run), state_like=nnx.state(draft))
-        except Exception as e:
-            raise RuntimeError(
-                "Could not load EasyDeL tensorstore checkpoint for the draft model. "
-                "Ensure the TPU environment has EasyDeL's checkpoint loader available."
-            ) from e
-    nnx.update(draft, draft_state)
+    graphstate = load_dflash_graphstate_from_run(
+        run_dir=draft_run,
+        mesh=teacher.mesh,
+        template_graphstate=template_graphstate,
+        partition_rules=dcfg.get_partition_rules(),
+        strict_shapes=True,
+    )
+    graphstate = jax.block_until_ready(graphstate)
+    draft = nnx.merge(graphdef, graphstate, graphother)
 
     # Tokenize prompt and split into (prefix_without_last, current_token).
     prompt_ids = _encode_prompt(str(teacher_snapshot), str(args.prompt), max_len=int(args.max_prompt_len))

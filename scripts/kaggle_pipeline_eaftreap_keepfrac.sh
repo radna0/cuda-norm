@@ -34,7 +34,7 @@ INTERVAL_S="120"
 
 SEQ_LENS_CSV="1024,2048"
 NUM_BLOCKS="128"
-BATCH_SIZE="1"
+BATCH_SIZE="8"
 SAMPLE_POINTS="100000"
 TOP_K="4"
 
@@ -75,7 +75,7 @@ while :; do
       ${REMOTE_JUPYTER_TOKEN:+--token "${REMOTE_JUPYTER_TOKEN}"} \
       --kernel-id "${KERNEL_ID}" \
       --cwd "/kaggle/working" \
-      "bash" "-lc" "rg -n '\\[\\+\\] Wrote ${MANIFEST_PATH//\//\\/}' -S ${PRUNE_REMOTE_LOG} && echo DONE || echo PENDING" \
+      "bash" "-lc" "rg -n '\\[\\+\\] Wrote .*manifest_eaftreap_keepfrac\\.json' -S ${PRUNE_REMOTE_LOG} && echo DONE || echo PENDING" \
       | rg -n "^DONE$" >/dev/null 2>&1; then
     break
   fi
@@ -85,69 +85,171 @@ done
 
 echo "[+] prune finished; reading manifest..."
 
-MODEL_LABEL="$(
-  PYTHONPATH="${REPO_ROOT}/third_party/Versa" python -m versa run \
-    --backend jupyter --url "${REMOTE_JUPYTER_URL}" ${REMOTE_JUPYTER_TOKEN:+--token "${REMOTE_JUPYTER_TOKEN}"} \
-    --kernel-id "${KERNEL_ID}" --cwd "/kaggle/working" \
-    "python" "- <<'PY'\nimport json\nm=json.load(open('${MANIFEST_PATH}','r',encoding='utf-8'))\nprint(sorted((m.get('variants') or {}).keys())[0])\nPY" | tail -n 1
+echo "[*] Downloading pruning manifest via stdout (versa fetch is unreliable)..."
+FETCH_DIR="${ROOT_DIR}/kaggle_fetch/prune_manifest_$(date +%Y%m%d_%H%M%S)"
+mkdir -p "${FETCH_DIR}"
+LOCAL_MANIFEST="${FETCH_DIR}/manifest_eaftreap_keepfrac.json"
+
+PYTHONPATH="${REPO_ROOT}/third_party/Versa" python -m versa run \
+  --backend jupyter \
+  --url "${REMOTE_JUPYTER_URL}" \
+  ${REMOTE_JUPYTER_TOKEN:+--token "${REMOTE_JUPYTER_TOKEN}"} \
+  --kernel-id "${KERNEL_ID}" \
+  --cwd "/kaggle/working" \
+  "python" "-c" "import base64, pathlib, sys; p=pathlib.Path('${MANIFEST_PATH}'); print('___BEGIN_B64___'); print(base64.b64encode(p.read_bytes()).decode('utf-8')); print('___END_B64___')" \
+  | awk '/^___BEGIN_B64___$/{f=1;next} /^___END_B64___$/{f=0} f{print}' \
+  | tr -d '\n' \
+  | python -c "import base64,sys; sys.stdout.buffer.write(base64.b64decode(sys.stdin.buffer.read().strip() or b''))" \
+  > "${LOCAL_MANIFEST}"
+
+if [[ ! -s "${LOCAL_MANIFEST}" ]]; then
+  echo "[err] failed to download manifest to ${LOCAL_MANIFEST}" >&2
+  exit 3
+fi
+
+MODEL_LABEL="$(python - <<PY
+import json
+m=json.load(open('${LOCAL_MANIFEST}','r',encoding='utf-8'))
+v=m.get('variants') or {}
+print(sorted(v.keys())[0] if v else '')
+PY
 )"
 
-OUT_DIR="$(
-  PYTHONPATH="${REPO_ROOT}/third_party/Versa" python -m versa run \
-    --backend jupyter --url "${REMOTE_JUPYTER_URL}" ${REMOTE_JUPYTER_TOKEN:+--token "${REMOTE_JUPYTER_TOKEN}"} \
-    --kernel-id "${KERNEL_ID}" --cwd "/kaggle/working" \
-    "python" "- <<'PY'\nimport json\nm=json.load(open('${MANIFEST_PATH}','r',encoding='utf-8'))\nv=m.get('variants') or {}\nprint(v.get(sorted(v.keys())[0],''))\nPY" | tail -n 1
+OUT_DIR="$(python - <<PY
+import json
+m=json.load(open('${LOCAL_MANIFEST}','r',encoding='utf-8'))
+v=m.get('variants') or {}
+k=sorted(v.keys())[0] if v else ''
+print(v.get(k,''))
+PY
 )"
 
 if [[ -z "${MODEL_LABEL}" || -z "${OUT_DIR}" ]]; then
-  echo "[err] Could not read pruned variant from manifest ${MANIFEST_PATH}" >&2
-  exit 3
+  echo "[err] Could not parse downloaded manifest ${LOCAL_MANIFEST}" >&2
+  exit 4
 fi
 
 echo "[+] pruned label=${MODEL_LABEL}"
 echo "[+] pruned out_dir=${OUT_DIR}"
 
+echo "[*] Ensuring SGLang is installed + overlay applied on Kaggle kernel..."
+export REMOTE_JUPYTER_KERNEL_ID="${KERNEL_ID}"
+bash "${ROOT_DIR}/scripts/versa_install_sglang_dflash.sh" --kernel-id "${KERNEL_ID}" --no-detach
+
 echo "[*] Starting EAFT collectors on Kaggle kernel..."
 export REMOTE_JUPYTER_KERNEL_ID="${KERNEL_ID}"
 
-bash "${ROOT_DIR}/scripts/versa_run_eaft_single_kaggle.sh" \
-  --kernel-id "${KERNEL_ID}" \
-  --model-id "openai/gpt-oss-20b" \
-  --model-path "/kaggle/input/gpt-oss-20b/transformers/default/1" \
-  --seq-lens-csv "${SEQ_LENS_CSV}" \
-  --num-blocks "${NUM_BLOCKS}" --batch-size "${BATCH_SIZE}" \
-  --sample-points "${SAMPLE_POINTS}" --top-k "${TOP_K}" \
-  --skip-predownload \
-  --no-detach
+_wait_for_wrote() {
+  local remote_log="$1"
+  echo "[*] waiting for ${remote_log} ..."
+  while :; do
+    if PYTHONPATH="${REPO_ROOT}/third_party/Versa" python -m versa run \
+        --backend jupyter \
+        --url "${REMOTE_JUPYTER_URL}" \
+        ${REMOTE_JUPYTER_TOKEN:+--token "${REMOTE_JUPYTER_TOKEN}"} \
+        --kernel-id "${KERNEL_ID}" \
+        --cwd "/kaggle/working" \
+        bash -lc "rg -n '\\[\\+\\] Wrote ' -S '${remote_log}' | tail -n 1 || true" \
+        | rg -v '^\\[versa\\]' \
+        | rg -q "\\[\\+\\] Wrote "; then
+      break
+    fi
+    echo "[*] still running... $(date -Is)"
+    sleep "${INTERVAL_S}"
+  done
+}
 
-bash "${ROOT_DIR}/scripts/versa_run_eaft_single_kaggle.sh" \
-  --kernel-id "${KERNEL_ID}" \
-  --model-id "${MODEL_LABEL}" \
-  --model-path "${OUT_DIR}" \
-  --seq-lens-csv "${SEQ_LENS_CSV}" \
-  --num-blocks "${NUM_BLOCKS}" --batch-size "${BATCH_SIZE}" \
-  --sample-points "${SAMPLE_POINTS}" --top-k "${TOP_K}" \
-  --skip-predownload \
-  --no-detach
+_extract_wrote_path() {
+  local remote_log="$1"
+  PYTHONPATH="${REPO_ROOT}/third_party/Versa" python -m versa run \
+    --backend jupyter \
+    --url "${REMOTE_JUPYTER_URL}" \
+    ${REMOTE_JUPYTER_TOKEN:+--token "${REMOTE_JUPYTER_TOKEN}"} \
+    --kernel-id "${KERNEL_ID}" \
+    --cwd "/kaggle/working" \
+    bash -lc "rg -n '\\[\\+\\] Wrote ' -S '${remote_log}' | tail -n 1 | sed -E 's/^.*\\[\\+\\] Wrote //' || true" \
+    | rg -v '^\\[versa\\]' \
+    | tail -n 1
+}
 
-echo "[*] Fetching EAFT artifacts from Kaggle..."
+BASE_START_OUT="$(
+  bash "${ROOT_DIR}/scripts/versa_run_eaft_single_kaggle.sh" \
+    --kernel-id "${KERNEL_ID}" \
+    --model-id "openai/gpt-oss-20b" \
+    --model-path "/kaggle/input/gpt-oss-20b/transformers/default/1" \
+    --seq-lens-csv "${SEQ_LENS_CSV}" \
+    --num-blocks "${NUM_BLOCKS}" --batch-size "${BATCH_SIZE}" \
+    --sample-points "${SAMPLE_POINTS}" --top-k "${TOP_K}" \
+    --progress-every-s 30 --max-new-tokens 1 \
+    --skip-predownload
+)"
+echo "${BASE_START_OUT}"
+BASE_REMOTE_LOG="$(printf '%s\n' "${BASE_START_OUT}" | rg '^\\s*remote_log=' | sed -E 's/^\\s*remote_log=//' | tail -n 1)"
+if [[ -z "${BASE_REMOTE_LOG}" ]]; then
+  echo "[err] Could not parse base remote_log" >&2
+  exit 5
+fi
+
+_wait_for_wrote "${BASE_REMOTE_LOG}"
+
+PRUNED_START_OUT="$(
+  bash "${ROOT_DIR}/scripts/versa_run_eaft_single_kaggle.sh" \
+    --kernel-id "${KERNEL_ID}" \
+    --model-id "${MODEL_LABEL}" \
+    --model-path "${OUT_DIR}" \
+    --seq-lens-csv "${SEQ_LENS_CSV}" \
+    --num-blocks "${NUM_BLOCKS}" --batch-size "${BATCH_SIZE}" \
+    --sample-points "${SAMPLE_POINTS}" --top-k "${TOP_K}" \
+    --progress-every-s 30 --max-new-tokens 1 \
+    --skip-predownload
+)"
+echo "${PRUNED_START_OUT}"
+PRUNED_REMOTE_LOG="$(printf '%s\n' "${PRUNED_START_OUT}" | rg '^\\s*remote_log=' | sed -E 's/^\\s*remote_log=//' | tail -n 1)"
+if [[ -z "${PRUNED_REMOTE_LOG}" ]]; then
+  echo "[err] Could not parse pruned remote_log" >&2
+  exit 5
+fi
+
+_wait_for_wrote "${PRUNED_REMOTE_LOG}"
+
+echo "[*] Downloading EAFT JSONs via stdout..."
 FETCH_DIR="${ROOT_DIR}/kaggle_fetch/eaft_models_${MODEL_LABEL}_$(date +%Y%m%d_%H%M%S)"
 mkdir -p "${FETCH_DIR}"
 
-PYTHONPATH="${REPO_ROOT}/third_party/Versa" python -m versa fetch \
-  --url "${REMOTE_JUPYTER_URL}" \
-  ${REMOTE_JUPYTER_TOKEN:+--token "${REMOTE_JUPYTER_TOKEN}"} \
-  --kernel-id "${KERNEL_ID}" \
-  --remote-dir "/kaggle/working/cuda-norm/artifacts/eaft_models" \
-  --local-dir "${FETCH_DIR}/eaft_models"
+BASE_REMOTE="$(_extract_wrote_path "${BASE_REMOTE_LOG}")"
+PRUNED_REMOTE="$(_extract_wrote_path "${PRUNED_REMOTE_LOG}")"
 
-BASE_JSON="$(ls -t ${FETCH_DIR}/eaft_models/*/openai_gpt-oss-20b.json 2>/dev/null | head -n 1 || true)"
-PRUNED_JSON="$(ls -t ${FETCH_DIR}/eaft_models/*/${MODEL_LABEL}.json 2>/dev/null | head -n 1 || true)"
-if [[ -z "${BASE_JSON}" || -z "${PRUNED_JSON}" ]]; then
-  echo "[err] Could not find fetched EAFT JSONs." >&2
-  echo "      base=${BASE_JSON:-<missing>}" >&2
-  echo "      pruned=${PRUNED_JSON:-<missing>}" >&2
-  exit 4
+if [[ -z "${BASE_REMOTE}" || -z "${PRUNED_REMOTE}" ]]; then
+  echo "[err] Could not locate EAFT JSONs on Kaggle." >&2
+  echo "      base_remote=${BASE_REMOTE:-<missing>}" >&2
+  echo "      pruned_remote=${PRUNED_REMOTE:-<missing>}" >&2
+  exit 5
+fi
+
+BASE_REMOTE_DIR="$(dirname "${BASE_REMOTE}")"
+PRUNED_REMOTE_DIR="$(dirname "${PRUNED_REMOTE}")"
+
+echo "[*] Downloading EAFT outputs from Kaggle (download_dir)..."
+mkdir -p "${FETCH_DIR}/base" "${FETCH_DIR}/pruned"
+PYTHONPATH="${REPO_ROOT}/third_party/Versa" python -m versa run \
+  --backend jupyter --url "${REMOTE_JUPYTER_URL}" ${REMOTE_JUPYTER_TOKEN:+--token "${REMOTE_JUPYTER_TOKEN}"} \
+  --kernel-id "${KERNEL_ID}" --cwd "/kaggle/working" \
+  --download-remote-dir "${BASE_REMOTE_DIR}" --download-local-dir "${FETCH_DIR}/base" \
+  python -c "print('download base eaft dir')"
+PYTHONPATH="${REPO_ROOT}/third_party/Versa" python -m versa run \
+  --backend jupyter --url "${REMOTE_JUPYTER_URL}" ${REMOTE_JUPYTER_TOKEN:+--token "${REMOTE_JUPYTER_TOKEN}"} \
+  --kernel-id "${KERNEL_ID}" --cwd "/kaggle/working" \
+  --download-remote-dir "${PRUNED_REMOTE_DIR}" --download-local-dir "${FETCH_DIR}/pruned" \
+  python -c "print('download pruned eaft dir')"
+
+BASE_JSON="${FETCH_DIR}/base/$(basename "${BASE_REMOTE}")"
+PRUNED_JSON="${FETCH_DIR}/pruned/$(basename "${PRUNED_REMOTE}")"
+
+if [[ ! -s "${BASE_JSON}" || ! -s "${PRUNED_JSON}" ]]; then
+  echo "[err] Failed to download EAFT JSONs via download_dir." >&2
+  echo "      base_json=${BASE_JSON}" >&2
+  echo "      pruned_json=${PRUNED_JSON}" >&2
+  exit 6
 fi
 
 OUT_MD="${ROOT_DIR}/reports/eaftreap_keepfrac_parity_${MODEL_LABEL}.md"

@@ -110,6 +110,8 @@ def main() -> None:
     ctx_u16 = np.load(cache_dir / "context_features_u16.npy", mmap_mode="r")
     anchor_u16 = np.load(cache_dir / "anchor_embedding_u16.npy", mmap_mode="r")
     target_ids = np.load(cache_dir / "target_ids.npy", mmap_mode="r")
+    pos_path = cache_dir / "ctx_pos_start_i32.npy"
+    ctx_pos_start_i32 = np.load(pos_path, mmap_mode="r").astype(np.int32, copy=False) if pos_path.exists() else None
 
     n_total = int(ctx_u16.shape[0])
     if ctx_u16.shape != (n_total, ctx_len, k_hidden):
@@ -118,6 +120,8 @@ def main() -> None:
         raise ValueError(f"Unexpected anchor_embedding_u16 shape {anchor_u16.shape}, expected ({n_total},{hidden})")
     if target_ids.shape != (n_total, block):
         raise ValueError(f"Unexpected target_ids shape {target_ids.shape}, expected ({n_total},{block})")
+    if ctx_pos_start_i32 is not None and int(ctx_pos_start_i32.shape[0]) != n_total:
+        raise ValueError(f"Unexpected ctx_pos_start_i32 shape {ctx_pos_start_i32.shape}, expected ({n_total},)")
 
     explicit = _parse_csv_ints(args.sample_idxs)
     if explicit:
@@ -187,14 +191,19 @@ def main() -> None:
         return best_id
 
     @jax.jit
-    def forward_metrics(batch_ctx_u16, batch_anchor_u16, batch_labels):
+    def forward_metrics(batch_ctx_u16, batch_anchor_u16, batch_labels, batch_pos_start):
         # Inputs:
         #  batch_ctx_u16: [B, ctx, K*H] uint16
         #  batch_anchor_u16: [B, H] uint16
         #  batch_labels: [B, block] int32
         ctx = jax.lax.bitcast_convert_type(batch_ctx_u16.astype(jnp.uint16), jnp.bfloat16)
         anc = jax.lax.bitcast_convert_type(batch_anchor_u16.astype(jnp.uint16), jnp.bfloat16)
-        out = draft(context_features=ctx, anchor_embedding=anc, rope=rope)  # [B, block+1, H]
+        out = draft(
+            context_features=ctx,
+            anchor_embedding=anc,
+            rope=rope,
+            ctx_pos_start=batch_pos_start,
+        )  # [B, block+1, H]
         hs = out[:, 1:, :]  # [B, block, H]
 
         def logits_fn(hs_in, w_in):
@@ -212,6 +221,7 @@ def main() -> None:
     batch = max(1, int(args.batch_size))
     accept_all: list[int] = []
     acc_all: list[float] = []
+    pos_all: list[int] = []
 
     for start in range(0, int(idxs.size), batch):
         end = min(int(idxs.size), start + batch)
@@ -219,13 +229,39 @@ def main() -> None:
         ctx_b = np.asarray(ctx_u16[b_idx], dtype=np.uint16)
         anc_b = np.asarray(anchor_u16[b_idx], dtype=np.uint16)
         y_b = np.asarray(target_ids[b_idx], dtype=np.int32)
+        if ctx_pos_start_i32 is not None:
+            p_b = np.asarray(ctx_pos_start_i32[b_idx], dtype=np.int32)
+        else:
+            p_b = np.zeros((int(b_idx.shape[0]),), dtype=np.int32)
         with mesh:
-            accept, tok_acc = forward_metrics(jnp.asarray(ctx_b), jnp.asarray(anc_b), jnp.asarray(y_b))
+            accept, tok_acc = forward_metrics(
+                jnp.asarray(ctx_b),
+                jnp.asarray(anc_b),
+                jnp.asarray(y_b),
+                jnp.asarray(p_b),
+            )
         accept_all.extend([int(x) for x in np.asarray(accept)])
         acc_all.extend([float(x) for x in np.asarray(tok_acc)])
+        pos_all.extend([int(x) for x in np.asarray(p_b)])
 
     accept_np = np.asarray(accept_all, dtype=np.int32)
     acc_np = np.asarray(acc_all, dtype=np.float32)
+    pos_np = np.asarray(pos_all, dtype=np.int32)
+
+    by_pos: dict[str, dict[str, float]] = {}
+    for pos in sorted(set(int(x) for x in pos_np.tolist())):
+        mask = pos_np == int(pos)
+        if not np.any(mask):
+            continue
+        a = accept_np[mask]
+        t = acc_np[mask]
+        by_pos[str(int(pos))] = {
+            "n": float(a.size),
+            "accept_len_mean": float(np.mean(a)),
+            "accept_len_p50": float(np.percentile(a, 50)),
+            "accept_len_p90": float(np.percentile(a, 90)),
+            "tok_acc_mean": float(np.mean(t)),
+        }
 
     summary = {
         "cache_dir": str(cache_dir),
@@ -242,6 +278,7 @@ def main() -> None:
         "token_acc_mean": float(np.mean(acc_np)),
         "token_acc_p50": float(np.percentile(acc_np, 50)),
         "token_acc_p90": float(np.percentile(acc_np, 90)),
+        "by_ctx_pos_start": by_pos,
     }
     print(json.dumps(summary, indent=2), flush=True)
 
@@ -255,6 +292,7 @@ def main() -> None:
                     "sample_idxs": [int(x) for x in idxs.tolist()],
                     "accept_len": [int(x) for x in accept_np.tolist()],
                     "token_acc": [float(x) for x in acc_np.tolist()],
+                    "ctx_pos_start": [int(x) for x in pos_np.tolist()],
                 },
                 indent=2,
             ),

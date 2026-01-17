@@ -41,6 +41,8 @@ SAMPLE_POINTS="10000"
 TOP_K="4"
 ENTROPY_TOPK="20"
 CC_QUANTILE="0.15"
+PROGRESS_EVERY_S=""
+MAX_NEW_TOKENS=""
 SKIP_PREDOWNLOAD="0"
 DETACH="1"
 KERNEL_ID="${REMOTE_JUPYTER_KERNEL_ID:-}"
@@ -57,6 +59,8 @@ while [[ $# -gt 0 ]]; do
     --top-k) TOP_K="$2"; shift 2;;
     --entropy-topk) ENTROPY_TOPK="$2"; shift 2;;
     --cc-quantile) CC_QUANTILE="$2"; shift 2;;
+    --progress-every-s) PROGRESS_EVERY_S="$2"; shift 2;;
+    --max-new-tokens) MAX_NEW_TOKENS="$2"; shift 2;;
     --skip-predownload) SKIP_PREDOWNLOAD="1"; shift 1;;
     --no-detach) DETACH=""; shift 1;;
     -h|--help)
@@ -84,6 +88,14 @@ if [[ "${SKIP_PREDOWNLOAD}" == "1" ]]; then
   EXTRA_ARGS+=(--skip-predownload)
 fi
 
+EXTRA_ENV=()
+if [[ -n "${PROGRESS_EVERY_S}" ]]; then
+  EXTRA_ENV+=(--env "EAFT_PROGRESS_EVERY_S=${PROGRESS_EVERY_S}")
+fi
+if [[ -n "${MAX_NEW_TOKENS}" ]]; then
+  EXTRA_ENV+=(--env "EAFT_MAX_NEW_TOKENS=${MAX_NEW_TOKENS}")
+fi
+
 PYTHONPATH="${REPO_ROOT}/third_party/Versa" \
 python -m versa run \
   --backend jupyter \
@@ -98,6 +110,7 @@ python -m versa run \
   --env-file "${EAFT_ENV_FILE}" \
   --env "GPU_TYPE=${GPU_TYPE}" \
   --env "SGLANG_ALLOW_OVERWRITE_LONGER_CONTEXT_LEN=1" \
+  "${EXTRA_ENV[@]}" \
   "${ROOT_DIR}/modal/collect_calib_packs_eaft_single.py::main" -- \
     --model-id "${MODEL_ID}" \
     ${MODEL_PATH:+--model-path "${MODEL_PATH}"} \

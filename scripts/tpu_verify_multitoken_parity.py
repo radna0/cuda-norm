@@ -126,6 +126,11 @@ def main() -> None:
         output_token_ids=[],
     )
     seqbuf.add_request(req, req_index=0)
+    # Match cache-builder sampling fields explicitly (avoid relying on defaults).
+    seqbuf.temperature[0] = 0.0
+    seqbuf.top_k[0] = 1
+    seqbuf.top_p[0] = 1.0
+    seqbuf.min_p[0] = 0.0
 
     executor = ExecutionManager(
         model=teacher.esurge_compatible_model,
@@ -156,6 +161,15 @@ def main() -> None:
     page_table_cpu = seqbuf.page_table[0].get_cpu_tensor()
     page_table_version = getattr(seqbuf.page_table[0], "cpu_version", None)
 
+    # Absolute position offset (must match the cache builder, otherwise
+    # multi-token verify predictions will not match cached targets).
+    try:
+        ctx_pos_start = np.load(cache_dir / meta.get("ctx_pos_start_file", "ctx_pos_start_i32.npy"))[int(i)]
+        pos_off = int(np.asarray(ctx_pos_start))
+    except Exception:
+        pos_off = 0
+    pos_off_cpu = np.asarray([np.int32(pos_off)], dtype=np.int32)
+
     # Prefill ctx tokens (exclude anchor).
     done = 0
     while done < int(ctx_len):
@@ -171,6 +185,7 @@ def main() -> None:
             padded_num_reqs=1,
             token_ids_cpu=seqbuf.token_ids,
             num_computed_tokens_cpu=seqbuf.num_computed_tokens,
+            position_offset_cpu=pos_off_cpu,
             temperature_cpu=seqbuf.temperature,
             top_p_cpu=seqbuf.top_p,
             top_k_cpu=seqbuf.top_k,
@@ -192,6 +207,7 @@ def main() -> None:
         padded_num_reqs=1,
         token_ids_cpu=seqbuf.token_ids,
         num_computed_tokens_cpu=seqbuf.num_computed_tokens,
+        position_offset_cpu=pos_off_cpu,
         temperature_cpu=seqbuf.temperature,
         top_p_cpu=seqbuf.top_p,
         top_k_cpu=seqbuf.top_k,
@@ -220,6 +236,7 @@ def main() -> None:
             padded_num_reqs=1,
             token_ids_cpu=seqbuf.token_ids,
             num_computed_tokens_cpu=seqbuf.num_computed_tokens,
+            position_offset_cpu=pos_off_cpu,
             temperature_cpu=seqbuf.temperature,
             top_p_cpu=seqbuf.top_p,
             top_k_cpu=seqbuf.top_k,
@@ -252,6 +269,10 @@ def main() -> None:
     seqbuf.num_tokens[0] = int(prompt_len)
     seqbuf.num_tokens_no_spec[0] = int(prompt_len)
     seqbuf.num_computed_tokens[0] = 0
+    seqbuf.temperature[0] = 0.0
+    seqbuf.top_k[0] = 1
+    seqbuf.top_p[0] = 1.0
+    seqbuf.min_p[0] = 0.0
     done = 0
     while done < int(ctx_len):
         step = int(min(prefill_bucket, int(ctx_len) - done))
@@ -266,6 +287,7 @@ def main() -> None:
             padded_num_reqs=1,
             token_ids_cpu=seqbuf.token_ids,
             num_computed_tokens_cpu=seqbuf.num_computed_tokens,
+            position_offset_cpu=pos_off_cpu,
             temperature_cpu=seqbuf.temperature,
             top_p_cpu=seqbuf.top_p,
             top_k_cpu=seqbuf.top_k,
@@ -288,6 +310,7 @@ def main() -> None:
         padded_num_reqs=1,
         token_ids_cpu=seqbuf.token_ids,
         num_computed_tokens_cpu=seqbuf.num_computed_tokens,
+        position_offset_cpu=pos_off_cpu,
         temperature_cpu=seqbuf.temperature,
         top_p_cpu=seqbuf.top_p,
         top_k_cpu=seqbuf.top_k,
@@ -305,6 +328,7 @@ def main() -> None:
             {
                 "sample_idx": int(i),
                 "prompt_len": int(prompt_len),
+                "position_offset": int(pos_off),
                 "anchor_id": int(anchor_id),
                 "cached_target_ids": [int(x) for x in cached_targets.tolist()],
                 "next_token_1tok": int(next1),

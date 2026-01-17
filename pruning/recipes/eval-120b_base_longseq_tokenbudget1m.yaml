@@ -1,0 +1,50 @@
+schema_version: 1
+kind: eval_single_recipe
+extends: eval-base.yaml
+
+name: eaft_collect_120b_base_longseq_tokenbudget1m
+description: >
+  Long-sequence + higher-batch EAFT collection for GPT‑OSS‑120B base.
+  This is the “scalability” ablation: longer seq AND larger batch where feasible,
+  while keeping per-pack token budget ~constant (~1M) by scaling num_blocks.
+
+model:
+  label: base_120b
+  model_id: openai/gpt-oss-120b
+
+run_matrix:
+  - name: seq4096_blocks256_bs2
+    collector_overrides:
+      seq_lens_csv: "4096"
+      num_blocks: 256
+      batch_size: 2
+      sample_points: 200000
+      top_k: 4
+  - name: seq8192_blocks128_bs1
+    collector_overrides:
+      seq_lens_csv: "8192"
+      num_blocks: 128
+      batch_size: 1
+      sample_points: 200000
+      top_k: 4
+  - name: seq16384_blocks64_bs1
+    collector_overrides:
+      seq_lens_csv: "16384"
+      num_blocks: 64
+      batch_size: 1
+      sample_points: 200000
+      top_k: 4
+
+engine_overrides:
+  env:
+    GPU_TYPE: "B200:1"
+    ATTN_BACKEND: "trtllm_mha"
+    SGLANG_DISABLE_FLASHINFER_AUTOTUNE: "1"
+
+execution_notes:
+  - "If bs=2 OOMs at 4096, retry bs=1 (still valuable for long-seq stability)."
+
+expected_outputs:
+  notes:
+    - "Produces one EAFT JSON per run_matrix entry."
+

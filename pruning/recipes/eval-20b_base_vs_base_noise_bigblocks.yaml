@@ -1,0 +1,31 @@
+schema_version: 1
+kind: eval_recipe
+extends: eval-base.yaml
+
+name: eaft_noise_floor_20b_base_vs_base_bigblocks
+description: >
+  Run the EAFT collector twice on the same base model to measure the
+  “noise floor” of ΔPPL/ΔCC/Δmean_p/JS2D (floating point nondeterminism, engine jitter).
+
+pair:
+  left:
+    label: base_20b_runA
+    model_id: openai/gpt-oss-20b
+  right:
+    label: base_20b_runB
+    model_id: openai/gpt-oss-20b
+
+collector_overrides:
+  seq_lens_csv: "1024,2048"
+  num_blocks: 512
+  batch_size: 1
+  sample_points: 200000
+  top_k: 4
+
+execution_notes:
+  - "This must be executed as TWO separate collector runs (A and B), then summarized as a pair."
+  - "Expect deltas ~0; this defines the threshold for calling pruning ‘definitively worse’ beyond measurement noise."
+
+expected_outputs:
+  parity_summary_md: harmony/cuda-norm/reports/eaft_base_vs_base_noise_20b_bigblocks.md
+

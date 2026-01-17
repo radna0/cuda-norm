@@ -1,0 +1,35 @@
+schema_version: 1
+kind: eval_recipe
+extends: eval-base.yaml
+
+name: eaft_parity_20b_base_vs_eaftreap075_megabudget_seq2048
+description: >
+  “Much larger samples” validation for keep_frac=0.75: increase the token budget
+  4× at seq=2048 (blocks=2048 → ~4.2M pred tokens per pack).
+  This is intended to make any small regressions statistically undeniable.
+
+pair:
+  left:
+    label: base_20b
+    model_id: openai/gpt-oss-20b
+  right:
+    label: eaftreap_075
+    model_id: eaftreap_budgeted_keepfrac075
+    model_path_from_manifest:
+      manifest_json: harmony/cuda-norm/artifacts/20b_pruned_models_eaftreap_budgeted/manifest.json
+      field: out_dir
+
+collector_overrides:
+  seq_lens_csv: "2048"
+  num_blocks: 2048
+  batch_size: 2
+  sample_points: 200000
+  top_k: 4
+
+execution_notes:
+  - "Expensive. Prefer running only after base-vs-base noise + noop rewrite pass."
+  - "If batch_size=2 OOMs, drop to batch_size=1 (still valid)."
+
+expected_outputs:
+  parity_summary_md: harmony/cuda-norm/reports/eaftreap75_megabudget_seq2048.md
+

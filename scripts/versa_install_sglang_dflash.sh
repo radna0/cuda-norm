@@ -23,16 +23,36 @@ if [[ -z "${REMOTE_JUPYTER_URL:-}" ]]; then
   exit 2
 fi
 
+KERNEL_ID="${REMOTE_JUPYTER_KERNEL_ID:-}"
+DETACH="1"
+
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    --kernel-id) KERNEL_ID="$2"; shift 2;;
+    --no-detach) DETACH=""; shift 1;;
+    -h|--help)
+      sed -n '1,160p' "$0"
+      exit 0
+      ;;
+    *)
+      echo "[err] Unknown arg: $1" >&2
+      exit 2
+      ;;
+  esac
+done
+
 PYTHONPATH="${REPO_ROOT}/third_party/Versa" \
 python -m versa run \
   --backend jupyter \
   --url "${REMOTE_JUPYTER_URL}" \
   ${REMOTE_JUPYTER_TOKEN:+--token "${REMOTE_JUPYTER_TOKEN}"} \
+  ${KERNEL_ID:+--kernel-id "${KERNEL_ID}"} \
   --sync-local-dir "${SYNC_DIR}" \
   --sync-remote-dir "cuda-norm" \
+  ${DETACH:+--detach} \
   --bootstrap-cmd "python -m pip install -U pip" \
   --bootstrap-cmd "python -m pip install 'sglang[all]'" \
   --bootstrap-cmd "python -m pip install kernels==0.11.7 || true" \
   --bootstrap-cmd "python cuda-norm/scripts/sglang_overlay_install.py" \
-  --bootstrap-cmd "python -c \"from sglang.srt.speculative.spec_info import SpeculativeAlgorithm as A; print('DFLASH' in [x.name for x in A])\"" \
-  python -c "print('sglang dflash overlay installed')"
+  --bootstrap-cmd "python -c \"import sglang; from sglang.srt.speculative.spec_info import SpeculativeAlgorithm as A; print('DFLASH' in [x.name for x in A])\"" \
+  python -c "import sglang; print('sglang dflash overlay installed:', sglang.__version__)"

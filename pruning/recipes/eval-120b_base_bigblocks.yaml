@@ -1,0 +1,33 @@
+schema_version: 1
+kind: eval_single_recipe
+extends: eval-base.yaml
+
+name: eaft_collect_120b_base_bigblocks_1024_2048
+description: >
+  Collect EAFT metrics for GPT‑OSS‑120B base on the same calib packs and
+  the same “bigblocks” (token budget) regime used for 20B pruning gates.
+  This enables clean 20B↔120B comparisons and sets a 120B reference baseline.
+
+model:
+  label: base_120b
+  model_id: openai/gpt-oss-120b
+
+collector_overrides:
+  seq_lens_csv: "1024,2048"
+  num_blocks: 512
+  batch_size: 1
+  sample_points: 200000
+  top_k: 4
+
+engine_overrides:
+  env:
+    # B200 required for 120B.
+    GPU_TYPE: "B200:1"
+    ATTN_BACKEND: "trtllm_mha"
+    SGLANG_DISABLE_FLASHINFER_AUTOTUNE: "1"
+
+expected_outputs:
+  eaft_json: harmony/cuda-norm/artifacts/eaft_models/<run_id>/openai_gpt-oss-120b.json
+  notes:
+    - "This is a single-model collector; pair summarization is optional."
+

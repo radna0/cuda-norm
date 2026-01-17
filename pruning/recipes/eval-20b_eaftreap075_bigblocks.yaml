@@ -1,0 +1,34 @@
+schema_version: 1
+kind: eval_recipe
+extends: eval-base.yaml
+
+name: eaft_parity_20b_base_vs_eaftreap075_bigblocks
+description: >
+  Canonical EAFT parity gate for GPT‑OSS‑20B keep_frac=0.75 (keep_n=24/32),
+  using the “bigblocks” regime that stabilizes JS2D at seq=1024 and 2048.
+
+pair:
+  left:
+    label: base_20b
+    model_id: openai/gpt-oss-20b
+    model_path: "" # HF
+  right:
+    label: eaftreap_075
+    model_id: eaftreap_budgeted_keepfrac075
+    # Model dir is produced by the prune recipe (Modal volume path).
+    model_path_from_manifest:
+      manifest_json: harmony/cuda-norm/artifacts/20b_pruned_models_eaftreap_budgeted/manifest.json
+      field: out_dir
+
+collector_overrides:
+  seq_lens_csv: "1024,2048"
+  num_blocks: 512
+  batch_size: 1
+  sample_points: 200000
+  top_k: 4
+
+expected_outputs:
+  parity_summary_md: harmony/cuda-norm/reports/eaftreap75_bigblocks_1024_2048.md
+  notes:
+    - "If JS2D fails slightly in small evals, re-run with bigblocks token budget; do not trust small-budget JS2D."
+

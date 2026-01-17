@@ -1,0 +1,75 @@
+schema_version: 1
+kind: reap_recipe
+
+name: eaftreap_gptoss120b_keepfrac075_planned
+description: >
+  Planned EAFT‑REAP structural prune recipe for GPT‑OSS‑120B at keep_frac=0.75
+  (top_k unchanged). This mirrors the validated 20B pipeline, but requires
+  dedicated 120B profiling + rewrite + eval runs on B200-class GPUs.
+
+status:
+  state: planned
+  prerequisites:
+    - "20B keep_frac=0.75 PASS (done)"
+    - "20B keep_frac=0.60 PASS (pending)"
+    - "120B cost probe feasibility confirmed"
+
+model:
+  base_model_id: openai/gpt-oss-120b
+  keep_frac_requested: 0.75
+  keep_n: null # compute from config num_experts at runtime; enforce uniform across layers.
+  uniform_keep_n_across_layers: true
+  top_k_unchanged: true
+
+scoring:
+  method: eaftreap
+  top_k: 4
+  entropy_topk: 20
+  cc_quantile: 0.15
+  uncertain_quantile: 0.85
+  weights:
+    w_good: 1.0
+    w_uncertain: 0.25
+    w_conflict: -2.0
+  score_key: eaft_gate_norm_sum
+
+profiling_data:
+  dataset_repo: radna0/harmony-qwen3-calib-packs-v2-20260113
+  pack_files:
+    - packs/reasoning_style_10k_v2/reasoning_style_10k_v2.parquet
+    - tool_agentic_10k_v6.parquet
+    - packs/calib_prompt_10000_v2/calib_prompt_10000_v2.parquet
+  sampling:
+    strategy: per_file_weighted
+    pack_weights: [1.0, 3.0, 1.0]
+    num_rows: 20000
+    seed: 3407
+  max_seq_length: 2048
+  batch_size: 4
+  notes:
+    - "For 120B profiling, batch_size will be constrained by VRAM; increase only after a probe."
+
+structural_rewrite:
+  max_shard_size_gb: 5.0
+  shard_bytes_definition: decimal_gb
+  keep_n_multiple_of: 4
+  notes:
+    - "Enforce keep_n % 4 == 0 for FlashInfer MXFP4 MoE routing kernels."
+
+evaluation:
+  gates_json: harmony/cuda-norm/pruning/near_lossless_gates.json
+  planned_eval_regime:
+    seq_lens_csv: "1024,2048"
+    num_blocks: 512
+    batch_size: 1
+    sample_points: 200000
+    top_k: 4
+
+execution:
+  modal:
+    notes:
+      - "Modal profile must have budget; B200 is required."
+    commands:
+      - "modal run harmony/cuda-norm/modal/collect_calib_packs_eaft_single.py --model-id openai/gpt-oss-120b --seq-lens-csv 1024,2048 --num-blocks 512 --batch-size 1 --sample-points 200000 --top-k 4"
+      - "# TODO: add a 120B EAFT-REAP prune task (not implemented yet in gpt_oss_pruning_track.py)"
+

@@ -1,0 +1,7794 @@
+schema_version: 1
+kind: reap_scores
+method: eaftreap
+score_key: eaft_gate_norm_sum
+score_definition: Total expert contribution mass accumulated over selected tokens.
+  For EAFT-REAP this is w_t * gate_j(x) * ||f_j(x)||_2 summed over tokens where expert
+  j was selected.
+inputs:
+  saliency_parquet: harmony/cuda-norm/artifacts/20b_pruned_models_eaftreap_budgeted/eaftreap_saliency.parquet
+  ranking_by_layer_json: harmony/cuda-norm/artifacts/20b_pruned_models_eaftreap_budgeted/eaftreap_ranking_by_layer.json
+  profile_meta_json: harmony/cuda-norm/artifacts/20b_pruned_models_eaftreap_budgeted/profile_meta.json
+  sample_json: harmony/cuda-norm/artifacts/20b_pruned_models_eaftreap_budgeted/sample.json
+profile_meta:
+  batch_size: 16
+  cc_quantile: 0.15
+  dataset_id: radna0/harmony-qwen3-calib-packs-v2-20260113
+  dataset_split: __calib_packs__
+  domain: ''
+  entropy_topk: 20
+  h_hi: 0.7520875930786133
+  h_lo: 0.023444445803761482
+  max_seq_length: 2048
+  model_id: openai/gpt-oss-20b
+  num_experts: 32
+  num_layers: 24
+  num_rows: 2000
+  p_lo: 0.01829039864242077
+  prompt_hash: 41772693947284cca96d2f17cdd62de4e59913d3778a3908f3301b071dff76bd
+  region_counts:
+    conflict: 10
+    good: 2379
+    uncertain: 13532
+  samples:
+    H: 15921
+    p: 15921
+  text_column: text
+  tokens_per_s_pass2: 7289.599451225949
+  top_k: 4
+  total_kept_tokens_pass2: 3152367
+  total_tokens_pass2: 4096000
+  uncertain_quantile: 0.85
+  w_conflict: -2.0
+  w_good: 1.0
+  w_uncertain: 0.25
+sample:
+  dataset_repo: radna0/harmony-qwen3-calib-packs-v2-20260113
+  num_rows: 2000
+  pack_files:
+  - packs/reasoning_style_10k_v2/reasoning_style_10k_v2.parquet
+  - tool_agentic_10k_v6.parquet
+  - packs/calib_prompt_10000_v2/calib_prompt_10000_v2.parquet
+  pack_weights:
+  - 1.0
+  - 3.0
+  - 1.0
+  prompt_hash: 462c003d9956eb2223db203402fbe55b
+  rows_jsonl_path: /root/data/calib_packs_samples/calib_packs_sample_462c003d9956eb2223db203402fbe55b_n2000.jsonl
+  scanned: 30000
+  seed: 3407
+  strategy: per_file_weighted
+  text_column: text
+summary:
+  num_layers: 24
+  num_experts: 32
+ranking_by_layer:
+- - 31
+  - 25
+  - 16
+  - 23
+  - 9
+  - 13
+  - 19
+  - 14
+  - 11
+  - 18
+  - 1
+  - 3
+  - 2
+  - 7
+  - 15
+  - 24
+  - 28
+  - 10
+  - 22
+  - 8
+  - 5
+  - 21
+  - 17
+  - 30
+  - 4
+  - 26
+  - 0
+  - 12
+  - 6
+  - 27
+  - 29
+  - 20
+- - 23
+  - 10
+  - 1
+  - 6
+  - 0
+  - 16
+  - 12
+  - 27
+  - 13
+  - 28
+  - 14
+  - 18
+  - 17
+  - 20
+  - 26
+  - 29
+  - 11
+  - 22
+  - 5
+  - 8
+  - 3
+  - 9
+  - 4
+  - 30
+  - 24
+  - 25
+  - 31
+  - 15
+  - 21
+  - 19
+  - 7
+  - 2
+- - 20
+  - 7
+  - 15
+  - 21
+  - 0
+  - 5
+  - 8
+  - 22
+  - 10
+  - 29
+  - 3
+  - 12
+  - 6
+  - 28
+  - 30
+  - 27
+  - 2
+  - 25
+  - 23
+  - 24
+  - 26
+  - 13
+  - 18
+  - 17
+  - 16
+  - 31
+  - 19
+  - 4
+  - 11
+  - 14
+  - 1
+  - 9
+- - 10
+  - 31
+  - 2
+  - 21
+  - 7
+  - 13
+  - 19
+  - 17
+  - 23
+  - 12
+  - 22
+  - 26
+  - 4
+  - 14
+  - 1
+  - 3
+  - 0
+  - 11
+  - 30
+  - 8
+  - 28
+  - 20
+  - 18
+  - 6
+  - 24
+  - 9
+  - 5
+  - 15
+  - 29
+  - 25
+  - 27
+  - 16
+- - 27
+  - 18
+  - 14
+  - 6
+  - 15
+  - 10
+  - 19
+  - 30
+  - 16
+  - 20
+  - 1
+  - 12
+  - 24
+  - 21
+  - 3
+  - 22
+  - 8
+  - 13
+  - 4
+  - 31
+  - 25
+  - 17
+  - 23
+  - 28
+  - 5
+  - 0
+  - 2
+  - 7
+  - 26
+  - 9
+  - 29
+  - 11
+- - 25
+  - 24
+  - 17
+  - 31
+  - 6
+  - 0
+  - 7
+  - 30
+  - 15
+  - 10
+  - 9
+  - 2
+  - 14
+  - 8
+  - 29
+  - 3
+  - 11
+  - 26
+  - 19
+  - 27
+  - 22
+  - 4
+  - 16
+  - 18
+  - 20
+  - 5
+  - 21
+  - 12
+  - 23
+  - 28
+  - 13
+  - 1
+- - 26
+  - 15
+  - 16
+  - 28
+  - 2
+  - 21
+  - 11
+  - 10
+  - 4
+  - 5
+  - 31
+  - 3
+  - 20
+  - 17
+  - 12
+  - 25
+  - 24
+  - 0
+  - 14
+  - 1
+  - 30
+  - 7
+  - 9
+  - 18
+  - 6
+  - 23
+  - 22
+  - 8
+  - 27
+  - 29
+  - 13
+  - 19
+- - 0
+  - 4
+  - 30
+  - 14
+  - 16
+  - 24
+  - 19
+  - 17
+  - 18
+  - 10
+  - 13
+  - 21
+  - 28
+  - 9
+  - 5
+  - 20
+  - 3
+  - 11
+  - 15
+  - 27
+  - 1
+  - 29
+  - 23
+  - 12
+  - 2
+  - 22
+  - 31
+  - 7
+  - 6
+  - 25
+  - 8
+  - 26
+- - 21
+  - 11
+  - 20
+  - 31
+  - 2
+  - 8
+  - 3
+  - 13
+  - 24
+  - 0
+  - 10
+  - 19
+  - 30
+  - 28
+  - 4
+  - 29
+  - 26
+  - 23
+  - 25
+  - 14
+  - 7
+  - 18
+  - 15
+  - 6
+  - 12
+  - 17
+  - 1
+  - 9
+  - 5
+  - 16
+  - 27
+  - 22
+- - 17
+  - 8
+  - 19
+  - 15
+  - 12
+  - 30
+  - 28
+  - 0
+  - 25
+  - 16
+  - 22
+  - 26
+  - 21
+  - 3
+  - 2
+  - 5
+  - 4
+  - 27
+  - 13
+  - 23
+  - 31
+  - 29
+  - 14
+  - 11
+  - 7
+  - 20
+  - 24
+  - 6
+  - 18
+  - 9
+  - 10
+  - 1
+- - 16
+  - 5
+  - 10
+  - 23
+  - 13
+  - 22
+  - 15
+  - 26
+  - 19
+  - 6
+  - 3
+  - 25
+  - 11
+  - 2
+  - 0
+  - 18
+  - 31
+  - 8
+  - 1
+  - 4
+  - 20
+  - 24
+  - 14
+  - 17
+  - 27
+  - 7
+  - 9
+  - 29
+  - 21
+  - 30
+  - 28
+  - 12
+- - 30
+  - 12
+  - 3
+  - 6
+  - 20
+  - 1
+  - 2
+  - 8
+  - 17
+  - 26
+  - 9
+  - 13
+  - 7
+  - 21
+  - 27
+  - 11
+  - 24
+  - 18
+  - 19
+  - 31
+  - 16
+  - 4
+  - 25
+  - 29
+  - 15
+  - 0
+  - 23
+  - 5
+  - 28
+  - 14
+  - 22
+  - 10
+- - 19
+  - 11
+  - 23
+  - 6
+  - 12
+  - 1
+  - 25
+  - 30
+  - 3
+  - 18
+  - 13
+  - 24
+  - 14
+  - 5
+  - 22
+  - 7
+  - 28
+  - 0
+  - 21
+  - 16
+  - 10
+  - 4
+  - 17
+  - 27
+  - 15
+  - 26
+  - 29
+  - 8
+  - 31
+  - 20
+  - 9
+  - 2
+- - 28
+  - 2
+  - 24
+  - 1
+  - 15
+  - 10
+  - 19
+  - 11
+  - 6
+  - 21
+  - 30
+  - 8
+  - 23
+  - 5
+  - 22
+  - 26
+  - 7
+  - 13
+  - 0
+  - 20
+  - 17
+  - 16
+  - 3
+  - 14
+  - 29
+  - 9
+  - 18
+  - 25
+  - 31
+  - 12
+  - 4
+  - 27
+- - 25
+  - 22
+  - 20
+  - 29
+  - 4
+  - 3
+  - 21
+  - 1
+  - 26
+  - 13
+  - 9
+  - 24
+  - 19
+  - 27
+  - 17
+  - 5
+  - 31
+  - 7
+  - 11
+  - 6
+  - 12
+  - 16
+  - 28
+  - 0
+  - 10
+  - 23
+  - 15
+  - 2
+  - 18
+  - 8
+  - 30
+  - 14
+- - 10
+  - 26
+  - 29
+  - 7
+  - 14
+  - 9
+  - 5
+  - 3
+  - 23
+  - 31
+  - 2
+  - 6
+  - 4
+  - 0
+  - 18
+  - 16
+  - 28
+  - 19
+  - 8
+  - 1
+  - 13
+  - 15
+  - 20
+  - 27
+  - 24
+  - 25
+  - 17
+  - 22
+  - 12
+  - 30
+  - 11
+  - 21
+- - 29
+  - 5
+  - 28
+  - 18
+  - 0
+  - 11
+  - 22
+  - 30
+  - 21
+  - 17
+  - 15
+  - 20
+  - 12
+  - 4
+  - 26
+  - 14
+  - 31
+  - 10
+  - 9
+  - 6
+  - 1
+  - 24
+  - 27
+  - 2
+  - 23
+  - 13
+  - 3
+  - 7
+  - 8
+  - 19
+  - 16
+  - 25
+- - 22
+  - 25
+  - 6
+  - 2
+  - 12
+  - 0
+  - 30
+  - 8
+  - 13
+  - 28
+  - 19
+  - 7
+  - 14
+  - 5
+  - 1
+  - 11
+  - 9
+  - 20
+  - 4
+  - 27
+  - 18
+  - 17
+  - 23
+  - 29
+  - 16
+  - 26
+  - 15
+  - 24
+  - 10
+  - 21
+  - 3
+  - 31
+- - 7
+  - 10
+  - 27
+  - 13
+  - 20
+  - 30
+  - 14
+  - 23
+  - 18
+  - 2
+  - 6
+  - 9
+  - 1
+  - 31
+  - 15
+  - 19
+  - 12
+  - 26
+  - 16
+  - 5
+  - 22
+  - 11
+  - 29
+  - 0
+  - 24
+  - 28
+  - 25
+  - 8
+  - 4
+  - 3
+  - 17
+  - 21
+- - 11
+  - 31
+  - 17
+  - 3
+  - 29
+  - 12
+  - 13
+  - 0
+  - 27
+  - 2
+  - 20
+  - 6
+  - 4
+  - 1
+  - 8
+  - 9
+  - 15
+  - 25
+  - 22
+  - 10
+  - 16
+  - 7
+  - 26
+  - 19
+  - 18
+  - 21
+  - 24
+  - 30
+  - 14
+  - 28
+  - 5
+  - 23
+- - 8
+  - 16
+  - 7
+  - 23
+  - 22
+  - 17
+  - 13
+  - 0
+  - 21
+  - 11
+  - 31
+  - 29
+  - 6
+  - 30
+  - 5
+  - 25
+  - 12
+  - 10
+  - 20
+  - 15
+  - 1
+  - 27
+  - 24
+  - 2
+  - 14
+  - 19
+  - 3
+  - 18
+  - 28
+  - 26
+  - 9
+  - 4
+- - 28
+  - 6
+  - 10
+  - 2
+  - 1
+  - 18
+  - 27
+  - 8
+  - 3
+  - 9
+  - 25
+  - 21
+  - 11
+  - 29
+  - 0
+  - 17
+  - 20
+  - 22
+  - 16
+  - 14
+  - 30
+  - 15
+  - 31
+  - 23
+  - 4
+  - 13
+  - 12
+  - 7
+  - 24
+  - 26
+  - 5
+  - 19
+- - 25
+  - 6
+  - 5
+  - 15
+  - 19
+  - 18
+  - 22
+  - 4
+  - 13
+  - 0
+  - 26
+  - 27
+  - 28
+  - 8
+  - 29
+  - 14
+  - 1
+  - 12
+  - 10
+  - 7
+  - 16
+  - 3
+  - 11
+  - 23
+  - 9
+  - 31
+  - 20
+  - 30
+  - 21
+  - 24
+  - 17
+  - 2
+- - 8
+  - 16
+  - 26
+  - 31
+  - 25
+  - 18
+  - 0
+  - 7
+  - 17
+  - 6
+  - 15
+  - 5
+  - 22
+  - 28
+  - 10
+  - 14
+  - 13
+  - 1
+  - 23
+  - 27
+  - 11
+  - 3
+  - 29
+  - 24
+  - 30
+  - 4
+  - 19
+  - 20
+  - 2
+  - 21
+  - 9
+  - 12
+layer_scores:
+- layer: 0
+  experts:
+  - expert: 31
+    score: 34297.91015625
+    count: 3731
+    gate_mean: 0.3814764337225275
+    norm_mean: 53.292842066470115
+    saliency_mean: 20.623356255025463
+    eaft_saliency_mean: 9.192685648954704
+    pos_count: 3698
+    neg_count: 4
+  - expert: 25
+    score: 19022.34765625
+    count: 2535
+    gate_mean: 0.3612887591299926
+    norm_mean: 66.5084011341223
+    saliency_mean: 24.13314996301775
+    eaft_saliency_mean: 7.503884677021696
+    pos_count: 2516
+    neg_count: 0
+  - expert: 16
+    score: 17760.599609375
+    count: 3273
+    gate_mean: 0.2781371883831729
+    norm_mean: 69.4572114650168
+    saliency_mean: 20.114280190192485
+    eaft_saliency_mean: 5.426397680835625
+    pos_count: 3260
+    neg_count: 1
+  - expert: 23
+    score: 17367.662109375
+    count: 2040
+    gate_mean: 0.4316130395029105
+    norm_mean: 65.4569699754902
+    saliency_mean: 29.237672334558823
+    eaft_saliency_mean: 8.513559857536764
+    pos_count: 2028
+    neg_count: 2
+  - expert: 9
+    score: 17120.716796875
+    count: 2625
+    gate_mean: 0.3216113978794643
+    norm_mean: 59.462869047619044
+    saliency_mean: 19.07802380952381
+    eaft_saliency_mean: 6.522177827380952
+    pos_count: 2606
+    neg_count: 3
+  - expert: 13
+    score: 16386.615234375
+    count: 2344
+    gate_mean: 0.4413516724882679
+    norm_mean: 57.13192592790102
+    saliency_mean: 24.941339590443686
+    eaft_saliency_mean: 6.990876806473976
+    pos_count: 2331
+    neg_count: 0
+  - expert: 19
+    score: 16066.7978515625
+    count: 2329
+    gate_mean: 0.2843681129072295
+    norm_mean: 47.9453225633319
+    saliency_mean: 14.222600901674538
+    eaft_saliency_mean: 6.898582160396093
+    pos_count: 2311
+    neg_count: 1
+  - expert: 14
+    score: 10829.041015625
+    count: 1380
+    gate_mean: 0.37397266332653983
+    norm_mean: 52.840981657608694
+    saliency_mean: 20.044876585144927
+    eaft_saliency_mean: 7.847131170742753
+    pos_count: 1372
+    neg_count: 2
+  - expert: 11
+    score: 10175.921875
+    count: 2365
+    gate_mean: 0.1870849609375
+    norm_mean: 40.176129756871035
+    saliency_mean: 9.018689713266385
+    eaft_saliency_mean: 4.3027153805496825
+    pos_count: 2361
+    neg_count: 1
+  - expert: 18
+    score: 10057.890625
+    count: 2260
+    gate_mean: 0.23021567015521294
+    norm_mean: 51.165701050884955
+    saliency_mean: 12.350308524612831
+    eaft_saliency_mean: 4.450394081858407
+    pos_count: 2252
+    neg_count: 1
+  - expert: 1
+    score: 9895.732421875
+    count: 2380
+    gate_mean: 0.25563710958016017
+    norm_mean: 51.659637605042015
+    saliency_mean: 13.289772354254202
+    eaft_saliency_mean: 4.157870765493698
+    pos_count: 2372
+    neg_count: 2
+  - expert: 3
+    score: 9145.220703125
+    count: 1562
+    gate_mean: 0.21608123583921854
+    norm_mean: 48.5976162371959
+    saliency_mean: 11.995896186779769
+    eaft_saliency_mean: 5.854814790733035
+    pos_count: 1558
+    neg_count: 0
+  - expert: 2
+    score: 8769.1513671875
+    count: 2586
+    gate_mean: 0.23093810232683198
+    norm_mean: 41.39718073279196
+    saliency_mean: 10.710722248404872
+    eaft_saliency_mean: 3.391009809430588
+    pos_count: 2581
+    neg_count: 1
+  - expert: 7
+    score: 8188.24658203125
+    count: 2482
+    gate_mean: 0.2345515888223333
+    norm_mean: 44.371166146253024
+    saliency_mean: 11.08768287923046
+    eaft_saliency_mean: 3.2990518058143636
+    pos_count: 2475
+    neg_count: 0
+  - expert: 15
+    score: 7502.5927734375
+    count: 2015
+    gate_mean: 0.22119991785243487
+    norm_mean: 35.883328163771715
+    saliency_mean: 8.422273379342432
+    eaft_saliency_mean: 3.723371103442928
+    pos_count: 2000
+    neg_count: 3
+  - expert: 24
+    score: 7275.64404296875
+    count: 1560
+    gate_mean: 0.1990146734775641
+    norm_mean: 57.1340094150641
+    saliency_mean: 11.533276993189103
+    eaft_saliency_mean: 4.66387438651843
+    pos_count: 1558
+    neg_count: 1
+  - expert: 28
+    score: 6807.94580078125
+    count: 2204
+    gate_mean: 0.1715252524928043
+    norm_mean: 40.24805750907441
+    saliency_mean: 7.813948892638384
+    eaft_saliency_mean: 3.0889046283036525
+    pos_count: 2197
+    neg_count: 0
+  - expert: 10
+    score: 6415.80859375
+    count: 2236
+    gate_mean: 0.21084249424806434
+    norm_mean: 32.035502152280856
+    saliency_mean: 7.282925791731888
+    eaft_saliency_mean: 2.869324058027728
+    pos_count: 2229
+    neg_count: 0
+  - expert: 22
+    score: 5482.701171875
+    count: 2625
+    gate_mean: 0.168326171875
+    norm_mean: 24.932056547619048
+    saliency_mean: 5.1354609375
+    eaft_saliency_mean: 2.0886480654761903
+    pos_count: 2611
+    neg_count: 2
+  - expert: 8
+    score: 5405.443359375
+    count: 1507
+    gate_mean: 0.20571012439993572
+    norm_mean: 35.73125673938288
+    saliency_mean: 8.62768214478268
+    eaft_saliency_mean: 3.5868900858493697
+    pos_count: 1505
+    neg_count: 0
+  - expert: 5
+    score: 5389.93701171875
+    count: 1553
+    gate_mean: 0.23099847463201265
+    norm_mean: 39.865592804249836
+    saliency_mean: 10.005880754990342
+    eaft_saliency_mean: 3.4706613082541855
+    pos_count: 1501
+    neg_count: 5
+  - expert: 21
+    score: 5326.49853515625
+    count: 1706
+    gate_mean: 0.1810600218152385
+    norm_mean: 42.337645625732705
+    saliency_mean: 8.42636283704572
+    eaft_saliency_mean: 3.1222148506191383
+    pos_count: 1697
+    neg_count: 0
+  - expert: 17
+    score: 5254.72705078125
+    count: 4138
+    gate_mean: 0.13336743612459975
+    norm_mean: 23.363303905872403
+    saliency_mean: 3.50965258163666
+    eaft_saliency_mean: 1.2698712060853674
+    pos_count: 4119
+    neg_count: 2
+  - expert: 30
+    score: 4900.82275390625
+    count: 733
+    gate_mean: 0.30052861607904163
+    norm_mean: 54.68206429058663
+    saliency_mean: 16.971758292121418
+    eaft_saliency_mean: 6.685979200417804
+    pos_count: 726
+    neg_count: 3
+  - expert: 4
+    score: 4758.67138671875
+    count: 1432
+    gate_mean: 0.20486405441880892
+    norm_mean: 46.63713337988827
+    saliency_mean: 10.31677655267982
+    eaft_saliency_mean: 3.32309454379801
+    pos_count: 1427
+    neg_count: 1
+  - expert: 26
+    score: 4632.72412109375
+    count: 1659
+    gate_mean: 0.2214505205390107
+    norm_mean: 31.338322690626885
+    saliency_mean: 8.07415870818264
+    eaft_saliency_mean: 2.792479880104732
+    pos_count: 1650
+    neg_count: 0
+  - expert: 0
+    score: 4112.19140625
+    count: 941
+    gate_mean: 0.18302611007447198
+    norm_mean: 40.301358262486715
+    saliency_mean: 8.138959343451116
+    eaft_saliency_mean: 4.370022748405951
+    pos_count: 940
+    neg_count: 0
+  - expert: 12
+    score: 3527.6669921875
+    count: 1370
+    gate_mean: 0.2075929961935447
+    norm_mean: 32.385743613138686
+    saliency_mean: 7.636948277828467
+    eaft_saliency_mean: 2.5749394103558396
+    pos_count: 1364
+    neg_count: 1
+  - expert: 6
+    score: 3466.501220703125
+    count: 1118
+    gate_mean: 0.20310722992543884
+    norm_mean: 36.223791787790695
+    saliency_mean: 8.03066825525492
+    eaft_saliency_mean: 3.100627209931239
+    pos_count: 1105
+    neg_count: 3
+  - expert: 27
+    score: 2848.881103515625
+    count: 892
+    gate_mean: 0.20242557611166095
+    norm_mean: 36.78473584641256
+    saliency_mean: 8.519906766746077
+    eaft_saliency_mean: 3.193812896317965
+    pos_count: 885
+    neg_count: 1
+  - expert: 29
+    score: 2683.30908203125
+    count: 1206
+    gate_mean: 0.16394154309831052
+    norm_mean: 32.10990295916252
+    saliency_mean: 5.904761673403814
+    eaft_saliency_mean: 2.224966071336028
+    pos_count: 1202
+    neg_count: 0
+  - expert: 20
+    score: 2463.58984375
+    count: 1213
+    gate_mean: 0.16883570835399705
+    norm_mean: 27.748318992168176
+    saliency_mean: 5.456864195821311
+    eaft_saliency_mean: 2.030989153957131
+    pos_count: 1207
+    neg_count: 0
+- layer: 1
+  experts:
+  - expert: 23
+    score: 34347.7734375
+    count: 3644
+    gate_mean: 0.3224705718089668
+    norm_mean: 61.65225370472009
+    saliency_mean: 21.22357385428101
+    eaft_saliency_mean: 9.425843424121844
+    pos_count: 3615
+    neg_count: 3
+  - expert: 10
+    score: 29459.8203125
+    count: 3214
+    gate_mean: 0.3283130809544182
+    norm_mean: 92.63319656191662
+    saliency_mean: 32.82580847464219
+    eaft_saliency_mean: 9.166092194306161
+    pos_count: 3206
+    neg_count: 1
+  - expert: 1
+    score: 25059.861328125
+    count: 2909
+    gate_mean: 0.26434206577378394
+    norm_mean: 77.73055603300104
+    saliency_mean: 22.147140340323134
+    eaft_saliency_mean: 8.614596537684772
+    pos_count: 2905
+    neg_count: 1
+  - expert: 6
+    score: 23409.7578125
+    count: 2448
+    gate_mean: 0.29313385408688214
+    norm_mean: 58.55771292892157
+    saliency_mean: 19.178754021139707
+    eaft_saliency_mean: 9.562809563929738
+    pos_count: 2438
+    neg_count: 0
+  - expert: 0
+    score: 23003.33984375
+    count: 3165
+    gate_mean: 0.255620074761799
+    norm_mean: 87.7016883886256
+    saliency_mean: 23.8863595971564
+    eaft_saliency_mean: 7.268037865323855
+    pos_count: 3161
+    neg_count: 1
+  - expert: 16
+    score: 22361.52734375
+    count: 3311
+    gate_mean: 0.265732747051731
+    norm_mean: 73.29680421322863
+    saliency_mean: 21.547644216248866
+    eaft_saliency_mean: 6.753708047040169
+    pos_count: 3295
+    neg_count: 1
+  - expert: 12
+    score: 22088.19921875
+    count: 2924
+    gate_mean: 0.3386171186997691
+    norm_mean: 72.97156613372093
+    saliency_mean: 26.076519215971274
+    eaft_saliency_mean: 7.5541036999829005
+    pos_count: 2916
+    neg_count: 1
+  - expert: 27
+    score: 17988.1015625
+    count: 3538
+    gate_mean: 0.2509154410871697
+    norm_mean: 68.16407574901073
+    saliency_mean: 18.53136703292821
+    eaft_saliency_mean: 5.08425708380441
+    pos_count: 3528
+    neg_count: 0
+  - expert: 13
+    score: 17585.541015625
+    count: 2766
+    gate_mean: 0.3235264003750904
+    norm_mean: 59.05847229754158
+    saliency_mean: 20.093285373734634
+    eaft_saliency_mean: 6.357751632546999
+    pos_count: 2753
+    neg_count: 1
+  - expert: 28
+    score: 15515.62890625
+    count: 1785
+    gate_mean: 0.2628889837184874
+    norm_mean: 73.6171218487395
+    saliency_mean: 20.26701461834734
+    eaft_saliency_mean: 8.692229079131653
+    pos_count: 1773
+    neg_count: 3
+  - expert: 14
+    score: 14252.736328125
+    count: 1399
+    gate_mean: 0.32288389499056247
+    norm_mean: 68.67570586132952
+    saliency_mean: 24.20743332290922
+    eaft_saliency_mean: 10.187802950768406
+    pos_count: 1377
+    neg_count: 3
+  - expert: 18
+    score: 14214.3876953125
+    count: 1966
+    gate_mean: 0.29996354655113494
+    norm_mean: 78.86354749491353
+    saliency_mean: 24.66612689153103
+    eaft_saliency_mean: 7.230105643597406
+    pos_count: 1957
+    neg_count: 1
+  - expert: 17
+    score: 12300.6787109375
+    count: 2537
+    gate_mean: 0.21698060597685503
+    norm_mean: 51.964063115884905
+    saliency_mean: 12.021597543851005
+    eaft_saliency_mean: 4.848513484799961
+    pos_count: 2513
+    neg_count: 0
+  - expert: 20
+    score: 11083.548828125
+    count: 2259
+    gate_mean: 0.2279750086027418
+    norm_mean: 61.75370739265161
+    saliency_mean: 15.45982044046038
+    eaft_saliency_mean: 4.906396116921204
+    pos_count: 2250
+    neg_count: 1
+  - expert: 26
+    score: 10805.080078125
+    count: 3221
+    gate_mean: 0.21892673856018124
+    norm_mean: 44.58116171220118
+    saliency_mean: 11.224417154998447
+    eaft_saliency_mean: 3.35457313819466
+    pos_count: 3206
+    neg_count: 2
+  - expert: 29
+    score: 10379.986328125
+    count: 1619
+    gate_mean: 0.25807287017087127
+    norm_mean: 64.42457245985176
+    saliency_mean: 18.429102406964176
+    eaft_saliency_mean: 6.4113565955064855
+    pos_count: 1609
+    neg_count: 3
+  - expert: 11
+    score: 8313.451171875
+    count: 945
+    gate_mean: 0.18722837740782078
+    norm_mean: 67.63382936507936
+    saliency_mean: 13.783056382275133
+    eaft_saliency_mean: 8.797302827380953
+    pos_count: 944
+    neg_count: 0
+  - expert: 22
+    score: 7872.59521484375
+    count: 2035
+    gate_mean: 0.2018045561319487
+    norm_mean: 37.97577933046683
+    saliency_mean: 9.077091331388207
+    eaft_saliency_mean: 3.8685971571713758
+    pos_count: 2028
+    neg_count: 2
+  - expert: 5
+    score: 7808.5341796875
+    count: 2324
+    gate_mean: 0.1942619940910405
+    norm_mean: 44.38898787112737
+    saliency_mean: 9.228071045342082
+    eaft_saliency_mean: 3.3599544663027108
+    pos_count: 2323
+    neg_count: 1
+  - expert: 8
+    score: 7490.6875
+    count: 2004
+    gate_mean: 0.22187390965140033
+    norm_mean: 37.298679983782435
+    saliency_mean: 9.02364899108034
+    eaft_saliency_mean: 3.7378680139720557
+    pos_count: 1993
+    neg_count: 1
+  - expert: 3
+    score: 5974.33203125
+    count: 1566
+    gate_mean: 0.2121808477136215
+    norm_mean: 45.50035420657726
+    saliency_mean: 11.007813747206258
+    eaft_saliency_mean: 3.815026839878672
+    pos_count: 1559
+    neg_count: 0
+  - expert: 9
+    score: 5911.28076171875
+    count: 1046
+    gate_mean: 0.22011344428272137
+    norm_mean: 48.06008006692161
+    saliency_mean: 12.299922323135755
+    eaft_saliency_mean: 5.651320039884082
+    pos_count: 1037
+    neg_count: 0
+  - expert: 4
+    score: 5869.568359375
+    count: 1191
+    gate_mean: 0.1949313249435873
+    norm_mean: 62.591309823677584
+    saliency_mean: 13.002497572942906
+    eaft_saliency_mean: 4.92826898352225
+    pos_count: 1187
+    neg_count: 3
+  - expert: 30
+    score: 5381.8056640625
+    count: 1881
+    gate_mean: 0.1908590427299309
+    norm_mean: 34.37563338981924
+    saliency_mean: 7.68791014586656
+    eaft_saliency_mean: 2.8611407039141414
+    pos_count: 1867
+    neg_count: 1
+  - expert: 24
+    score: 5341.77880859375
+    count: 1235
+    gate_mean: 0.22542344066295547
+    norm_mean: 50.458998608299595
+    saliency_mean: 13.085918522267207
+    eaft_saliency_mean: 4.325326970521255
+    pos_count: 1229
+    neg_count: 2
+  - expert: 25
+    score: 4053.072998046875
+    count: 1699
+    gate_mean: 0.15407824053211447
+    norm_mean: 37.7227735064744
+    saliency_mean: 6.4652231091818715
+    eaft_saliency_mean: 2.3855638599451883
+    pos_count: 1624
+    neg_count: 0
+  - expert: 31
+    score: 3480.839599609375
+    count: 1549
+    gate_mean: 0.17121551296955698
+    norm_mean: 29.746487148967077
+    saliency_mean: 6.359871792285346
+    eaft_saliency_mean: 2.2471527434534377
+    pos_count: 1547
+    neg_count: 1
+  - expert: 15
+    score: 3271.92333984375
+    count: 861
+    gate_mean: 0.17421157960969258
+    norm_mean: 34.28676910932056
+    saliency_mean: 7.382883388683217
+    eaft_saliency_mean: 3.800143251851045
+    pos_count: 855
+    neg_count: 2
+  - expert: 21
+    score: 3061.20654296875
+    count: 744
+    gate_mean: 0.2265998060985278
+    norm_mean: 49.47514490927419
+    saliency_mean: 13.121004494287634
+    eaft_saliency_mean: 4.114524923345094
+    pos_count: 739
+    neg_count: 2
+  - expert: 19
+    score: 2382.24462890625
+    count: 950
+    gate_mean: 0.18899229350842928
+    norm_mean: 31.969379111842105
+    saliency_mean: 7.036450452302631
+    eaft_saliency_mean: 2.5076259251644735
+    pos_count: 946
+    neg_count: 2
+  - expert: 7
+    score: 1614.25927734375
+    count: 828
+    gate_mean: 0.14140587037312236
+    norm_mean: 31.276692708333332
+    saliency_mean: 4.523984162703805
+    eaft_saliency_mean: 1.9495884992074275
+    pos_count: 828
+    neg_count: 0
+  - expert: 2
+    score: 932.44775390625
+    count: 437
+    gate_mean: 0.1474060826770774
+    norm_mean: 30.007671714101832
+    saliency_mean: 4.9069801871782035
+    eaft_saliency_mean: 2.133747720609268
+    pos_count: 436
+    neg_count: 1
+- layer: 2
+  experts:
+  - expert: 20
+    score: 54383.04296875
+    count: 3604
+    gate_mean: 0.29545286731106063
+    norm_mean: 95.93638145116537
+    saliency_mean: 30.828937898862375
+    eaft_saliency_mean: 15.089634564026083
+    pos_count: 3576
+    neg_count: 2
+  - expert: 7
+    score: 50410.25
+    count: 4052
+    gate_mean: 0.29783405932834095
+    norm_mean: 88.64085636722606
+    saliency_mean: 28.213854655108587
+    eaft_saliency_mean: 12.440831688055281
+    pos_count: 4028
+    neg_count: 2
+  - expert: 15
+    score: 39117.7421875
+    count: 5146
+    gate_mean: 0.27240265402588176
+    norm_mean: 79.4246077050136
+    saliency_mean: 23.190846045472213
+    eaft_saliency_mean: 7.601582236202876
+    pos_count: 5142
+    neg_count: 1
+  - expert: 21
+    score: 30396.15234375
+    count: 5258
+    gate_mean: 0.25893864390422927
+    norm_mean: 75.10195773107645
+    saliency_mean: 20.86018180629517
+    eaft_saliency_mean: 5.78093426088817
+    pos_count: 5253
+    neg_count: 2
+  - expert: 0
+    score: 26834.802734375
+    count: 3885
+    gate_mean: 0.2577417400659588
+    norm_mean: 91.10733590733591
+    saliency_mean: 24.257092583655083
+    eaft_saliency_mean: 6.907285131113256
+    pos_count: 3879
+    neg_count: 1
+  - expert: 5
+    score: 25492.24609375
+    count: 2940
+    gate_mean: 0.2534466801857462
+    norm_mean: 79.50725446428571
+    saliency_mean: 21.372325414540818
+    eaft_saliency_mean: 8.670832004676871
+    pos_count: 2934
+    neg_count: 1
+  - expert: 8
+    score: 24187.126953125
+    count: 3470
+    gate_mean: 0.28033084924351587
+    norm_mean: 90.20457492795389
+    saliency_mean: 25.86467939481268
+    eaft_saliency_mean: 6.97035358879683
+    pos_count: 3463
+    neg_count: 1
+  - expert: 22
+    score: 23925.798828125
+    count: 2700
+    gate_mean: 0.24048222294560184
+    norm_mean: 109.91149305555555
+    saliency_mean: 26.56429398148148
+    eaft_saliency_mean: 8.86140697337963
+    pos_count: 2697
+    neg_count: 1
+  - expert: 10
+    score: 22944.458984375
+    count: 1810
+    gate_mean: 0.22410674543011913
+    norm_mean: 107.2356439917127
+    saliency_mean: 25.665243007596686
+    eaft_saliency_mean: 12.676496676450276
+    pos_count: 1810
+    neg_count: 0
+  - expert: 29
+    score: 18664.61328125
+    count: 2966
+    gate_mean: 0.3179622760754699
+    norm_mean: 69.81078261968982
+    saliency_mean: 22.809036265171947
+    eaft_saliency_mean: 6.292856804197572
+    pos_count: 2956
+    neg_count: 2
+  - expert: 3
+    score: 18250.005859375
+    count: 2791
+    gate_mean: 0.24917080973861294
+    norm_mean: 82.18059723217485
+    saliency_mean: 21.37958085139735
+    eaft_saliency_mean: 6.538877054595127
+    pos_count: 2783
+    neg_count: 1
+  - expert: 12
+    score: 17436.57421875
+    count: 1959
+    gate_mean: 0.22472742615213437
+    norm_mean: 101.83046197039306
+    saliency_mean: 23.778225098902503
+    eaft_saliency_mean: 8.900752536370597
+    pos_count: 1946
+    neg_count: 5
+  - expert: 6
+    score: 13867.5166015625
+    count: 2475
+    gate_mean: 0.24556988340435607
+    norm_mean: 80.19950757575758
+    saliency_mean: 20.413524305555555
+    eaft_saliency_mean: 5.603037010732323
+    pos_count: 2464
+    neg_count: 0
+  - expert: 28
+    score: 11954.384765625
+    count: 1474
+    gate_mean: 0.29216332610297235
+    norm_mean: 72.42380957428766
+    saliency_mean: 22.72595827679783
+    eaft_saliency_mean: 8.110166055376526
+    pos_count: 1467
+    neg_count: 0
+  - expert: 30
+    score: 11637.9404296875
+    count: 1291
+    gate_mean: 0.20774686475025417
+    norm_mean: 97.13957808869094
+    saliency_mean: 20.63241461318745
+    eaft_saliency_mean: 9.014671130664214
+    pos_count: 1274
+    neg_count: 2
+  - expert: 27
+    score: 9186.5986328125
+    count: 1570
+    gate_mean: 0.239213921613754
+    norm_mean: 66.2014530254777
+    saliency_mean: 17.605033339968152
+    eaft_saliency_mean: 5.851336708797771
+    pos_count: 1564
+    neg_count: 2
+  - expert: 2
+    score: 8748.9306640625
+    count: 1535
+    gate_mean: 0.20756760389098128
+    norm_mean: 65.0785677931596
+    saliency_mean: 14.909269391286644
+    eaft_saliency_mean: 5.699629097109121
+    pos_count: 1530
+    neg_count: 1
+  - expert: 25
+    score: 8739.0361328125
+    count: 1517
+    gate_mean: 0.22213250237542229
+    norm_mean: 60.92366718852999
+    saliency_mean: 16.186185470912985
+    eaft_saliency_mean: 5.760735750041199
+    pos_count: 1509
+    neg_count: 0
+  - expert: 23
+    score: 8648.0771484375
+    count: 1100
+    gate_mean: 0.22371084039861505
+    norm_mean: 87.00745028409091
+    saliency_mean: 21.057698863636364
+    eaft_saliency_mean: 7.861888316761363
+    pos_count: 1063
+    neg_count: 3
+  - expert: 24
+    score: 8529.564453125
+    count: 1327
+    gate_mean: 0.2300308101053245
+    norm_mean: 57.871267426525996
+    saliency_mean: 14.988421074321778
+    eaft_saliency_mean: 6.427704938300678
+    pos_count: 1316
+    neg_count: 1
+  - expert: 26
+    score: 7985.38427734375
+    count: 922
+    gate_mean: 0.2398176710414266
+    norm_mean: 82.44885439262472
+    saliency_mean: 20.825479172315617
+    eaft_saliency_mean: 8.660937394082158
+    pos_count: 844
+    neg_count: 4
+  - expert: 13
+    score: 7577.365234375
+    count: 1582
+    gate_mean: 0.18997470166077354
+    norm_mean: 59.10789842762326
+    saliency_mean: 11.9501743244311
+    eaft_saliency_mean: 4.789737821981669
+    pos_count: 1576
+    neg_count: 1
+  - expert: 18
+    score: 6078.37353515625
+    count: 1348
+    gate_mean: 0.2183741221442067
+    norm_mean: 58.44415917099406
+    saliency_mean: 13.834997160144658
+    eaft_saliency_mean: 4.509179180382975
+    pos_count: 1338
+    neg_count: 2
+  - expert: 17
+    score: 5927.1083984375
+    count: 1115
+    gate_mean: 0.22737778462636632
+    norm_mean: 65.05782651345291
+    saliency_mean: 15.952785173766816
+    eaft_saliency_mean: 5.315792285594171
+    pos_count: 1110
+    neg_count: 0
+  - expert: 16
+    score: 5771.4912109375
+    count: 1319
+    gate_mean: 0.19447957140826383
+    norm_mean: 45.218394617134194
+    saliency_mean: 10.250406469152768
+    eaft_saliency_mean: 4.375656717920774
+    pos_count: 1310
+    neg_count: 2
+  - expert: 31
+    score: 5145.03076171875
+    count: 1737
+    gate_mean: 0.18064521082393314
+    norm_mean: 36.923039903569375
+    saliency_mean: 7.116037776158607
+    eaft_saliency_mean: 2.962021163914076
+    pos_count: 1717
+    neg_count: 0
+  - expert: 19
+    score: 3884.2685546875
+    count: 608
+    gate_mean: 0.220721445585552
+    norm_mean: 64.84883197985198
+    saliency_mean: 17.17951724403783
+    eaft_saliency_mean: 6.388599596525493
+    pos_count: 607
+    neg_count: 0
+  - expert: 4
+    score: 3510.8212890625
+    count: 729
+    gate_mean: 0.14977356501240463
+    norm_mean: 70.80466070816186
+    saliency_mean: 10.992853946973593
+    eaft_saliency_mean: 4.815941411608367
+    pos_count: 728
+    neg_count: 1
+  - expert: 11
+    score: 2984.100830078125
+    count: 709
+    gate_mean: 0.20314792046594016
+    norm_mean: 57.39136327574048
+    saliency_mean: 12.759071425423132
+    eaft_saliency_mean: 4.208886925357017
+    pos_count: 706
+    neg_count: 0
+  - expert: 14
+    score: 2878.93408203125
+    count: 394
+    gate_mean: 0.19834355775474896
+    norm_mean: 54.82923540609137
+    saliency_mean: 12.317359265942258
+    eaft_saliency_mean: 7.3069392944955585
+    pos_count: 390
+    neg_count: 0
+  - expert: 1
+    score: 1521.3104248046875
+    count: 329
+    gate_mean: 0.19300521108517169
+    norm_mean: 49.97323209536474
+    saliency_mean: 11.963128829074847
+    eaft_saliency_mean: 4.624043844391148
+    pos_count: 327
+    neg_count: 2
+  - expert: 9
+    score: 1392.2926025390625
+    count: 338
+    gate_mean: 0.1602739638830783
+    norm_mean: 46.338858519785504
+    saliency_mean: 7.950399726100222
+    eaft_saliency_mean: 4.119208883251664
+    pos_count: 337
+    neg_count: 0
+- layer: 3
+  experts:
+  - expert: 10
+    score: 54296.6015625
+    count: 3534
+    gate_mean: 0.2948953469864177
+    norm_mean: 116.29411608658744
+    saliency_mean: 35.749266058290885
+    eaft_saliency_mean: 15.36406382640068
+    pos_count: 3508
+    neg_count: 2
+  - expert: 31
+    score: 40963.5546875
+    count: 2806
+    gate_mean: 0.24108812763108073
+    norm_mean: 136.27480176407698
+    saliency_mean: 34.143459328225234
+    eaft_saliency_mean: 14.598558334818247
+    pos_count: 2802
+    neg_count: 1
+  - expert: 2
+    score: 39717.29296875
+    count: 3198
+    gate_mean: 0.27528475820459075
+    norm_mean: 137.81805034396498
+    saliency_mean: 39.57956144465291
+    eaft_saliency_mean: 12.419416187851782
+    pos_count: 3194
+    neg_count: 1
+  - expert: 21
+    score: 38347.2109375
+    count: 2526
+    gate_mean: 0.29123765669072893
+    norm_mean: 99.26655903602534
+    saliency_mean: 32.05242973079968
+    eaft_saliency_mean: 15.181001954671418
+    pos_count: 2517
+    neg_count: 1
+  - expert: 7
+    score: 37262.578125
+    count: 5055
+    gate_mean: 0.26538105256243816
+    norm_mean: 102.23695598417409
+    saliency_mean: 27.689759520276954
+    eaft_saliency_mean: 7.371429896142433
+    pos_count: 5037
+    neg_count: 2
+  - expert: 13
+    score: 36616.33203125
+    count: 3646
+    gate_mean: 0.23317689628831254
+    norm_mean: 101.00116566099835
+    saliency_mean: 24.805053911821172
+    eaft_saliency_mean: 10.042877682734504
+    pos_count: 3643
+    neg_count: 3
+  - expert: 19
+    score: 35199.40234375
+    count: 3943
+    gate_mean: 0.32239809744919795
+    norm_mean: 100.63298884098403
+    saliency_mean: 33.04433489728633
+    eaft_saliency_mean: 8.92706120815369
+    pos_count: 3931
+    neg_count: 2
+  - expert: 17
+    score: 34974.43359375
+    count: 4487
+    gate_mean: 0.2507861251950078
+    norm_mean: 68.60192639848451
+    saliency_mean: 18.380329632828172
+    eaft_saliency_mean: 7.794614128315133
+    pos_count: 4481
+    neg_count: 6
+  - expert: 23
+    score: 28593.681640625
+    count: 2412
+    gate_mean: 0.25793497518915837
+    norm_mean: 91.04562474087894
+    saliency_mean: 25.32344138681592
+    eaft_saliency_mean: 11.854760215847843
+    pos_count: 2402
+    neg_count: 3
+  - expert: 12
+    score: 28405.177734375
+    count: 2807
+    gate_mean: 0.26365132700475374
+    norm_mean: 118.79925187032418
+    saliency_mean: 32.56923261043819
+    eaft_saliency_mean: 10.119407814169932
+    pos_count: 2781
+    neg_count: 1
+  - expert: 22
+    score: 23984.146484375
+    count: 2358
+    gate_mean: 0.29480889007335404
+    norm_mean: 119.20219730703987
+    saliency_mean: 36.19163486005089
+    eaft_saliency_mean: 10.17139375927693
+    pos_count: 2342
+    neg_count: 0
+  - expert: 26
+    score: 17395.240234375
+    count: 2761
+    gate_mean: 0.23022699684217673
+    norm_mean: 70.04396618073162
+    saliency_mean: 17.20413799348062
+    eaft_saliency_mean: 6.300340541244115
+    pos_count: 2759
+    neg_count: 2
+  - expert: 4
+    score: 15866.1533203125
+    count: 2685
+    gate_mean: 0.21797629699138735
+    norm_mean: 75.21518272811917
+    saliency_mean: 17.23643796554935
+    eaft_saliency_mean: 5.90918186976257
+    pos_count: 2683
+    neg_count: 2
+  - expert: 14
+    score: 13756.8720703125
+    count: 1866
+    gate_mean: 0.2268554589372739
+    norm_mean: 89.40565547963558
+    saliency_mean: 20.767264117765272
+    eaft_saliency_mean: 7.3723858897709
+    pos_count: 1865
+    neg_count: 0
+  - expert: 1
+    score: 13115.8896484375
+    count: 3192
+    gate_mean: 0.20720294005888745
+    norm_mean: 67.46870594454887
+    saliency_mean: 14.803958137531328
+    eaft_saliency_mean: 4.108987985099468
+    pos_count: 3112
+    neg_count: 1
+  - expert: 3
+    score: 11054.5478515625
+    count: 1456
+    gate_mean: 0.2565833710052155
+    norm_mean: 93.93374399038461
+    saliency_mean: 25.460159469436814
+    eaft_saliency_mean: 7.592409238710508
+    pos_count: 1454
+    neg_count: 0
+  - expert: 0
+    score: 9952.248046875
+    count: 2492
+    gate_mean: 0.19471510493736205
+    norm_mean: 58.86693042736758
+    saliency_mean: 12.652548310844702
+    eaft_saliency_mean: 3.993678991522873
+    pos_count: 2487
+    neg_count: 0
+  - expert: 11
+    score: 9148.7109375
+    count: 1661
+    gate_mean: 0.21422050058088124
+    norm_mean: 70.47557006321493
+    saliency_mean: 17.250348058398554
+    eaft_saliency_mean: 5.507953604756171
+    pos_count: 1658
+    neg_count: 0
+  - expert: 30
+    score: 8855.2802734375
+    count: 1397
+    gate_mean: 0.25174605547741813
+    norm_mean: 79.31639226914818
+    saliency_mean: 20.908840651843235
+    eaft_saliency_mean: 6.338783302389048
+    pos_count: 1392
+    neg_count: 0
+  - expert: 8
+    score: 8146.59130859375
+    count: 1232
+    gate_mean: 0.199883560081581
+    norm_mean: 86.61983182832792
+    saliency_mean: 17.7911281833401
+    eaft_saliency_mean: 6.612492945287134
+    pos_count: 1231
+    neg_count: 1
+  - expert: 28
+    score: 7352.69140625
+    count: 818
+    gate_mean: 0.23538989601041985
+    norm_mean: 85.15240105440098
+    saliency_mean: 23.213647520629586
+    eaft_saliency_mean: 8.98862030103912
+    pos_count: 812
+    neg_count: 0
+  - expert: 20
+    score: 6767.978515625
+    count: 599
+    gate_mean: 0.2507519347838846
+    norm_mean: 89.17120982888147
+    saliency_mean: 23.65942749634808
+    eaft_saliency_mean: 11.298795518572621
+    pos_count: 593
+    neg_count: 3
+  - expert: 18
+    score: 6502.11865234375
+    count: 811
+    gate_mean: 0.254141453603046
+    norm_mean: 71.64267686498151
+    saliency_mean: 21.29728681797164
+    eaft_saliency_mean: 8.017408942470714
+    pos_count: 791
+    neg_count: 0
+  - expert: 6
+    score: 5710.77685546875
+    count: 730
+    gate_mean: 0.2526624914718001
+    norm_mean: 76.5324165239726
+    saliency_mean: 21.419834920804796
+    eaft_saliency_mean: 7.8229819937928085
+    pos_count: 675
+    neg_count: 0
+  - expert: 24
+    score: 5238.54150390625
+    count: 1120
+    gate_mean: 0.1914914403642927
+    norm_mean: 51.42680315290178
+    saliency_mean: 10.20923810686384
+    eaft_saliency_mean: 4.677269199916295
+    pos_count: 1120
+    neg_count: 0
+  - expert: 9
+    score: 5049.83935546875
+    count: 601
+    gate_mean: 0.2423064728544873
+    norm_mean: 84.94190671797006
+    saliency_mean: 22.657527168261232
+    eaft_saliency_mean: 8.40239493422421
+    pos_count: 597
+    neg_count: 1
+  - expert: 5
+    score: 4758.39697265625
+    count: 653
+    gate_mean: 0.23057855252650028
+    norm_mean: 80.6039732484686
+    saliency_mean: 21.146973404000764
+    eaft_saliency_mean: 7.286978518616003
+    pos_count: 653
+    neg_count: 0
+  - expert: 15
+    score: 4157.8564453125
+    count: 681
+    gate_mean: 0.222298755169615
+    norm_mean: 91.36171530837004
+    saliency_mean: 21.791979281387665
+    eaft_saliency_mean: 6.105516072411894
+    pos_count: 666
+    neg_count: 1
+  - expert: 29
+    score: 4099.0771484375
+    count: 591
+    gate_mean: 0.23331006045268876
+    norm_mean: 63.7921293358714
+    saliency_mean: 17.09856175972927
+    eaft_saliency_mean: 6.935832738472927
+    pos_count: 588
+    neg_count: 2
+  - expert: 25
+    score: 4072.676513671875
+    count: 703
+    gate_mean: 0.18817841921897227
+    norm_mean: 57.8110830814367
+    saliency_mean: 11.463655344283428
+    eaft_saliency_mean: 5.793280958281472
+    pos_count: 694
+    neg_count: 3
+  - expert: 27
+    score: 3547.490966796875
+    count: 644
+    gate_mean: 0.21109466078858938
+    norm_mean: 66.19230395962732
+    saliency_mean: 15.76050411248059
+    eaft_saliency_mean: 5.508526345957881
+    pos_count: 641
+    neg_count: 2
+  - expert: 16
+    score: 2982.350341796875
+    count: 535
+    gate_mean: 0.18715262724974446
+    norm_mean: 67.67175087616822
+    saliency_mean: 12.953101270443925
+    eaft_saliency_mean: 5.574486620181075
+    pos_count: 535
+    neg_count: 0
+- layer: 4
+  experts:
+  - expert: 27
+    score: 116507.109375
+    count: 4946
+    gate_mean: 0.3301509821699353
+    norm_mean: 156.62165133441164
+    saliency_mean: 54.139885766275775
+    eaft_saliency_mean: 23.55582478265265
+    pos_count: 4919
+    neg_count: 4
+  - expert: 18
+    score: 56034.3359375
+    count: 5069
+    gate_mean: 0.25441885380190865
+    norm_mean: 134.16747632669166
+    saliency_mean: 35.660565446833694
+    eaft_saliency_mean: 11.054317604557111
+    pos_count: 5067
+    neg_count: 2
+  - expert: 14
+    score: 48978.06640625
+    count: 3464
+    gate_mean: 0.24345968832319934
+    norm_mean: 135.73172271939953
+    saliency_mean: 35.75855676241339
+    eaft_saliency_mean: 14.139164666931293
+    pos_count: 3461
+    neg_count: 1
+  - expert: 6
+    score: 46708.0859375
+    count: 4880
+    gate_mean: 0.26389025078445183
+    norm_mean: 120.68262038934427
+    saliency_mean: 33.09986232069672
+    eaft_saliency_mean: 9.571329085553279
+    pos_count: 4861
+    neg_count: 3
+  - expert: 15
+    score: 45638.6015625
+    count: 4050
+    gate_mean: 0.24836299189814814
+    norm_mean: 144.86163580246912
+    saliency_mean: 38.15469521604938
+    eaft_saliency_mean: 11.26879050925926
+    pos_count: 4043
+    neg_count: 3
+  - expert: 10
+    score: 43859.296875
+    count: 3362
+    gate_mean: 0.29788137205578896
+    norm_mean: 130.54108417608566
+    saliency_mean: 39.95692668054729
+    eaft_saliency_mean: 13.045596928911362
+    pos_count: 3357
+    neg_count: 3
+  - expert: 19
+    score: 42721.72265625
+    count: 2748
+    gate_mean: 0.25678618540756915
+    norm_mean: 136.9759825327511
+    saliency_mean: 37.66117972161572
+    eaft_saliency_mean: 15.546478404748909
+    pos_count: 2700
+    neg_count: 1
+  - expert: 30
+    score: 41458.98828125
+    count: 3473
+    gate_mean: 0.2702612642111917
+    norm_mean: 154.37096890296573
+    saliency_mean: 41.97231320184279
+    eaft_saliency_mean: 11.937514621724734
+    pos_count: 3472
+    neg_count: 0
+  - expert: 16
+    score: 38986.64453125
+    count: 4070
+    gate_mean: 0.22135198719671376
+    norm_mean: 105.70793151105651
+    saliency_mean: 25.142222051597052
+    eaft_saliency_mean: 9.579028140356264
+    pos_count: 4063
+    neg_count: 6
+  - expert: 20
+    score: 31856.345703125
+    count: 3719
+    gate_mean: 0.2600836183281796
+    norm_mean: 121.23435399300887
+    saliency_mean: 32.46018334901855
+    eaft_saliency_mean: 8.56583643536569
+    pos_count: 3681
+    neg_count: 1
+  - expert: 1
+    score: 29494.021484375
+    count: 2825
+    gate_mean: 0.22833645170768804
+    norm_mean: 117.88012168141593
+    saliency_mean: 29.244842367256638
+    eaft_saliency_mean: 10.440361587389381
+    pos_count: 2822
+    neg_count: 1
+  - expert: 12
+    score: 23657.013671875
+    count: 2331
+    gate_mean: 0.25679516884350867
+    norm_mean: 128.4105265980266
+    saliency_mean: 34.25153836872587
+    eaft_saliency_mean: 10.14886901410339
+    pos_count: 2315
+    neg_count: 0
+  - expert: 24
+    score: 18380.15625
+    count: 1117
+    gate_mean: 0.21685493216518856
+    norm_mean: 142.0466232094897
+    saliency_mean: 31.85987158683975
+    eaft_saliency_mean: 16.454929498657116
+    pos_count: 1104
+    neg_count: 1
+  - expert: 21
+    score: 18172.087890625
+    count: 1252
+    gate_mean: 0.25579429358339156
+    norm_mean: 101.63975763777955
+    saliency_mean: 31.842692317292332
+    eaft_saliency_mean: 14.514447196984824
+    pos_count: 1252
+    neg_count: 0
+  - expert: 3
+    score: 17827.267578125
+    count: 2307
+    gate_mean: 0.20985987365219982
+    norm_mean: 85.45067322280018
+    saliency_mean: 19.456111833550064
+    eaft_saliency_mean: 7.7274675241114
+    pos_count: 2302
+    neg_count: 1
+  - expert: 22
+    score: 15481.9892578125
+    count: 1859
+    gate_mean: 0.23077893269966213
+    norm_mean: 90.0881942576654
+    saliency_mean: 22.826952494620762
+    eaft_saliency_mean: 8.32812762658015
+    pos_count: 1856
+    neg_count: 1
+  - expert: 8
+    score: 11832.1513671875
+    count: 1462
+    gate_mean: 0.2156446798718579
+    norm_mean: 88.25585670314638
+    saliency_mean: 21.690664810619015
+    eaft_saliency_mean: 8.093126790141929
+    pos_count: 1452
+    neg_count: 5
+  - expert: 13
+    score: 11278.55859375
+    count: 1181
+    gate_mean: 0.23781694869284506
+    norm_mean: 110.80956948560542
+    saliency_mean: 28.565146062658762
+    eaft_saliency_mean: 9.55000727667231
+    pos_count: 1176
+    neg_count: 0
+  - expert: 4
+    score: 10717.20703125
+    count: 1234
+    gate_mean: 0.2100045870343522
+    norm_mean: 103.7939943780389
+    saliency_mean: 23.490460709582656
+    eaft_saliency_mean: 8.684932764384117
+    pos_count: 1224
+    neg_count: 4
+  - expert: 31
+    score: 9968.04296875
+    count: 1049
+    gate_mean: 0.23190570900392488
+    norm_mean: 114.19579659199238
+    saliency_mean: 28.60036902704957
+    eaft_saliency_mean: 9.502424183746426
+    pos_count: 1044
+    neg_count: 0
+  - expert: 25
+    score: 9117.8505859375
+    count: 1246
+    gate_mean: 0.17617577419617778
+    norm_mean: 85.33963683788122
+    saliency_mean: 15.710312061095506
+    eaft_saliency_mean: 7.317697099468298
+    pos_count: 1245
+    neg_count: 1
+  - expert: 17
+    score: 8977.80078125
+    count: 788
+    gate_mean: 0.2187297259490502
+    norm_mean: 97.91670962880711
+    saliency_mean: 25.201184267925125
+    eaft_saliency_mean: 11.393148199555837
+    pos_count: 787
+    neg_count: 0
+  - expert: 23
+    score: 8529.4736328125
+    count: 890
+    gate_mean: 0.22383433138386588
+    norm_mean: 113.35818117977529
+    saliency_mean: 28.050853669241572
+    eaft_saliency_mean: 9.58367823911517
+    pos_count: 843
+    neg_count: 0
+  - expert: 28
+    score: 7595.94287109375
+    count: 642
+    gate_mean: 0.2422242922203563
+    norm_mean: 139.5522293613707
+    saliency_mean: 36.37829171534268
+    eaft_saliency_mean: 11.831686715099298
+    pos_count: 623
+    neg_count: 1
+  - expert: 5
+    score: 7388.97802734375
+    count: 817
+    gate_mean: 0.20734897646209455
+    norm_mean: 137.27848645960833
+    saliency_mean: 29.35256416386169
+    eaft_saliency_mean: 9.044036753174725
+    pos_count: 817
+    neg_count: 0
+  - expert: 0
+    score: 7343.19921875
+    count: 692
+    gate_mean: 0.24388398187008897
+    norm_mean: 116.09999322615607
+    saliency_mean: 30.556934158236995
+    eaft_saliency_mean: 10.61155956466763
+    pos_count: 688
+    neg_count: 0
+  - expert: 2
+    score: 6261.255859375
+    count: 707
+    gate_mean: 0.22981737020835175
+    norm_mean: 110.68057151697313
+    saliency_mean: 26.427488507779348
+    eaft_saliency_mean: 8.856090324434229
+    pos_count: 651
+    neg_count: 1
+  - expert: 7
+    score: 5709.59228515625
+    count: 560
+    gate_mean: 0.2077960286821638
+    norm_mean: 100.87644391741071
+    saliency_mean: 23.004774693080357
+    eaft_saliency_mean: 10.195700509207589
+    pos_count: 560
+    neg_count: 0
+  - expert: 26
+    score: 2953.793212890625
+    count: 356
+    gate_mean: 0.2199227193768105
+    norm_mean: 82.34497344627809
+    saliency_mean: 20.596227067240168
+    eaft_saliency_mean: 8.29717194632198
+    pos_count: 356
+    neg_count: 0
+  - expert: 9
+    score: 2727.60791015625
+    count: 406
+    gate_mean: 0.20485764301469173
+    norm_mean: 111.84232604679804
+    saliency_mean: 24.17172586976601
+    eaft_saliency_mean: 6.718246084128695
+    pos_count: 405
+    neg_count: 0
+  - expert: 29
+    score: 1868.509033203125
+    count: 311
+    gate_mean: 0.1639601900646541
+    norm_mean: 99.91519292604502
+    saliency_mean: 17.293298457596464
+    eaft_saliency_mean: 6.008067630878215
+    pos_count: 311
+    neg_count: 0
+  - expert: 11
+    score: 993.5359497070312
+    count: 187
+    gate_mean: 0.17452674498532544
+    norm_mean: 75.8546175217246
+    saliency_mean: 15.059185170872325
+    eaft_saliency_mean: 5.313026469021557
+    pos_count: 187
+    neg_count: 0
+- layer: 5
+  experts:
+  - expert: 25
+    score: 98787.328125
+    count: 4614
+    gate_mean: 0.29382662862009645
+    norm_mean: 170.47235316428262
+    saliency_mean: 51.966145833333336
+    eaft_saliency_mean: 21.410344197009103
+    pos_count: 4606
+    neg_count: 4
+  - expert: 24
+    score: 65026.046875
+    count: 6865
+    gate_mean: 0.22960838990235796
+    norm_mean: 139.72598324836125
+    saliency_mean: 33.85996676984705
+    eaft_saliency_mean: 9.47211170793882
+    pos_count: 6783
+    neg_count: 3
+  - expert: 17
+    score: 64650.44921875
+    count: 4375
+    gate_mean: 0.28362784598214286
+    norm_mean: 185.5131142857143
+    saliency_mean: 54.28092142857143
+    eaft_saliency_mean: 14.777245535714286
+    pos_count: 4369
+    neg_count: 1
+  - expert: 31
+    score: 59687.7578125
+    count: 2868
+    gate_mean: 0.2643512209755274
+    norm_mean: 171.04075139470015
+    saliency_mean: 47.54221147140865
+    eaft_saliency_mean: 20.81163103643654
+    pos_count: 2864
+    neg_count: 1
+  - expert: 6
+    score: 56115.13671875
+    count: 3966
+    gate_mean: 0.242360633007517
+    norm_mean: 158.63830055471507
+    saliency_mean: 40.12776569591528
+    eaft_saliency_mean: 14.149051114157842
+    pos_count: 3964
+    neg_count: 2
+  - expert: 0
+    score: 55738.48046875
+    count: 3987
+    gate_mean: 0.2967954261996018
+    norm_mean: 169.5285929270128
+    saliency_mean: 51.37180994482067
+    eaft_saliency_mean: 13.980055296902433
+    pos_count: 3985
+    neg_count: 1
+  - expert: 7
+    score: 52601.99609375
+    count: 3943
+    gate_mean: 0.23902497181516294
+    norm_mean: 129.3253550595993
+    saliency_mean: 32.224476128582296
+    eaft_saliency_mean: 13.340602610639108
+    pos_count: 3937
+    neg_count: 2
+  - expert: 30
+    score: 36689.078125
+    count: 2257
+    gate_mean: 0.26594775347356836
+    norm_mean: 162.00922131147541
+    saliency_mean: 46.12991872507754
+    eaft_saliency_mean: 16.255683706247233
+    pos_count: 2253
+    neg_count: 0
+  - expert: 15
+    score: 34269.359375
+    count: 2045
+    gate_mean: 0.23905127788814182
+    norm_mean: 141.83733190709046
+    saliency_mean: 35.55110788508557
+    eaft_saliency_mean: 16.75763294621027
+    pos_count: 2025
+    neg_count: 2
+  - expert: 10
+    score: 30124.96875
+    count: 3982
+    gate_mean: 0.22538644665153346
+    norm_mean: 123.78491492968358
+    saliency_mean: 28.545454545454547
+    eaft_saliency_mean: 7.565285974384731
+    pos_count: 3940
+    neg_count: 1
+  - expert: 9
+    score: 29861.123046875
+    count: 2229
+    gate_mean: 0.234033049784096
+    norm_mean: 163.91318977119784
+    saliency_mean: 40.113994504262
+    eaft_saliency_mean: 13.396645602007627
+    pos_count: 2224
+    neg_count: 2
+  - expert: 2
+    score: 26289.96484375
+    count: 2064
+    gate_mean: 0.2677575931992642
+    norm_mean: 159.84184229651163
+    saliency_mean: 44.12340646196706
+    eaft_saliency_mean: 12.737386067708334
+    pos_count: 2044
+    neg_count: 4
+  - expert: 14
+    score: 26072.72265625
+    count: 2019
+    gate_mean: 0.2560614349229198
+    norm_mean: 133.58297734026746
+    saliency_mean: 36.70755169638435
+    eaft_saliency_mean: 12.913681355250123
+    pos_count: 2009
+    neg_count: 3
+  - expert: 8
+    score: 25193.0703125
+    count: 1422
+    gate_mean: 0.27282624707443304
+    norm_mean: 123.28818345639944
+    saliency_mean: 35.52962102232771
+    eaft_saliency_mean: 17.716645789381154
+    pos_count: 1414
+    neg_count: 0
+  - expert: 29
+    score: 22465.041015625
+    count: 1811
+    gate_mean: 0.2273975121652402
+    norm_mean: 130.14865750966317
+    saliency_mean: 32.04453685808945
+    eaft_saliency_mean: 12.404771405646052
+    pos_count: 1808
+    neg_count: 1
+  - expert: 3
+    score: 22296.45703125
+    count: 2015
+    gate_mean: 0.21990672979993797
+    norm_mean: 124.79799937965261
+    saliency_mean: 28.48621084057072
+    eaft_saliency_mean: 11.06523922146402
+    pos_count: 2011
+    neg_count: 0
+  - expert: 11
+    score: 19359.65625
+    count: 1539
+    gate_mean: 0.2380364946609507
+    norm_mean: 135.80959632878492
+    saliency_mean: 34.94211440058479
+    eaft_saliency_mean: 12.579373781676413
+    pos_count: 1500
+    neg_count: 0
+  - expert: 26
+    score: 19321.66015625
+    count: 1187
+    gate_mean: 0.26832774675685817
+    norm_mean: 127.02969671440607
+    saliency_mean: 36.316880133740526
+    eaft_saliency_mean: 16.277725489679867
+    pos_count: 1161
+    neg_count: 3
+  - expert: 19
+    score: 18838.29296875
+    count: 1541
+    gate_mean: 0.24426210120001215
+    norm_mean: 114.24310512654121
+    saliency_mean: 31.245571564730696
+    eaft_saliency_mean: 12.224719642277742
+    pos_count: 1529
+    neg_count: 1
+  - expert: 27
+    score: 11958.3759765625
+    count: 856
+    gate_mean: 0.23510608494838822
+    norm_mean: 134.52345575350466
+    saliency_mean: 33.68050206264603
+    eaft_saliency_mean: 13.97006539318049
+    pos_count: 853
+    neg_count: 0
+  - expert: 22
+    score: 10228.7177734375
+    count: 797
+    gate_mean: 0.2543743138331242
+    norm_mean: 137.5084790621079
+    saliency_mean: 38.742479120922205
+    eaft_saliency_mean: 12.834024809833751
+    pos_count: 796
+    neg_count: 0
+  - expert: 4
+    score: 10057.8486328125
+    count: 885
+    gate_mean: 0.23579118804069563
+    norm_mean: 152.63054378531072
+    saliency_mean: 37.500569385593224
+    eaft_saliency_mean: 11.364800715042373
+    pos_count: 876
+    neg_count: 0
+  - expert: 16
+    score: 9280.0986328125
+    count: 942
+    gate_mean: 0.23798375220815088
+    norm_mean: 116.1535711916136
+    saliency_mean: 29.97151589039278
+    eaft_saliency_mean: 9.851484748208598
+    pos_count: 941
+    neg_count: 0
+  - expert: 18
+    score: 9126.4150390625
+    count: 869
+    gate_mean: 0.22893307316015177
+    norm_mean: 127.04122914269276
+    saliency_mean: 32.12821849827388
+    eaft_saliency_mean: 10.502203727344648
+    pos_count: 864
+    neg_count: 2
+  - expert: 20
+    score: 9106.0009765625
+    count: 898
+    gate_mean: 0.22163792123773315
+    norm_mean: 86.72337834075724
+    saliency_mean: 21.877596916759465
+    eaft_saliency_mean: 10.14031289149499
+    pos_count: 895
+    neg_count: 2
+  - expert: 5
+    score: 8344.6865234375
+    count: 802
+    gate_mean: 0.2188741060861031
+    norm_mean: 118.98047849127182
+    saliency_mean: 27.848469646197007
+    eaft_saliency_mean: 10.404846039198878
+    pos_count: 790
+    neg_count: 2
+  - expert: 21
+    score: 7907.70849609375
+    count: 951
+    gate_mean: 0.20712881960703372
+    norm_mean: 99.33472167455311
+    saliency_mean: 21.982144617507885
+    eaft_saliency_mean: 8.315150889688486
+    pos_count: 944
+    neg_count: 2
+  - expert: 12
+    score: 6637.509765625
+    count: 830
+    gate_mean: 0.20755032458937311
+    norm_mean: 89.49093561746987
+    saliency_mean: 20.080769954819278
+    eaft_saliency_mean: 7.996999717620482
+    pos_count: 830
+    neg_count: 0
+  - expert: 23
+    score: 5996.86572265625
+    count: 485
+    gate_mean: 0.21598479280766752
+    norm_mean: 114.5653350515464
+    saliency_mean: 26.575610099871135
+    eaft_saliency_mean: 12.36467159310567
+    pos_count: 482
+    neg_count: 1
+  - expert: 28
+    score: 5690.86083984375
+    count: 454
+    gate_mean: 0.2417239386604746
+    norm_mean: 133.17640074339207
+    saliency_mean: 37.02641020787445
+    eaft_saliency_mean: 12.534935770580947
+    pos_count: 451
+    neg_count: 0
+  - expert: 13
+    score: 3936.717041015625
+    count: 429
+    gate_mean: 0.22065745533763112
+    norm_mean: 121.10632466491842
+    saliency_mean: 27.935419398310025
+    eaft_saliency_mean: 9.176496599104022
+    pos_count: 428
+    neg_count: 0
+  - expert: 1
+    score: 566.7387084960938
+    count: 73
+    gate_mean: 0.1536437648616425
+    norm_mean: 100.57498127140411
+    saliency_mean: 15.458726856806507
+    eaft_saliency_mean: 7.763543952001284
+    pos_count: 68
+    neg_count: 0
+- layer: 6
+  experts:
+  - expert: 26
+    score: 142426.828125
+    count: 4383
+    gate_mean: 0.3099964027831251
+    norm_mean: 233.9926705452886
+    saliency_mean: 75.44859399954369
+    eaft_saliency_mean: 32.49528362422998
+    pos_count: 4376
+    neg_count: 4
+  - expert: 15
+    score: 80915.328125
+    count: 3005
+    gate_mean: 0.2641445978707363
+    norm_mean: 192.5636231281198
+    saliency_mean: 54.853790557404324
+    eaft_saliency_mean: 26.926897878535772
+    pos_count: 2989
+    neg_count: 0
+  - expert: 16
+    score: 77223.8203125
+    count: 5351
+    gate_mean: 0.28233882338727573
+    norm_mean: 187.0974233788077
+    saliency_mean: 53.87814777611661
+    eaft_saliency_mean: 14.431661430106523
+    pos_count: 5348
+    neg_count: 1
+  - expert: 28
+    score: 64946.66796875
+    count: 3759
+    gate_mean: 0.2541921523759644
+    norm_mean: 174.79437682894388
+    saliency_mean: 47.5525197858473
+    eaft_saliency_mean: 17.277645110069166
+    pos_count: 3755
+    neg_count: 4
+  - expert: 2
+    score: 58953.80859375
+    count: 3039
+    gate_mean: 0.23442902585400213
+    norm_mean: 205.97569101678184
+    saliency_mean: 49.6541471289898
+    eaft_saliency_mean: 19.399081472112538
+    pos_count: 3032
+    neg_count: 5
+  - expert: 21
+    score: 56087.9375
+    count: 3605
+    gate_mean: 0.2753175182580617
+    norm_mean: 160.62257281553397
+    saliency_mean: 46.137031900138695
+    eaft_saliency_mean: 15.558373786407767
+    pos_count: 3601
+    neg_count: 3
+  - expert: 11
+    score: 55655.82421875
+    count: 2424
+    gate_mean: 0.23045515305925124
+    norm_mean: 253.99963902640263
+    saliency_mean: 59.29450933374587
+    eaft_saliency_mean: 22.960323522586634
+    pos_count: 2423
+    neg_count: 1
+  - expert: 10
+    score: 53065.40625
+    count: 3887
+    gate_mean: 0.28427355633562196
+    norm_mean: 173.99945330589142
+    saliency_mean: 50.0606026498585
+    eaft_saliency_mean: 13.65202116027785
+    pos_count: 3865
+    neg_count: 1
+  - expert: 4
+    score: 52702.0234375
+    count: 3050
+    gate_mean: 0.2585016169313525
+    norm_mean: 221.99321721311475
+    saliency_mean: 59.487003073770495
+    eaft_saliency_mean: 17.279351946721313
+    pos_count: 3045
+    neg_count: 1
+  - expert: 5
+    score: 46544.38671875
+    count: 3169
+    gate_mean: 0.2845096702491421
+    norm_mean: 1200.398390659514
+    saliency_mean: 1063.8607604922688
+    eaft_saliency_mean: 14.687405086383718
+    pos_count: 3089
+    neg_count: 1
+  - expert: 31
+    score: 46146.45703125
+    count: 3591
+    gate_mean: 0.24917627184280144
+    norm_mean: 167.13338902812586
+    saliency_mean: 43.4230063004734
+    eaft_saliency_mean: 12.850586753341688
+    pos_count: 3590
+    neg_count: 1
+  - expert: 3
+    score: 41850.58984375
+    count: 2229
+    gate_mean: 0.24258851384624552
+    norm_mean: 228.511888739345
+    saliency_mean: 56.49888543068641
+    eaft_saliency_mean: 18.775500154217138
+    pos_count: 2229
+    neg_count: 0
+  - expert: 20
+    score: 41258.98828125
+    count: 2740
+    gate_mean: 0.25076106830234945
+    norm_mean: 201.68893704379562
+    saliency_mean: 51.370734489051095
+    eaft_saliency_mean: 15.058024920164234
+    pos_count: 2740
+    neg_count: 0
+  - expert: 17
+    score: 40902.5625
+    count: 2268
+    gate_mean: 0.22116043117731757
+    norm_mean: 213.64346340388008
+    saliency_mean: 48.45600818452381
+    eaft_saliency_mean: 18.03463955026455
+    pos_count: 2267
+    neg_count: 1
+  - expert: 12
+    score: 33060.17578125
+    count: 2404
+    gate_mean: 0.21778346615504107
+    norm_mean: 163.38084962562397
+    saliency_mean: 38.152850717554074
+    eaft_saliency_mean: 13.752152987208818
+    pos_count: 2398
+    neg_count: 5
+  - expert: 25
+    score: 32502.72265625
+    count: 1287
+    gate_mean: 0.23701165235589064
+    norm_mean: 202.4778918997669
+    saliency_mean: 52.534764714452216
+    eaft_saliency_mean: 25.25464075854701
+    pos_count: 1282
+    neg_count: 0
+  - expert: 24
+    score: 27600.880859375
+    count: 1481
+    gate_mean: 0.24123193507738647
+    norm_mean: 187.5150447332883
+    saliency_mean: 49.454591492234975
+    eaft_saliency_mean: 18.636651491812966
+    pos_count: 1480
+    neg_count: 0
+  - expert: 0
+    score: 25203.6328125
+    count: 1518
+    gate_mean: 0.21191018246536356
+    norm_mean: 163.85577239789197
+    saliency_mean: 37.518290925559945
+    eaft_saliency_mean: 16.603183670948617
+    pos_count: 1502
+    neg_count: 0
+  - expert: 14
+    score: 19067.818359375
+    count: 1386
+    gate_mean: 0.2221307135247565
+    norm_mean: 163.21453373015873
+    saliency_mean: 40.305155348124096
+    eaft_saliency_mean: 13.757444703733766
+    pos_count: 1385
+    neg_count: 1
+  - expert: 1
+    score: 15521.8671875
+    count: 999
+    gate_mean: 0.21733482750328453
+    norm_mean: 162.67115553053054
+    saliency_mean: 39.664848442192195
+    eaft_saliency_mean: 15.537404592092091
+    pos_count: 993
+    neg_count: 2
+  - expert: 30
+    score: 14609.1533203125
+    count: 647
+    gate_mean: 0.22881464538102542
+    norm_mean: 198.22754057187018
+    saliency_mean: 49.20583884756569
+    eaft_saliency_mean: 22.579835116402627
+    pos_count: 628
+    neg_count: 0
+  - expert: 7
+    score: 14135.359375
+    count: 835
+    gate_mean: 0.21751961165559505
+    norm_mean: 178.84004491017964
+    saliency_mean: 42.71056324850299
+    eaft_saliency_mean: 16.928574101796407
+    pos_count: 831
+    neg_count: 0
+  - expert: 9
+    score: 13030.501953125
+    count: 1320
+    gate_mean: 0.21095987955729167
+    norm_mean: 142.60944602272727
+    saliency_mean: 31.83765684185606
+    eaft_saliency_mean: 9.871592388731061
+    pos_count: 1315
+    neg_count: 3
+  - expert: 18
+    score: 12144.8388671875
+    count: 811
+    gate_mean: 0.19132702094853
+    norm_mean: 138.56223990443897
+    saliency_mean: 28.683429986128235
+    eaft_saliency_mean: 14.975140403437115
+    pos_count: 807
+    neg_count: 2
+  - expert: 6
+    score: 10118.3427734375
+    count: 750
+    gate_mean: 0.2237321980794271
+    norm_mean: 178.39520833333333
+    saliency_mean: 43.397927083333336
+    eaft_saliency_mean: 13.491123697916667
+    pos_count: 743
+    neg_count: 1
+  - expert: 23
+    score: 9320.3994140625
+    count: 895
+    gate_mean: 0.18800345479443087
+    norm_mean: 137.80758554469273
+    saliency_mean: 29.483921089385476
+    eaft_saliency_mean: 10.41385409392458
+    pos_count: 891
+    neg_count: 0
+  - expert: 22
+    score: 9160.01953125
+    count: 866
+    gate_mean: 0.17474830398383373
+    norm_mean: 134.42545648094688
+    saliency_mean: 24.49048246247113
+    eaft_saliency_mean: 10.577389758949192
+    pos_count: 855
+    neg_count: 1
+  - expert: 8
+    score: 7227.42236328125
+    count: 1061
+    gate_mean: 0.17711907619580583
+    norm_mean: 126.60382304429783
+    saliency_mean: 23.218374469839773
+    eaft_saliency_mean: 6.811896666617578
+    pos_count: 1055
+    neg_count: 0
+  - expert: 27
+    score: 6652.330078125
+    count: 465
+    gate_mean: 0.1464817170173891
+    norm_mean: 196.80488911290323
+    saliency_mean: 26.784998739919356
+    eaft_saliency_mean: 14.30608618951613
+    pos_count: 386
+    neg_count: 0
+  - expert: 29
+    score: 6267.482421875
+    count: 282
+    gate_mean: 0.23259294117596133
+    norm_mean: 191.01493240248226
+    saliency_mean: 48.476638685726954
+    eaft_saliency_mean: 22.225114971187942
+    pos_count: 263
+    neg_count: 2
+  - expert: 13
+    score: 3122.73095703125
+    count: 300
+    gate_mean: 0.17740983327229817
+    norm_mean: 143.31563802083335
+    saliency_mean: 26.3080224609375
+    eaft_saliency_mean: 10.409103190104167
+    pos_count: 291
+    neg_count: 0
+  - expert: 19
+    score: 2895.571533203125
+    count: 193
+    gate_mean: 0.20925270831646697
+    norm_mean: 160.32361156088083
+    saliency_mean: 36.75128015705958
+    eaft_saliency_mean: 15.00296131193329
+    pos_count: 190
+    neg_count: 0
+- layer: 7
+  experts:
+  - expert: 0
+    score: 162608.15625
+    count: 3367
+    gate_mean: 0.32316623344455375
+    norm_mean: 304.149057024057
+    saliency_mean: 101.00937407187408
+    eaft_saliency_mean: 48.2946707009207
+    pos_count: 3367
+    neg_count: 0
+  - expert: 4
+    score: 91422.65625
+    count: 2628
+    gate_mean: 0.3088226086109922
+    norm_mean: 305.402302130898
+    saliency_mean: 95.04132182267884
+    eaft_saliency_mean: 34.78792094748859
+    pos_count: 2627
+    neg_count: 1
+  - expert: 30
+    score: 86260.828125
+    count: 3035
+    gate_mean: 0.26789048020490114
+    norm_mean: 236.78760296540364
+    saliency_mean: 65.94088756177925
+    eaft_saliency_mean: 28.422019151565074
+    pos_count: 3035
+    neg_count: 0
+  - expert: 14
+    score: 80812.2734375
+    count: 5136
+    gate_mean: 0.2691595012153792
+    norm_mean: 213.4736176012461
+    saliency_mean: 59.58243282710281
+    eaft_saliency_mean: 15.73447691540109
+    pos_count: 5134
+    neg_count: 2
+  - expert: 16
+    score: 68479.7734375
+    count: 1841
+    gate_mean: 0.34579943522754275
+    norm_mean: 206.45425380228136
+    saliency_mean: 72.71005058392178
+    eaft_saliency_mean: 37.19705238321564
+    pos_count: 1840
+    neg_count: 1
+  - expert: 24
+    score: 67631.2109375
+    count: 3698
+    gate_mean: 0.2889069247207105
+    norm_mean: 220.34506828015142
+    saliency_mean: 65.83193195646295
+    eaft_saliency_mean: 18.28859138385614
+    pos_count: 3697
+    neg_count: 1
+  - expert: 19
+    score: 62759.03515625
+    count: 3280
+    gate_mean: 0.27875096390887005
+    norm_mean: 195.33603277439025
+    saliency_mean: 56.78063071646341
+    eaft_saliency_mean: 19.133852181783535
+    pos_count: 3277
+    neg_count: 3
+  - expert: 17
+    score: 56664.640625
+    count: 3290
+    gate_mean: 0.24960382803595174
+    norm_mean: 222.16477963525836
+    saliency_mean: 57.42379844224924
+    eaft_saliency_mean: 17.223295022796353
+    pos_count: 3288
+    neg_count: 2
+  - expert: 18
+    score: 51686.86328125
+    count: 3145
+    gate_mean: 0.21386854599314387
+    norm_mean: 177.67277424483308
+    saliency_mean: 41.137385731319554
+    eaft_saliency_mean: 16.43461471581876
+    pos_count: 3143
+    neg_count: 2
+  - expert: 10
+    score: 51590.55078125
+    count: 2102
+    gate_mean: 0.21997243080901374
+    norm_mean: 239.23111917221695
+    saliency_mean: 55.8859977105138
+    eaft_saliency_mean: 24.543554129995243
+    pos_count: 2099
+    neg_count: 3
+  - expert: 13
+    score: 51328.7578125
+    count: 3463
+    gate_mean: 0.23389087823509241
+    norm_mean: 202.45751516026567
+    saliency_mean: 48.750762525267106
+    eaft_saliency_mean: 14.822049613774185
+    pos_count: 3463
+    neg_count: 0
+  - expert: 21
+    score: 47104.0859375
+    count: 2747
+    gate_mean: 0.24422612310020023
+    norm_mean: 223.0021386967601
+    saliency_mean: 56.83069029850746
+    eaft_saliency_mean: 17.147464848016018
+    pos_count: 2746
+    neg_count: 1
+  - expert: 28
+    score: 43235.33984375
+    count: 3528
+    gate_mean: 0.2521084117240646
+    norm_mean: 170.62875566893425
+    saliency_mean: 44.05982497165533
+    eaft_saliency_mean: 12.254914921697846
+    pos_count: 3528
+    neg_count: 0
+  - expert: 9
+    score: 38245.37109375
+    count: 2420
+    gate_mean: 0.22704851134749485
+    norm_mean: 177.45046487603307
+    saliency_mean: 41.95858406508265
+    eaft_saliency_mean: 15.803872352789256
+    pos_count: 2418
+    neg_count: 2
+  - expert: 5
+    score: 36129.93359375
+    count: 1561
+    gate_mean: 0.22721822715431814
+    norm_mean: 234.36855381165918
+    saliency_mean: 57.11940963324792
+    eaft_saliency_mean: 23.1453770619795
+    pos_count: 1554
+    neg_count: 7
+  - expert: 20
+    score: 34403.0390625
+    count: 1885
+    gate_mean: 0.24210026991462202
+    norm_mean: 219.84030172413793
+    saliency_mean: 58.86543020557029
+    eaft_saliency_mean: 18.250949104774534
+    pos_count: 1885
+    neg_count: 0
+  - expert: 3
+    score: 34022.171875
+    count: 1785
+    gate_mean: 0.22828249463848038
+    norm_mean: 213.77291666666667
+    saliency_mean: 51.92373949579832
+    eaft_saliency_mean: 19.060040266106444
+    pos_count: 1785
+    neg_count: 0
+  - expert: 11
+    score: 33719.20703125
+    count: 2239
+    gate_mean: 0.20063208596628657
+    norm_mean: 200.0429041983028
+    saliency_mean: 41.231328857749
+    eaft_saliency_mean: 15.059940612438588
+    pos_count: 2238
+    neg_count: 1
+  - expert: 15
+    score: 29861.009765625
+    count: 1851
+    gate_mean: 0.19767872518233387
+    norm_mean: 190.08277620205294
+    saliency_mean: 38.50346096704484
+    eaft_saliency_mean: 16.13236616187196
+    pos_count: 1850
+    neg_count: 1
+  - expert: 27
+    score: 21004.267578125
+    count: 1883
+    gate_mean: 0.2096464751694852
+    norm_mean: 126.4734632235794
+    saliency_mean: 27.376765384360063
+    eaft_saliency_mean: 11.154682728690918
+    pos_count: 1883
+    neg_count: 0
+  - expert: 1
+    score: 20524.9765625
+    count: 1512
+    gate_mean: 0.21670211307586185
+    norm_mean: 182.74568039021165
+    saliency_mean: 42.66238580935847
+    eaft_saliency_mean: 13.574719948743386
+    pos_count: 1510
+    neg_count: 2
+  - expert: 29
+    score: 19240.98828125
+    count: 1227
+    gate_mean: 0.20812558000808629
+    norm_mean: 157.53780817033416
+    saliency_mean: 36.159022896291766
+    eaft_saliency_mean: 15.681327042583536
+    pos_count: 1225
+    neg_count: 2
+  - expert: 23
+    score: 17790.91796875
+    count: 1192
+    gate_mean: 0.21530379224943635
+    norm_mean: 204.5810219169463
+    saliency_mean: 47.333522310192954
+    eaft_saliency_mean: 14.925266752307047
+    pos_count: 1113
+    neg_count: 0
+  - expert: 12
+    score: 17536.77734375
+    count: 827
+    gate_mean: 0.24596389346140038
+    norm_mean: 181.39765341596132
+    saliency_mean: 48.34745314389359
+    eaft_saliency_mean: 21.205293039600967
+    pos_count: 823
+    neg_count: 4
+  - expert: 2
+    score: 14149.1669921875
+    count: 666
+    gate_mean: 0.2219959751621739
+    norm_mean: 190.26957817192192
+    saliency_mean: 46.5308863551051
+    eaft_saliency_mean: 21.244995483765017
+    pos_count: 664
+    neg_count: 2
+  - expert: 22
+    score: 13465.79296875
+    count: 753
+    gate_mean: 0.211589635922456
+    norm_mean: 186.4281416002656
+    saliency_mean: 45.174235350265604
+    eaft_saliency_mean: 17.88285918824701
+    pos_count: 674
+    neg_count: 0
+  - expert: 31
+    score: 11974.4951171875
+    count: 1093
+    gate_mean: 0.20502388859056925
+    norm_mean: 180.75068618481245
+    saliency_mean: 37.74204097095151
+    eaft_saliency_mean: 10.955622248112991
+    pos_count: 1091
+    neg_count: 2
+  - expert: 7
+    score: 11404.66015625
+    count: 762
+    gate_mean: 0.2042299606042897
+    norm_mean: 163.28517675524935
+    saliency_mean: 37.557919639927825
+    eaft_saliency_mean: 14.96674561187664
+    pos_count: 761
+    neg_count: 1
+  - expert: 6
+    score: 6673.48681640625
+    count: 305
+    gate_mean: 0.2135231643426614
+    norm_mean: 170.36346055327868
+    saliency_mean: 40.8869396772541
+    eaft_saliency_mean: 21.88028464395492
+    pos_count: 305
+    neg_count: 0
+  - expert: 25
+    score: 6432.6630859375
+    count: 253
+    gate_mean: 0.20452990927715076
+    norm_mean: 176.75716403162056
+    saliency_mean: 42.83462898344862
+    eaft_saliency_mean: 25.425545794219367
+    pos_count: 253
+    neg_count: 0
+  - expert: 8
+    score: 3530.03857421875
+    count: 313
+    gate_mean: 0.25969766732602834
+    norm_mean: 128.38995107827475
+    saliency_mean: 31.125726961861023
+    eaft_saliency_mean: 11.27807851188099
+    pos_count: 234
+    neg_count: 0
+  - expert: 26
+    score: 2640.346923828125
+    count: 213
+    gate_mean: 0.2492868486144733
+    norm_mean: 123.82431044600939
+    saliency_mean: 30.582012910798124
+    eaft_saliency_mean: 12.395994947549882
+    pos_count: 134
+    neg_count: 0
+- layer: 8
+  experts:
+  - expert: 21
+    score: 188739.578125
+    count: 4342
+    gate_mean: 0.28545799589223
+    norm_mean: 331.1885939659143
+    saliency_mean: 97.63331270152004
+    eaft_saliency_mean: 43.468350558498386
+    pos_count: 4341
+    neg_count: 1
+  - expert: 11
+    score: 140758.78125
+    count: 4064
+    gate_mean: 0.2741646053284172
+    norm_mean: 291.12376968503935
+    saliency_mean: 83.6333968996063
+    eaft_saliency_mean: 34.63552688238189
+    pos_count: 4062
+    neg_count: 2
+  - expert: 20
+    score: 138194.078125
+    count: 3289
+    gate_mean: 0.2425221263111888
+    norm_mean: 353.5758969291578
+    saliency_mean: 87.71368577075098
+    eaft_saliency_mean: 42.01705020522955
+    pos_count: 3286
+    neg_count: 3
+  - expert: 31
+    score: 93106.7890625
+    count: 2764
+    gate_mean: 0.26517110071030436
+    norm_mean: 338.45714996382054
+    saliency_mean: 89.76761486975398
+    eaft_saliency_mean: 33.68552426284371
+    pos_count: 2763
+    neg_count: 1
+  - expert: 2
+    score: 87472.890625
+    count: 1832
+    gate_mean: 0.3118264144164506
+    norm_mean: 313.364321779476
+    saliency_mean: 98.34440672762008
+    eaft_saliency_mean: 47.74721103984716
+    pos_count: 1831
+    neg_count: 1
+  - expert: 8
+    score: 72377.796875
+    count: 2552
+    gate_mean: 0.23882929882659434
+    norm_mean: 278.5171434169279
+    saliency_mean: 70.62922462774294
+    eaft_saliency_mean: 28.361205672021942
+    pos_count: 2551
+    neg_count: 1
+  - expert: 3
+    score: 69768.7109375
+    count: 3764
+    gate_mean: 0.2725333559399077
+    norm_mean: 245.00347037725822
+    saliency_mean: 68.57964432784271
+    eaft_saliency_mean: 18.5357893032678
+    pos_count: 3763
+    neg_count: 1
+  - expert: 13
+    score: 69101.796875
+    count: 3238
+    gate_mean: 0.2595218802175822
+    norm_mean: 247.8178080605312
+    saliency_mean: 65.6516802424336
+    eaft_saliency_mean: 21.34088847282273
+    pos_count: 3235
+    neg_count: 3
+  - expert: 24
+    score: 66781.71875
+    count: 3583
+    gate_mean: 0.3006091318814541
+    norm_mean: 217.73386477811889
+    saliency_mean: 71.16705187691878
+    eaft_saliency_mean: 18.638492534189226
+    pos_count: 3504
+    neg_count: 0
+  - expert: 0
+    score: 61930.8515625
+    count: 3681
+    gate_mean: 0.258963147831559
+    norm_mean: 235.32542108122792
+    saliency_mean: 62.41248556778049
+    eaft_saliency_mean: 16.824463885493074
+    pos_count: 3680
+    neg_count: 1
+  - expert: 10
+    score: 60083.26953125
+    count: 3095
+    gate_mean: 0.2519136641445376
+    norm_mean: 253.24539579967688
+    saliency_mean: 65.57433865105008
+    eaft_saliency_mean: 19.41301115710824
+    pos_count: 3095
+    neg_count: 0
+  - expert: 19
+    score: 59157.0625
+    count: 3893
+    gate_mean: 0.23675469693199333
+    norm_mean: 235.18807796044183
+    saliency_mean: 57.20278384279476
+    eaft_saliency_mean: 15.195751990752633
+    pos_count: 3892
+    neg_count: 1
+  - expert: 30
+    score: 57541.82421875
+    count: 1586
+    gate_mean: 0.2313638809800599
+    norm_mean: 313.5285308953342
+    saliency_mean: 76.23846350882724
+    eaft_saliency_mean: 36.28109975961539
+    pos_count: 1586
+    neg_count: 0
+  - expert: 28
+    score: 54670.78515625
+    count: 3199
+    gate_mean: 0.24719642765561503
+    norm_mean: 249.82432010003126
+    saliency_mean: 62.614532861831826
+    eaft_saliency_mean: 17.08996097413254
+    pos_count: 3198
+    neg_count: 1
+  - expert: 4
+    score: 51516.828125
+    count: 1785
+    gate_mean: 0.22978327561493347
+    norm_mean: 314.17559523809524
+    saliency_mean: 76.25399159663866
+    eaft_saliency_mean: 28.8609681372549
+    pos_count: 1780
+    neg_count: 5
+  - expert: 29
+    score: 40009.56640625
+    count: 1900
+    gate_mean: 0.20712996633429276
+    norm_mean: 255.53552631578947
+    saliency_mean: 55.17037828947368
+    eaft_saliency_mean: 21.057666529605264
+    pos_count: 1899
+    neg_count: 1
+  - expert: 26
+    score: 38201.70703125
+    count: 1709
+    gate_mean: 0.22015018362689256
+    norm_mean: 257.43371489174956
+    saliency_mean: 60.38324678174371
+    eaft_saliency_mean: 22.35325162741369
+    pos_count: 1709
+    neg_count: 0
+  - expert: 23
+    score: 37773.390625
+    count: 2279
+    gate_mean: 0.20897630036217227
+    norm_mean: 239.3978718736288
+    saliency_mean: 50.96419070864414
+    eaft_saliency_mean: 16.574546127687583
+    pos_count: 2278
+    neg_count: 1
+  - expert: 25
+    score: 37262.078125
+    count: 1384
+    gate_mean: 0.24423696264366193
+    norm_mean: 269.124412933526
+    saliency_mean: 69.30315774024567
+    eaft_saliency_mean: 26.9234668533237
+    pos_count: 1380
+    neg_count: 4
+  - expert: 14
+    score: 36280.2890625
+    count: 2004
+    gate_mean: 0.22881384143334424
+    norm_mean: 227.9296875
+    saliency_mean: 52.805666011726544
+    eaft_saliency_mean: 18.10393665793413
+    pos_count: 2003
+    neg_count: 1
+  - expert: 7
+    score: 27508.87109375
+    count: 1367
+    gate_mean: 0.25127838960771764
+    norm_mean: 259.5705696781273
+    saliency_mean: 67.40400969275787
+    eaft_saliency_mean: 20.12353408467447
+    pos_count: 1367
+    neg_count: 0
+  - expert: 18
+    score: 27154.294921875
+    count: 1168
+    gate_mean: 0.22232366588017713
+    norm_mean: 257.71165988869865
+    saliency_mean: 61.4364231057363
+    eaft_saliency_mean: 23.248540172838187
+    pos_count: 1140
+    neg_count: 2
+  - expert: 15
+    score: 21806.4296875
+    count: 771
+    gate_mean: 0.20135644499584548
+    norm_mean: 269.24163018806746
+    saliency_mean: 55.74578469520104
+    eaft_saliency_mean: 28.28330698767834
+    pos_count: 770
+    neg_count: 1
+  - expert: 6
+    score: 20478.517578125
+    count: 1193
+    gate_mean: 0.2146004279521165
+    norm_mean: 229.7146898575021
+    saliency_mean: 53.229899020326904
+    eaft_saliency_mean: 17.165563770431685
+    pos_count: 1191
+    neg_count: 2
+  - expert: 12
+    score: 17102.5703125
+    count: 735
+    gate_mean: 0.2037790311437075
+    norm_mean: 244.69449404761906
+    saliency_mean: 54.681622023809524
+    eaft_saliency_mean: 23.268803146258502
+    pos_count: 679
+    neg_count: 2
+  - expert: 17
+    score: 13990.7841796875
+    count: 788
+    gate_mean: 0.18212265169560002
+    norm_mean: 259.1085620241117
+    saliency_mean: 49.39172053458122
+    eaft_saliency_mean: 17.754802258486674
+    pos_count: 709
+    neg_count: 0
+  - expert: 1
+    score: 10757.9794921875
+    count: 580
+    gate_mean: 0.2296368302970097
+    norm_mean: 120.5548760775862
+    saliency_mean: 28.76063442887931
+    eaft_saliency_mean: 18.548240503771552
+    pos_count: 579
+    neg_count: 1
+  - expert: 9
+    score: 10723.626953125
+    count: 541
+    gate_mean: 0.17856537260101374
+    norm_mean: 248.2822608595194
+    saliency_mean: 49.386910091266174
+    eaft_saliency_mean: 19.821861281192238
+    pos_count: 463
+    neg_count: 0
+  - expert: 5
+    score: 10611.70703125
+    count: 403
+    gate_mean: 0.23518437842281523
+    norm_mean: 229.29214485111663
+    saliency_mean: 57.05349526985112
+    eaft_saliency_mean: 26.331779233870968
+    pos_count: 401
+    neg_count: 2
+  - expert: 16
+    score: 4515.94384765625
+    count: 284
+    gate_mean: 0.19028995406459753
+    norm_mean: 215.57834507042253
+    saliency_mean: 44.431771291813384
+    eaft_saliency_mean: 15.901210731183978
+    pos_count: 284
+    neg_count: 0
+  - expert: 27
+    score: 2509.38916015625
+    count: 132
+    gate_mean: 0.18540898236361417
+    norm_mean: 259.9554036458333
+    saliency_mean: 52.203665068655305
+    eaft_saliency_mean: 19.010523940577652
+    pos_count: 130
+    neg_count: 2
+  - expert: 22
+    score: 1591.7735595703125
+    count: 95
+    gate_mean: 0.16692907433760792
+    norm_mean: 187.72833059210527
+    saliency_mean: 32.68775185032895
+    eaft_saliency_mean: 16.75551115337171
+    pos_count: 95
+    neg_count: 0
+- layer: 9
+  experts:
+  - expert: 17
+    score: 232017.625
+    count: 5290
+    gate_mean: 0.2778857744934428
+    norm_mean: 381.2288043478261
+    saliency_mean: 108.33627126654065
+    eaft_saliency_mean: 43.85966446124764
+    pos_count: 5288
+    neg_count: 2
+  - expert: 8
+    score: 165092.828125
+    count: 5313
+    gate_mean: 0.25746273972008515
+    norm_mean: 369.06392339544516
+    saliency_mean: 99.8206286467156
+    eaft_saliency_mean: 31.07337250611707
+    pos_count: 5310
+    neg_count: 3
+  - expert: 19
+    score: 145556.078125
+    count: 5255
+    gate_mean: 0.2778216477238939
+    norm_mean: 329.16044243577545
+    saliency_mean: 94.72481565176022
+    eaft_saliency_mean: 27.698587654614652
+    pos_count: 5254
+    neg_count: 1
+  - expert: 15
+    score: 126597.859375
+    count: 2344
+    gate_mean: 0.2817361981388652
+    norm_mean: 375.70851109215016
+    saliency_mean: 112.28254319539249
+    eaft_saliency_mean: 54.00932567192833
+    pos_count: 2344
+    neg_count: 0
+  - expert: 12
+    score: 114394.515625
+    count: 3323
+    gate_mean: 0.24622004483429882
+    norm_mean: 321.0260683117665
+    saliency_mean: 81.72631093891063
+    eaft_saliency_mean: 34.425072411977126
+    pos_count: 3321
+    neg_count: 2
+  - expert: 30
+    score: 107522.3046875
+    count: 2100
+    gate_mean: 0.2509115745907738
+    norm_mean: 428.1976488095238
+    saliency_mean: 108.46873511904762
+    eaft_saliency_mean: 51.201097470238096
+    pos_count: 2099
+    neg_count: 1
+  - expert: 28
+    score: 101283.96875
+    count: 2326
+    gate_mean: 0.23637535770904988
+    norm_mean: 388.24510963026654
+    saliency_mean: 94.43580717970765
+    eaft_saliency_mean: 43.54426859415305
+    pos_count: 2324
+    neg_count: 2
+  - expert: 0
+    score: 98330.3046875
+    count: 2531
+    gate_mean: 0.24834744480936388
+    norm_mean: 372.2576303832477
+    saliency_mean: 96.91878827538523
+    eaft_saliency_mean: 38.850377197747925
+    pos_count: 2531
+    neg_count: 0
+  - expert: 25
+    score: 87151.796875
+    count: 2632
+    gate_mean: 0.23807711151957875
+    norm_mean: 380.8244680851064
+    saliency_mean: 93.39254844224924
+    eaft_saliency_mean: 33.11238483092705
+    pos_count: 2628
+    neg_count: 4
+  - expert: 16
+    score: 86912.03125
+    count: 2557
+    gate_mean: 0.24434421078320542
+    norm_mean: 362.7220619867032
+    saliency_mean: 91.97841709034024
+    eaft_saliency_mean: 33.98984405553383
+    pos_count: 2552
+    neg_count: 5
+  - expert: 22
+    score: 78270.7734375
+    count: 3365
+    gate_mean: 0.2562670318014023
+    norm_mean: 327.86173848439824
+    saliency_mean: 85.0009101040119
+    eaft_saliency_mean: 23.2602595653789
+    pos_count: 3364
+    neg_count: 1
+  - expert: 26
+    score: 72091.4375
+    count: 1762
+    gate_mean: 0.24821920752119395
+    norm_mean: 363.75219920544833
+    saliency_mean: 94.91559662315551
+    eaft_saliency_mean: 40.91455022701476
+    pos_count: 1762
+    neg_count: 0
+  - expert: 21
+    score: 68420.078125
+    count: 2716
+    gate_mean: 0.2515079234239806
+    norm_mean: 337.9292617820324
+    saliency_mean: 85.09333578792342
+    eaft_saliency_mean: 25.191486791237114
+    pos_count: 2715
+    neg_count: 1
+  - expert: 3
+    score: 66446.546875
+    count: 1441
+    gate_mean: 0.27125620262892525
+    norm_mean: 309.0792201596114
+    saliency_mean: 86.36589174184594
+    eaft_saliency_mean: 46.111413514920194
+    pos_count: 1440
+    neg_count: 1
+  - expert: 2
+    score: 63626.21875
+    count: 2218
+    gate_mean: 0.23327185421832733
+    norm_mean: 323.8511045987376
+    saliency_mean: 78.03231373985572
+    eaft_saliency_mean: 28.68630241208296
+    pos_count: 2218
+    neg_count: 0
+  - expert: 5
+    score: 52144.16796875
+    count: 2255
+    gate_mean: 0.24733499666539635
+    norm_mean: 318.4434866962306
+    saliency_mean: 81.10229351441242
+    eaft_saliency_mean: 23.123799542682928
+    pos_count: 2254
+    neg_count: 1
+  - expert: 4
+    score: 50666.69140625
+    count: 1414
+    gate_mean: 0.25244744933477725
+    norm_mean: 340.210329738331
+    saliency_mean: 89.44289802864215
+    eaft_saliency_mean: 35.832172140205095
+    pos_count: 1413
+    neg_count: 1
+  - expert: 27
+    score: 42352.41015625
+    count: 1679
+    gate_mean: 0.21345651795851325
+    norm_mean: 327.0321992257296
+    saliency_mean: 71.65525889666468
+    eaft_saliency_mean: 25.224782701756997
+    pos_count: 1679
+    neg_count: 0
+  - expert: 13
+    score: 41992.21484375
+    count: 1765
+    gate_mean: 0.22342985763765935
+    norm_mean: 312.33689801699717
+    saliency_mean: 71.49032843484419
+    eaft_saliency_mean: 23.791623140934846
+    pos_count: 1764
+    neg_count: 1
+  - expert: 23
+    score: 39738.1796875
+    count: 1734
+    gate_mean: 0.22021642770734212
+    norm_mean: 320.2905132641292
+    saliency_mean: 72.32357897202999
+    eaft_saliency_mean: 22.917058643310266
+    pos_count: 1733
+    neg_count: 1
+  - expert: 31
+    score: 35933.1796875
+    count: 908
+    gate_mean: 0.30310925723172494
+    norm_mean: 469.1427243942731
+    saliency_mean: 197.21257227422907
+    eaft_saliency_mean: 39.57398643997797
+    pos_count: 827
+    neg_count: 2
+  - expert: 29
+    score: 33790.359375
+    count: 1693
+    gate_mean: 0.23735485313492136
+    norm_mean: 294.49571766095687
+    saliency_mean: 70.96693646633196
+    eaft_saliency_mean: 19.958865549320734
+    pos_count: 1693
+    neg_count: 0
+  - expert: 14
+    score: 30294.751953125
+    count: 1796
+    gate_mean: 0.22976917360301538
+    norm_mean: 261.70825793429844
+    saliency_mean: 59.55633177895323
+    eaft_saliency_mean: 16.867901978354677
+    pos_count: 1716
+    neg_count: 1
+  - expert: 11
+    score: 30169.673828125
+    count: 1154
+    gate_mean: 0.25186736372975793
+    norm_mean: 335.7818186741768
+    saliency_mean: 87.65318999133449
+    eaft_saliency_mean: 26.143564842396014
+    pos_count: 1153
+    neg_count: 1
+  - expert: 7
+    score: 27247.810546875
+    count: 1337
+    gate_mean: 0.21514803559011547
+    norm_mean: 270.2124626028422
+    saliency_mean: 59.69438341436051
+    eaft_saliency_mean: 20.379813423242332
+    pos_count: 1336
+    neg_count: 1
+  - expert: 20
+    score: 23710.4296875
+    count: 572
+    gate_mean: 0.24010107400534036
+    norm_mean: 415.49855222902096
+    saliency_mean: 109.0517578125
+    eaft_saliency_mean: 41.45180015297203
+    pos_count: 572
+    neg_count: 0
+  - expert: 24
+    score: 22693.2109375
+    count: 544
+    gate_mean: 0.22959010741289923
+    norm_mean: 350.75086167279414
+    saliency_mean: 93.32343606387867
+    eaft_saliency_mean: 41.715461282169116
+    pos_count: 542
+    neg_count: 2
+  - expert: 6
+    score: 17377.814453125
+    count: 376
+    gate_mean: 0.22668134405257853
+    norm_mean: 434.6508061835106
+    saliency_mean: 101.85135472074468
+    eaft_saliency_mean: 46.2175916306516
+    pos_count: 374
+    neg_count: 2
+  - expert: 18
+    score: 16920.00390625
+    count: 675
+    gate_mean: 0.1801446646231192
+    norm_mean: 321.5418287037037
+    saliency_mean: 61.30897569444444
+    eaft_saliency_mean: 25.066672453703703
+    pos_count: 596
+    neg_count: 0
+  - expert: 9
+    score: 11734.4970703125
+    count: 489
+    gate_mean: 0.21411942558054545
+    norm_mean: 345.82361963190186
+    saliency_mean: 76.48743449642127
+    eaft_saliency_mean: 23.996926524156443
+    pos_count: 486
+    neg_count: 3
+  - expert: 10
+    score: 11483.3798828125
+    count: 260
+    gate_mean: 0.25570000868577225
+    norm_mean: 331.1264122596154
+    saliency_mean: 86.1189227764423
+    eaft_saliency_mean: 44.166845703125
+    pos_count: 259
+    neg_count: 1
+  - expert: 1
+    score: 2203.843994140625
+    count: 176
+    gate_mean: 0.10343642668290572
+    norm_mean: 400.20170454545456
+    saliency_mean: 32.01440707120028
+    eaft_saliency_mean: 12.521840875799006
+    pos_count: 97
+    neg_count: 0
+- layer: 10
+  experts:
+  - expert: 16
+    score: 313985.21875
+    count: 4845
+    gate_mean: 0.27251251189209236
+    norm_mean: 553.7331269349845
+    saliency_mean: 152.96914344685243
+    eaft_saliency_mean: 64.80603070175438
+    pos_count: 4844
+    neg_count: 1
+  - expert: 5
+    score: 194441.78125
+    count: 5030
+    gate_mean: 0.265536784177746
+    norm_mean: 434.90238568588467
+    saliency_mean: 118.10606361829026
+    eaft_saliency_mean: 38.65641774353877
+    pos_count: 5029
+    neg_count: 1
+  - expert: 10
+    score: 194433.484375
+    count: 4599
+    gate_mean: 0.24753473177762828
+    norm_mean: 527.2734833659491
+    saliency_mean: 133.71402750597957
+    eaft_saliency_mean: 42.27733950315286
+    pos_count: 4595
+    neg_count: 4
+  - expert: 23
+    score: 173465.390625
+    count: 5402
+    gate_mean: 0.25148253739211174
+    norm_mean: 448.1923361717882
+    saliency_mean: 114.92574509440948
+    eaft_saliency_mean: 32.11132740188819
+    pos_count: 5400
+    neg_count: 2
+  - expert: 13
+    score: 141621.078125
+    count: 2590
+    gate_mean: 0.2625811366961269
+    norm_mean: 453.71100386100386
+    saliency_mean: 124.56901544401545
+    eaft_saliency_mean: 54.67995294401545
+    pos_count: 2588
+    neg_count: 2
+  - expert: 22
+    score: 138931.640625
+    count: 3253
+    gate_mean: 0.2453482317404127
+    norm_mean: 473.17591454042423
+    saliency_mean: 119.3563441438672
+    eaft_saliency_mean: 42.70877363203197
+    pos_count: 3251
+    neg_count: 2
+  - expert: 15
+    score: 134778.546875
+    count: 3045
+    gate_mean: 0.25704155281455254
+    norm_mean: 451.34683908045974
+    saliency_mean: 121.49655172413793
+    eaft_saliency_mean: 44.26224856321839
+    pos_count: 3044
+    neg_count: 1
+  - expert: 26
+    score: 127287.90625
+    count: 3682
+    gate_mean: 0.311533383478748
+    norm_mean: 343.2566879413362
+    saliency_mean: 107.46957326181423
+    eaft_saliency_mean: 34.570316743617596
+    pos_count: 3680
+    neg_count: 2
+  - expert: 19
+    score: 123259.8671875
+    count: 2308
+    gate_mean: 0.23182990274148343
+    norm_mean: 483.19692374350086
+    saliency_mean: 113.34148207322357
+    eaft_saliency_mean: 53.40548838279896
+    pos_count: 2306
+    neg_count: 2
+  - expert: 6
+    score: 112254.828125
+    count: 2794
+    gate_mean: 0.22570938405260155
+    norm_mean: 582.9974051539012
+    saliency_mean: 140.48457632426627
+    eaft_saliency_mean: 40.177103838582674
+    pos_count: 2713
+    neg_count: 2
+  - expert: 3
+    score: 105143.65625
+    count: 2677
+    gate_mean: 0.2415489678423842
+    norm_mean: 405.9656798655211
+    saliency_mean: 102.2650821815465
+    eaft_saliency_mean: 39.27667398206948
+    pos_count: 2675
+    neg_count: 2
+  - expert: 25
+    score: 94177.2890625
+    count: 1686
+    gate_mean: 0.26087037580858913
+    norm_mean: 385.3610987544484
+    saliency_mean: 104.02775615361803
+    eaft_saliency_mean: 55.85841581405694
+    pos_count: 1685
+    neg_count: 1
+  - expert: 11
+    score: 87664.9765625
+    count: 3233
+    gate_mean: 0.2435088271221582
+    norm_mean: 391.96841169192703
+    saliency_mean: 96.11747989483452
+    eaft_saliency_mean: 27.115674779616455
+    pos_count: 3232
+    neg_count: 1
+  - expert: 2
+    score: 75565.0859375
+    count: 2249
+    gate_mean: 0.22244319686787878
+    norm_mean: 390.29779902178745
+    saliency_mean: 89.2041323921743
+    eaft_saliency_mean: 33.59941571253891
+    pos_count: 2249
+    neg_count: 0
+  - expert: 0
+    score: 72045.71875
+    count: 1776
+    gate_mean: 0.26210815842087204
+    norm_mean: 434.0738668355856
+    saliency_mean: 116.41910367398648
+    eaft_saliency_mean: 40.56628307995496
+    pos_count: 1774
+    neg_count: 2
+  - expert: 18
+    score: 68130.5859375
+    count: 1618
+    gate_mean: 0.2364474981470662
+    norm_mean: 459.67672280593325
+    saliency_mean: 111.5078125
+    eaft_saliency_mean: 42.10790230995055
+    pos_count: 1618
+    neg_count: 0
+  - expert: 31
+    score: 66261.1484375
+    count: 1787
+    gate_mean: 0.2396754610118215
+    norm_mean: 435.87220201454954
+    saliency_mean: 107.73286233911584
+    eaft_saliency_mean: 37.079545851986566
+    pos_count: 1787
+    neg_count: 0
+  - expert: 8
+    score: 61743.875
+    count: 1485
+    gate_mean: 0.21925153635969066
+    norm_mean: 445.8470117845118
+    saliency_mean: 100.7996106902357
+    eaft_saliency_mean: 41.578367003367006
+    pos_count: 1485
+    neg_count: 0
+  - expert: 1
+    score: 56304.50390625
+    count: 1482
+    gate_mean: 0.24604840606813005
+    norm_mean: 403.1118842780027
+    saliency_mean: 100.25771761133603
+    eaft_saliency_mean: 37.99224285172065
+    pos_count: 1479
+    neg_count: 3
+  - expert: 4
+    score: 45686.234375
+    count: 1265
+    gate_mean: 0.22595026672122034
+    norm_mean: 385.68520256917
+    saliency_mean: 88.80529273715415
+    eaft_saliency_mean: 36.115600296442686
+    pos_count: 1265
+    neg_count: 0
+  - expert: 20
+    score: 38337.30859375
+    count: 1124
+    gate_mean: 0.23211135049731707
+    norm_mean: 432.57434386120997
+    saliency_mean: 101.75539368327402
+    eaft_saliency_mean: 34.107925795151246
+    pos_count: 1123
+    neg_count: 1
+  - expert: 24
+    score: 36614.609375
+    count: 643
+    gate_mean: 0.24801429285788054
+    norm_mean: 481.2659409020218
+    saliency_mean: 123.18036790435458
+    eaft_saliency_mean: 56.943404937791605
+    pos_count: 643
+    neg_count: 0
+  - expert: 14
+    score: 36558.234375
+    count: 1168
+    gate_mean: 0.23042461970081068
+    norm_mean: 396.869087114726
+    saliency_mean: 93.6644504494863
+    eaft_saliency_mean: 31.299858197773972
+    pos_count: 1168
+    neg_count: 0
+  - expert: 17
+    score: 26075.28515625
+    count: 812
+    gate_mean: 0.22257666752256197
+    norm_mean: 434.5715825123153
+    saliency_mean: 98.63000307881774
+    eaft_saliency_mean: 32.112420143165025
+    pos_count: 806
+    neg_count: 6
+  - expert: 27
+    score: 21366.66796875
+    count: 707
+    gate_mean: 0.23489789949279527
+    norm_mean: 431.5990099009901
+    saliency_mean: 103.25686218175389
+    eaft_saliency_mean: 30.22159542963225
+    pos_count: 705
+    neg_count: 2
+  - expert: 7
+    score: 20837.484375
+    count: 796
+    gate_mean: 0.1897142113153659
+    norm_mean: 462.9072707286432
+    saliency_mean: 92.39650400439699
+    eaft_saliency_mean: 26.177744189698494
+    pos_count: 722
+    neg_count: 1
+  - expert: 9
+    score: 13767.0556640625
+    count: 335
+    gate_mean: 0.19620359050693797
+    norm_mean: 425.59174440298506
+    saliency_mean: 95.08922574626865
+    eaft_saliency_mean: 41.0956885494403
+    pos_count: 254
+    neg_count: 2
+  - expert: 29
+    score: 13575.7880859375
+    count: 388
+    gate_mean: 0.23516985313179567
+    norm_mean: 428.09419297680415
+    saliency_mean: 103.65361227448453
+    eaft_saliency_mean: 34.98914455138531
+    pos_count: 388
+    neg_count: 0
+  - expert: 21
+    score: 12139.0244140625
+    count: 291
+    gate_mean: 0.20093173259722
+    norm_mean: 454.9458225945017
+    saliency_mean: 90.7434627362543
+    eaft_saliency_mean: 41.7148605294244
+    pos_count: 291
+    neg_count: 0
+  - expert: 30
+    score: 11108.55078125
+    count: 344
+    gate_mean: 0.20007590360419694
+    norm_mean: 463.96284520348837
+    saliency_mean: 95.53114780159883
+    eaft_saliency_mean: 32.29229878270349
+    pos_count: 344
+    neg_count: 0
+  - expert: 28
+    score: 8921.5986328125
+    count: 414
+    gate_mean: 0.33564485559141005
+    norm_mean: 625.4966410024155
+    saliency_mean: 306.6679121376812
+    eaft_saliency_mean: 21.549755151721016
+    pos_count: 335
+    neg_count: 0
+  - expert: 12
+    score: 7916.955078125
+    count: 172
+    gate_mean: 0.21212843961493913
+    norm_mean: 478.13994367732556
+    saliency_mean: 104.59062727107558
+    eaft_saliency_mean: 46.02880859375
+    pos_count: 166
+    neg_count: 0
+- layer: 11
+  experts:
+  - expert: 30
+    score: 323503.9375
+    count: 6205
+    gate_mean: 0.26344451535430097
+    norm_mean: 599.8935535858179
+    saliency_mean: 161.9286865431104
+    eaft_saliency_mean: 52.136009266720386
+    pos_count: 6201
+    neg_count: 4
+  - expert: 12
+    score: 253130.265625
+    count: 3752
+    gate_mean: 0.27034393505755266
+    norm_mean: 516.5574360341151
+    saliency_mean: 143.3309401652452
+    eaft_saliency_mean: 67.46542260794243
+    pos_count: 3750
+    neg_count: 2
+  - expert: 3
+    score: 240518.96875
+    count: 4039
+    gate_mean: 0.24894946694049425
+    norm_mean: 543.494986382768
+    saliency_mean: 138.2884067838574
+    eaft_saliency_mean: 59.54913809111166
+    pos_count: 4037
+    neg_count: 2
+  - expert: 6
+    score: 216189.21875
+    count: 3351
+    gate_mean: 0.27304325769709603
+    norm_mean: 551.6511862130707
+    saliency_mean: 157.72202327663385
+    eaft_saliency_mean: 64.51483698895852
+    pos_count: 3349
+    neg_count: 2
+  - expert: 20
+    score: 206859.078125
+    count: 4507
+    gate_mean: 0.24067929379818892
+    norm_mean: 507.49378744175726
+    saliency_mean: 127.64847736853783
+    eaft_saliency_mean: 45.897288246061684
+    pos_count: 4505
+    neg_count: 2
+  - expert: 1
+    score: 170789.375
+    count: 3534
+    gate_mean: 0.2654271452320317
+    norm_mean: 533.3964346349745
+    saliency_mean: 146.4806080220713
+    eaft_saliency_mean: 48.32749717034522
+    pos_count: 3532
+    neg_count: 2
+  - expert: 2
+    score: 166390.96875
+    count: 3470
+    gate_mean: 0.24618788837355907
+    norm_mean: 507.95291786743513
+    saliency_mean: 129.45524135446686
+    eaft_saliency_mean: 47.95128782420749
+    pos_count: 3467
+    neg_count: 3
+  - expert: 8
+    score: 144135.3125
+    count: 3537
+    gate_mean: 0.22905087760858425
+    norm_mean: 463.0647794741306
+    saliency_mean: 109.3262651964942
+    eaft_saliency_mean: 40.75072448402601
+    pos_count: 3536
+    neg_count: 1
+  - expert: 17
+    score: 141779.203125
+    count: 3561
+    gate_mean: 0.27206282922305003
+    norm_mean: 532.7840845268183
+    saliency_mean: 145.51012707104746
+    eaft_saliency_mean: 39.8144350252738
+    pos_count: 3560
+    neg_count: 1
+  - expert: 26
+    score: 136048.546875
+    count: 3027
+    gate_mean: 0.24167215922582178
+    norm_mean: 458.83110340270895
+    saliency_mean: 115.71761438718202
+    eaft_saliency_mean: 44.94501053022795
+    pos_count: 3027
+    neg_count: 0
+  - expert: 9
+    score: 134588.859375
+    count: 3369
+    gate_mean: 0.2878873603709836
+    norm_mean: 432.0130973582665
+    saliency_mean: 125.62244916889284
+    eaft_saliency_mean: 39.94920135796973
+    pos_count: 3368
+    neg_count: 1
+  - expert: 13
+    score: 124228.75
+    count: 2034
+    gate_mean: 0.2454594975024198
+    norm_mean: 614.4413102261553
+    saliency_mean: 152.0254732055064
+    eaft_saliency_mean: 61.07608161258604
+    pos_count: 2033
+    neg_count: 1
+  - expert: 7
+    score: 105433.484375
+    count: 1665
+    gate_mean: 0.23053992102454016
+    norm_mean: 530.7596846846847
+    saliency_mean: 125.25532094594594
+    eaft_saliency_mean: 63.32341403903904
+    pos_count: 1665
+    neg_count: 0
+  - expert: 21
+    score: 96357.6875
+    count: 1824
+    gate_mean: 0.24588476147568017
+    norm_mean: 498.71426123903507
+    saliency_mean: 127.73324424342105
+    eaft_saliency_mean: 52.827679550438596
+    pos_count: 1824
+    neg_count: 0
+  - expert: 27
+    score: 96017.6640625
+    count: 2458
+    gate_mean: 0.2561091274823281
+    norm_mean: 509.9197518307567
+    saliency_mean: 135.5740439381611
+    eaft_saliency_mean: 39.06332956163548
+    pos_count: 2458
+    neg_count: 0
+  - expert: 11
+    score: 89448.3125
+    count: 3024
+    gate_mean: 0.23061207362583705
+    norm_mean: 412.8814070767196
+    saliency_mean: 95.8733982308201
+    eaft_saliency_mean: 29.57946841931217
+    pos_count: 3023
+    neg_count: 1
+  - expert: 24
+    score: 62831.34765625
+    count: 1765
+    gate_mean: 0.21762923545945467
+    norm_mean: 510.09847733711047
+    saliency_mean: 113.05455913597734
+    eaft_saliency_mean: 35.59849725566572
+    pos_count: 1765
+    neg_count: 0
+  - expert: 18
+    score: 50896.21875
+    count: 1038
+    gate_mean: 0.246423401584515
+    norm_mean: 495.1836765414258
+    saliency_mean: 128.8669617052023
+    eaft_saliency_mean: 49.032966040462426
+    pos_count: 1038
+    neg_count: 0
+  - expert: 19
+    score: 47980.60546875
+    count: 1381
+    gate_mean: 0.23844336220356627
+    norm_mean: 438.1226013758146
+    saliency_mean: 107.33422338884866
+    eaft_saliency_mean: 34.743378326393916
+    pos_count: 1378
+    neg_count: 3
+  - expert: 31
+    score: 44256.84765625
+    count: 1328
+    gate_mean: 0.23325591489493128
+    norm_mean: 450.88064759036143
+    saliency_mean: 107.1335890436747
+    eaft_saliency_mean: 33.325939500188255
+    pos_count: 1325
+    neg_count: 3
+  - expert: 16
+    score: 42467.34375
+    count: 1203
+    gate_mean: 0.22806892173050447
+    norm_mean: 479.79088736492105
+    saliency_mean: 112.13884559434746
+    eaft_saliency_mean: 35.30120012468828
+    pos_count: 1200
+    neg_count: 3
+  - expert: 4
+    score: 34507.19140625
+    count: 813
+    gate_mean: 0.25037732188845324
+    norm_mean: 498.4513376383764
+    saliency_mean: 130.15880611931118
+    eaft_saliency_mean: 42.44426987238622
+    pos_count: 809
+    neg_count: 4
+  - expert: 25
+    score: 22186.6015625
+    count: 614
+    gate_mean: 0.24196756468533692
+    norm_mean: 391.4717019543974
+    saliency_mean: 93.64084130700326
+    eaft_saliency_mean: 36.13453023208469
+    pos_count: 532
+    neg_count: 3
+  - expert: 29
+    score: 17641.478515625
+    count: 310
+    gate_mean: 0.22539468580676664
+    norm_mean: 494.5733870967742
+    saliency_mean: 112.02181199596774
+    eaft_saliency_mean: 56.907995211693546
+    pos_count: 310
+    neg_count: 0
+  - expert: 15
+    score: 16836.873046875
+    count: 562
+    gate_mean: 0.2090216802956795
+    norm_mean: 406.13320173487546
+    saliency_mean: 88.23775300266904
+    eaft_saliency_mean: 29.95884883785587
+    pos_count: 482
+    neg_count: 1
+  - expert: 0
+    score: 14237.4453125
+    count: 400
+    gate_mean: 0.21735097885131835
+    norm_mean: 473.8503515625
+    saliency_mean: 105.121875
+    eaft_saliency_mean: 35.59361328125
+    pos_count: 400
+    neg_count: 0
+  - expert: 23
+    score: 10714.9921875
+    count: 289
+    gate_mean: 0.1945755506469304
+    norm_mean: 447.67009083044985
+    saliency_mean: 90.73953152032873
+    eaft_saliency_mean: 37.07609753460208
+    pos_count: 289
+    neg_count: 0
+  - expert: 5
+    score: 9409.0654296875
+    count: 333
+    gate_mean: 0.2162655667141751
+    norm_mean: 376.91924737237235
+    saliency_mean: 77.91175159534535
+    eaft_saliency_mean: 28.255451740803302
+    pos_count: 253
+    neg_count: 1
+  - expert: 28
+    score: 5347.98583984375
+    count: 215
+    gate_mean: 0.1877182539119277
+    norm_mean: 396.0041787790698
+    saliency_mean: 76.10645439680232
+    eaft_saliency_mean: 24.8743527434593
+    pos_count: 215
+    neg_count: 0
+  - expert: 14
+    score: 4483.55078125
+    count: 113
+    gate_mean: 0.1850706286134973
+    norm_mean: 436.78014380530976
+    saliency_mean: 83.84838219026548
+    eaft_saliency_mean: 39.6774405420354
+    pos_count: 113
+    neg_count: 0
+  - expert: 22
+    score: 4154.58837890625
+    count: 129
+    gate_mean: 0.17087414467981618
+    norm_mean: 369.4701732073643
+    saliency_mean: 66.22447311046511
+    eaft_saliency_mean: 32.20611146438954
+    pos_count: 129
+    neg_count: 0
+  - expert: 10
+    score: 2501.204345703125
+    count: 150
+    gate_mean: 0.15539445241292318
+    norm_mean: 278.9915364583333
+    saliency_mean: 50.800302734375
+    eaft_saliency_mean: 16.674695638020832
+    pos_count: 71
+    neg_count: 0
+- layer: 12
+  experts:
+  - expert: 19
+    score: 443926.75
+    count: 5137
+    gate_mean: 0.27352556552036694
+    norm_mean: 736.8248978002725
+    saliency_mean: 204.3738563363831
+    eaft_saliency_mean: 86.41751021997274
+    pos_count: 5135
+    neg_count: 2
+  - expert: 11
+    score: 382773.9375
+    count: 5418
+    gate_mean: 0.2572418922601744
+    norm_mean: 721.4387227759321
+    saliency_mean: 190.5266242155777
+    eaft_saliency_mean: 70.64856727574751
+    pos_count: 5416
+    neg_count: 2
+  - expert: 23
+    score: 375925.5
+    count: 5971
+    gate_mean: 0.2600961000630652
+    norm_mean: 798.9681795344163
+    saliency_mean: 215.04804471612795
+    eaft_saliency_mean: 62.958549656673924
+    pos_count: 5890
+    neg_count: 2
+  - expert: 6
+    score: 299537.90625
+    count: 3430
+    gate_mean: 0.2749618485787172
+    norm_mean: 650.3413994169097
+    saliency_mean: 185.1546829446064
+    eaft_saliency_mean: 87.32883564139942
+    pos_count: 3429
+    neg_count: 1
+  - expert: 12
+    score: 287199.15625
+    count: 5215
+    gate_mean: 0.2574599356573586
+    norm_mean: 718.0592521572387
+    saliency_mean: 186.71655081495686
+    eaft_saliency_mean: 55.071746164908916
+    pos_count: 5215
+    neg_count: 0
+  - expert: 1
+    score: 200760.59375
+    count: 3901
+    gate_mean: 0.3090820625420565
+    norm_mean: 537.8233145347347
+    saliency_mean: 168.1611285567803
+    eaft_saliency_mean: 51.46387945398616
+    pos_count: 3900
+    neg_count: 1
+  - expert: 25
+    score: 158314.8125
+    count: 1710
+    gate_mean: 0.2502285249051992
+    norm_mean: 795.9046783625731
+    saliency_mean: 201.60500730994153
+    eaft_saliency_mean: 92.58176169590644
+    pos_count: 1709
+    neg_count: 1
+  - expert: 30
+    score: 153955.53125
+    count: 2750
+    gate_mean: 0.22453309215198863
+    norm_mean: 624.5148636363637
+    saliency_mean: 142.86611363636365
+    eaft_saliency_mean: 55.98382954545455
+    pos_count: 2750
+    neg_count: 0
+  - expert: 3
+    score: 145097.734375
+    count: 2957
+    gate_mean: 0.23736433971561127
+    norm_mean: 631.8455782888062
+    saliency_mean: 153.88376099086912
+    eaft_saliency_mean: 49.06923719141021
+    pos_count: 2956
+    neg_count: 1
+  - expert: 18
+    score: 137199.453125
+    count: 2165
+    gate_mean: 0.23526959496337327
+    norm_mean: 700.6442840646652
+    saliency_mean: 169.08734122401847
+    eaft_saliency_mean: 63.37157188221709
+    pos_count: 2165
+    neg_count: 0
+  - expert: 13
+    score: 128589.03125
+    count: 1991
+    gate_mean: 0.2532537777420266
+    norm_mean: 653.5136865896534
+    saliency_mean: 175.07489954796586
+    eaft_saliency_mean: 64.58514879457559
+    pos_count: 1991
+    neg_count: 0
+  - expert: 24
+    score: 125874.4296875
+    count: 2878
+    gate_mean: 0.22501445926668912
+    norm_mean: 627.894979152189
+    saliency_mean: 143.46947750173732
+    eaft_saliency_mean: 43.73677195535094
+    pos_count: 2877
+    neg_count: 1
+  - expert: 14
+    score: 119249.109375
+    count: 2020
+    gate_mean: 0.24934323754641088
+    norm_mean: 697.4487623762376
+    saliency_mean: 177.42564975247524
+    eaft_saliency_mean: 59.03421256188119
+    pos_count: 2016
+    neg_count: 4
+  - expert: 5
+    score: 112873.6484375
+    count: 1977
+    gate_mean: 0.24975936341659555
+    norm_mean: 700.596105209914
+    saliency_mean: 180.48499936772888
+    eaft_saliency_mean: 57.093398299190696
+    pos_count: 1973
+    neg_count: 4
+  - expert: 22
+    score: 109842.0703125
+    count: 1931
+    gate_mean: 0.24112624371378982
+    norm_mean: 659.5150828586225
+    saliency_mean: 164.49035473847746
+    eaft_saliency_mean: 56.88351647462455
+    pos_count: 1926
+    neg_count: 5
+  - expert: 7
+    score: 106451.078125
+    count: 1883
+    gate_mean: 0.23446995618174954
+    norm_mean: 625.2104354753054
+    saliency_mean: 151.13404474243228
+    eaft_saliency_mean: 56.532702137546465
+    pos_count: 1882
+    neg_count: 1
+  - expert: 28
+    score: 80190.8984375
+    count: 2116
+    gate_mean: 0.231481036526945
+    norm_mean: 581.6893903591682
+    saliency_mean: 135.8874350189036
+    eaft_saliency_mean: 37.89740001772212
+    pos_count: 2115
+    neg_count: 1
+  - expert: 0
+    score: 79391.671875
+    count: 1240
+    gate_mean: 0.23952218332598285
+    norm_mean: 634.5193044354838
+    saliency_mean: 153.69590473790322
+    eaft_saliency_mean: 64.02554183467743
+    pos_count: 1238
+    neg_count: 2
+  - expert: 21
+    score: 74859.53125
+    count: 1293
+    gate_mean: 0.21546056855121326
+    norm_mean: 636.3756283836041
+    saliency_mean: 141.47881622196442
+    eaft_saliency_mean: 57.89600251353442
+    pos_count: 1290
+    neg_count: 3
+  - expert: 16
+    score: 56212.32421875
+    count: 1216
+    gate_mean: 0.19518866037067614
+    norm_mean: 609.5318153782895
+    saliency_mean: 121.66410104851974
+    eaft_saliency_mean: 46.22724031147204
+    pos_count: 1216
+    neg_count: 0
+  - expert: 10
+    score: 52975.8671875
+    count: 963
+    gate_mean: 0.23206911651516257
+    norm_mean: 623.0514667705088
+    saliency_mean: 147.99553803219106
+    eaft_saliency_mean: 55.01128472222222
+    pos_count: 963
+    neg_count: 0
+  - expert: 4
+    score: 51869.11328125
+    count: 1027
+    gate_mean: 0.2338332312712999
+    norm_mean: 604.9801606621227
+    saliency_mean: 143.36599318403117
+    eaft_saliency_mean: 50.505465707156766
+    pos_count: 1027
+    neg_count: 0
+  - expert: 17
+    score: 45687.16015625
+    count: 801
+    gate_mean: 0.21910832437236658
+    norm_mean: 595.8332943196006
+    saliency_mean: 133.87152777777777
+    eaft_saliency_mean: 57.037653128901376
+    pos_count: 801
+    neg_count: 0
+  - expert: 27
+    score: 38290.80859375
+    count: 721
+    gate_mean: 0.23114709946715717
+    norm_mean: 606.4411841192788
+    saliency_mean: 142.62326629681
+    eaft_saliency_mean: 53.107917605755894
+    pos_count: 720
+    neg_count: 1
+  - expert: 15
+    score: 35154.18359375
+    count: 629
+    gate_mean: 0.20879765496913505
+    norm_mean: 556.3971581875994
+    saliency_mean: 125.31632551669317
+    eaft_saliency_mean: 55.889004123608906
+    pos_count: 549
+    neg_count: 1
+  - expert: 26
+    score: 32595.1484375
+    count: 565
+    gate_mean: 0.28059651872753044
+    norm_mean: 633.8542588495575
+    saliency_mean: 156.36200221238937
+    eaft_saliency_mean: 57.690528207964604
+    pos_count: 484
+    neg_count: 2
+  - expert: 29
+    score: 26407.7109375
+    count: 599
+    gate_mean: 0.1930604657665119
+    norm_mean: 616.9284745409014
+    saliency_mean: 119.76668144824708
+    eaft_saliency_mean: 44.08632877712855
+    pos_count: 597
+    neg_count: 2
+  - expert: 8
+    score: 19752.431640625
+    count: 344
+    gate_mean: 0.2098189065622729
+    norm_mean: 592.2994186046511
+    saliency_mean: 128.77543604651163
+    eaft_saliency_mean: 57.41985942042151
+    pos_count: 342
+    neg_count: 2
+  - expert: 31
+    score: 16277.9013671875
+    count: 207
+    gate_mean: 0.23788807818279173
+    norm_mean: 672.2525664251208
+    saliency_mean: 176.0625754830918
+    eaft_saliency_mean: 78.63720467240339
+    pos_count: 207
+    neg_count: 0
+  - expert: 20
+    score: 16058.24609375
+    count: 351
+    gate_mean: 0.22562021543497374
+    norm_mean: 623.8021723646724
+    saliency_mean: 142.26295405982907
+    eaft_saliency_mean: 45.74998887108262
+    pos_count: 351
+    neg_count: 0
+  - expert: 9
+    score: 12529.2666015625
+    count: 314
+    gate_mean: 0.24257254144947998
+    norm_mean: 639.7034733280254
+    saliency_mean: 165.57104647691082
+    eaft_saliency_mean: 39.90212293491242
+    pos_count: 235
+    neg_count: 0
+  - expert: 2
+    score: 12438.3974609375
+    count: 280
+    gate_mean: 0.18858438219342913
+    norm_mean: 600.4154017857143
+    saliency_mean: 115.95882393973214
+    eaft_saliency_mean: 44.42284807477679
+    pos_count: 279
+    neg_count: 1
+- layer: 13
+  experts:
+  - expert: 28
+    score: 542747.375
+    count: 5329
+    gate_mean: 0.2852524127269422
+    norm_mean: 824.5626759241884
+    saliency_mean: 239.29925877275286
+    eaft_saliency_mean: 101.84788421842747
+    pos_count: 5327
+    neg_count: 2
+  - expert: 2
+    score: 424050.65625
+    count: 5388
+    gate_mean: 0.2763048609540298
+    norm_mean: 749.8254454342984
+    saliency_mean: 212.67515775798068
+    eaft_saliency_mean: 78.70279440423162
+    pos_count: 5386
+    neg_count: 2
+  - expert: 24
+    score: 311503.9375
+    count: 2827
+    gate_mean: 0.2676811528619119
+    norm_mean: 887.9492394764768
+    saliency_mean: 242.85397506190307
+    eaft_saliency_mean: 110.18887071100106
+    pos_count: 2826
+    neg_count: 1
+  - expert: 1
+    score: 304586.125
+    count: 3940
+    gate_mean: 0.2542909418870955
+    norm_mean: 852.2575507614213
+    saliency_mean: 229.16775063451777
+    eaft_saliency_mean: 77.3061230964467
+    pos_count: 3937
+    neg_count: 3
+  - expert: 15
+    score: 299621.59375
+    count: 4763
+    gate_mean: 0.2612219343359621
+    norm_mean: 864.7571383581776
+    saliency_mean: 228.1871457064875
+    eaft_saliency_mean: 62.90606629225278
+    pos_count: 4762
+    neg_count: 1
+  - expert: 10
+    score: 273359.78125
+    count: 2995
+    gate_mean: 0.24187205319412564
+    norm_mean: 809.4358096828047
+    saliency_mean: 203.82474958263774
+    eaft_saliency_mean: 91.27204716193656
+    pos_count: 2994
+    neg_count: 1
+  - expert: 19
+    score: 251699.359375
+    count: 3852
+    gate_mean: 0.26790516695872274
+    norm_mean: 798.8127596053998
+    saliency_mean: 217.9395119418484
+    eaft_saliency_mean: 65.34251281801662
+    pos_count: 3851
+    neg_count: 1
+  - expert: 11
+    score: 209998.921875
+    count: 3808
+    gate_mean: 0.25064532496348146
+    norm_mean: 743.7320115546219
+    saliency_mean: 188.39901194852942
+    eaft_saliency_mean: 55.14677570246849
+    pos_count: 3807
+    neg_count: 1
+  - expert: 6
+    score: 186514.5
+    count: 2560
+    gate_mean: 0.22640459537506102
+    norm_mean: 731.774755859375
+    saliency_mean: 172.89014892578126
+    eaft_saliency_mean: 72.8572265625
+    pos_count: 2556
+    neg_count: 4
+  - expert: 21
+    score: 185772.78125
+    count: 3109
+    gate_mean: 0.23819547882030997
+    norm_mean: 802.7560308780959
+    saliency_mean: 195.23745577356064
+    eaft_saliency_mean: 59.75322651978128
+    pos_count: 3107
+    neg_count: 2
+  - expert: 30
+    score: 176639.296875
+    count: 2347
+    gate_mean: 0.24901215106718683
+    norm_mean: 738.0671069450362
+    saliency_mean: 190.5255112910098
+    eaft_saliency_mean: 75.26173705794632
+    pos_count: 2346
+    neg_count: 1
+  - expert: 8
+    score: 143192.71875
+    count: 1870
+    gate_mean: 0.2498614632509609
+    norm_mean: 784.3411764705883
+    saliency_mean: 207.3576871657754
+    eaft_saliency_mean: 76.57364639037434
+    pos_count: 1869
+    neg_count: 1
+  - expert: 23
+    score: 142686.265625
+    count: 2376
+    gate_mean: 0.23331279305095223
+    norm_mean: 761.727377946128
+    saliency_mean: 180.94047243265993
+    eaft_saliency_mean: 60.05314209806397
+    pos_count: 2376
+    neg_count: 0
+  - expert: 5
+    score: 128562.5703125
+    count: 1429
+    gate_mean: 0.25903610752711687
+    norm_mean: 752.2563855843247
+    saliency_mean: 200.72889695591323
+    eaft_saliency_mean: 89.9668091759972
+    pos_count: 1427
+    neg_count: 2
+  - expert: 22
+    score: 124296.234375
+    count: 1744
+    gate_mean: 0.22024957849345075
+    norm_mean: 751.4215166284404
+    saliency_mean: 167.8830991972477
+    eaft_saliency_mean: 71.27077659116972
+    pos_count: 1743
+    neg_count: 1
+  - expert: 26
+    score: 123142.9765625
+    count: 1699
+    gate_mean: 0.2574381163149739
+    norm_mean: 819.6378016480282
+    saliency_mean: 213.1737051206592
+    eaft_saliency_mean: 72.47968014273101
+    pos_count: 1697
+    neg_count: 2
+  - expert: 7
+    score: 112436.015625
+    count: 2256
+    gate_mean: 0.24899319046778037
+    norm_mean: 715.4811613475177
+    saliency_mean: 179.42888408687944
+    eaft_saliency_mean: 49.83865940824468
+    pos_count: 2256
+    neg_count: 0
+  - expert: 13
+    score: 84701.640625
+    count: 1711
+    gate_mean: 0.20546632785674496
+    norm_mean: 549.7614333722969
+    saliency_mean: 114.9563486265342
+    eaft_saliency_mean: 49.5041733635301
+    pos_count: 1711
+    neg_count: 0
+  - expert: 0
+    score: 77770.2421875
+    count: 1298
+    gate_mean: 0.22051550537485554
+    norm_mean: 692.726502311248
+    saliency_mean: 157.7394308551618
+    eaft_saliency_mean: 59.91544082241911
+    pos_count: 1298
+    neg_count: 0
+  - expert: 20
+    score: 72304.109375
+    count: 1375
+    gate_mean: 0.21754236949573863
+    norm_mean: 703.329090909091
+    saliency_mean: 155.51364772727274
+    eaft_saliency_mean: 52.58480681818182
+    pos_count: 1375
+    neg_count: 0
+  - expert: 17
+    score: 71440.8125
+    count: 994
+    gate_mean: 0.22047263132014744
+    norm_mean: 828.2714411468813
+    saliency_mean: 186.61407507545272
+    eaft_saliency_mean: 71.87204476861167
+    pos_count: 994
+    neg_count: 0
+  - expert: 16
+    score: 62170.54296875
+    count: 1049
+    gate_mean: 0.20340280014634474
+    norm_mean: 748.4085438512869
+    saliency_mean: 153.4331804099142
+    eaft_saliency_mean: 59.2664851942326
+    pos_count: 1048
+    neg_count: 1
+  - expert: 3
+    score: 60937.28515625
+    count: 1006
+    gate_mean: 0.23474620113789918
+    norm_mean: 744.1897365805169
+    saliency_mean: 178.28322253976143
+    eaft_saliency_mean: 60.57384210362823
+    pos_count: 1006
+    neg_count: 0
+  - expert: 14
+    score: 60434.09375
+    count: 745
+    gate_mean: 0.23513734548683934
+    norm_mean: 777.2631711409396
+    saliency_mean: 189.22021812080536
+    eaft_saliency_mean: 81.1195889261745
+    pos_count: 740
+    neg_count: 5
+  - expert: 29
+    score: 54756.9765625
+    count: 837
+    gate_mean: 0.2293202572256291
+    norm_mean: 736.3664874551971
+    saliency_mean: 172.54943249701313
+    eaft_saliency_mean: 65.42052158004779
+    pos_count: 836
+    neg_count: 1
+  - expert: 9
+    score: 51015.89453125
+    count: 642
+    gate_mean: 0.23847417148102854
+    norm_mean: 796.078660436137
+    saliency_mean: 199.54159365264798
+    eaft_saliency_mean: 79.46401017328661
+    pos_count: 560
+    neg_count: 3
+  - expert: 18
+    score: 26184.9609375
+    count: 339
+    gate_mean: 0.2520580460539961
+    norm_mean: 791.1023230088496
+    saliency_mean: 206.7461744100295
+    eaft_saliency_mean: 77.24177267699115
+    pos_count: 335
+    neg_count: 4
+  - expert: 25
+    score: 19000.580078125
+    count: 375
+    gate_mean: 0.1982298583984375
+    norm_mean: 511.927
+    saliency_mean: 111.87140625
+    eaft_saliency_mean: 50.66821354166667
+    pos_count: 296
+    neg_count: 0
+  - expert: 31
+    score: 18768.29296875
+    count: 332
+    gate_mean: 0.23150926612945924
+    norm_mean: 796.3278426204819
+    saliency_mean: 188.28061464608433
+    eaft_saliency_mean: 56.53100291792169
+    pos_count: 331
+    neg_count: 1
+  - expert: 12
+    score: 18096.775390625
+    count: 368
+    gate_mean: 0.20542743931645932
+    norm_mean: 695.9331266983696
+    saliency_mean: 146.11497961956522
+    eaft_saliency_mean: 49.17602008322011
+    pos_count: 368
+    neg_count: 0
+  - expert: 4
+    score: 14998.9384765625
+    count: 493
+    gate_mean: 0.2738671602632163
+    norm_mean: 541.0308062880324
+    saliency_mean: 130.4032232505071
+    eaft_saliency_mean: 30.42381029728702
+    pos_count: 414
+    neg_count: 0
+  - expert: 27
+    score: 3783.642333984375
+    count: 144
+    gate_mean: 0.17279112339019775
+    norm_mean: 403.46514214409723
+    saliency_mean: 72.27719455295139
+    eaft_saliency_mean: 26.275293986002605
+    pos_count: 65
+    neg_count: 0
+- layer: 14
+  experts:
+  - expert: 25
+    score: 563357.0625
+    count: 3778
+    gate_mean: 0.2612478035098349
+    norm_mean: 1216.4708840656433
+    saliency_mean: 324.79473266278455
+    eaft_saliency_mean: 149.11515682901006
+    pos_count: 3776
+    neg_count: 2
+  - expert: 22
+    score: 426875.75
+    count: 2077
+    gate_mean: 0.32960759302028164
+    norm_mean: 1284.0967741935483
+    saliency_mean: 432.0527804525758
+    eaft_saliency_mean: 205.5251564756861
+    pos_count: 2076
+    neg_count: 1
+  - expert: 20
+    score: 410109.5625
+    count: 3436
+    gate_mean: 0.27877036684189466
+    norm_mean: 1013.357246798603
+    saliency_mean: 287.666963766007
+    eaft_saliency_mean: 119.35668291618161
+    pos_count: 3435
+    neg_count: 1
+  - expert: 29
+    score: 390376.40625
+    count: 4273
+    gate_mean: 0.2540786853864381
+    norm_mean: 1132.8909431312895
+    saliency_mean: 294.82714135267963
+    eaft_saliency_mean: 91.35885940791013
+    pos_count: 4268
+    neg_count: 5
+  - expert: 4
+    score: 341681.625
+    count: 3034
+    gate_mean: 0.26757925155529005
+    norm_mean: 1140.8375082399473
+    saliency_mean: 308.13350774555045
+    eaft_saliency_mean: 112.61754284772577
+    pos_count: 3033
+    neg_count: 1
+  - expert: 3
+    score: 330466.03125
+    count: 2137
+    gate_mean: 0.2636315752314138
+    norm_mean: 1118.6676415535799
+    saliency_mean: 308.0636698642957
+    eaft_saliency_mean: 154.64016436593354
+    pos_count: 2137
+    neg_count: 0
+  - expert: 21
+    score: 319799.875
+    count: 4709
+    gate_mean: 0.24746560878271662
+    norm_mean: 989.9157995328095
+    saliency_mean: 249.139466978127
+    eaft_saliency_mean: 67.9124814185602
+    pos_count: 4707
+    neg_count: 2
+  - expert: 1
+    score: 305689.75
+    count: 2683
+    gate_mean: 0.24203248935717947
+    norm_mean: 1121.3864144614238
+    saliency_mean: 276.02143123369365
+    eaft_saliency_mean: 113.93579947819605
+    pos_count: 2682
+    neg_count: 1
+  - expert: 26
+    score: 293442.40625
+    count: 2550
+    gate_mean: 0.21306635837928922
+    norm_mean: 1076.5480392156862
+    saliency_mean: 235.1343382352941
+    eaft_saliency_mean: 115.07545343137255
+    pos_count: 2550
+    neg_count: 0
+  - expert: 13
+    score: 263832.75
+    count: 3647
+    gate_mean: 0.2516842489867528
+    norm_mean: 947.5425006854949
+    saliency_mean: 242.93803125856869
+    eaft_saliency_mean: 72.3424047162051
+    pos_count: 3645
+    neg_count: 2
+  - expert: 9
+    score: 259819.8125
+    count: 3414
+    gate_mean: 0.299731995951871
+    norm_mean: 863.4756151142356
+    saliency_mean: 268.2309973637961
+    eaft_saliency_mean: 76.10422158758055
+    pos_count: 3414
+    neg_count: 0
+  - expert: 24
+    score: 256602.765625
+    count: 4056
+    gate_mean: 0.2470111282619499
+    norm_mean: 933.3889299802761
+    saliency_mean: 234.3634584566075
+    eaft_saliency_mean: 63.264981662968445
+    pos_count: 4055
+    neg_count: 1
+  - expert: 19
+    score: 228016.40625
+    count: 2017
+    gate_mean: 0.2537499098241122
+    norm_mean: 1021.1921170054536
+    saliency_mean: 263.5933936539415
+    eaft_saliency_mean: 113.04730106593951
+    pos_count: 2014
+    neg_count: 3
+  - expert: 27
+    score: 222890.453125
+    count: 2956
+    gate_mean: 0.25870948554053197
+    norm_mean: 1014.438853179973
+    saliency_mean: 267.33742811231394
+    eaft_saliency_mean: 75.40272433186739
+    pos_count: 2956
+    neg_count: 0
+  - expert: 17
+    score: 181063.59375
+    count: 2353
+    gate_mean: 0.2716111403245192
+    norm_mean: 1031.1495962600934
+    saliency_mean: 289.84596791330216
+    eaft_saliency_mean: 76.95010359116021
+    pos_count: 2353
+    neg_count: 0
+  - expert: 5
+    score: 153944.0
+    count: 1560
+    gate_mean: 0.20489337627704327
+    norm_mean: 1091.7327724358975
+    saliency_mean: 233.68006810897435
+    eaft_saliency_mean: 98.68205128205128
+    pos_count: 1560
+    neg_count: 0
+  - expert: 31
+    score: 142405.875
+    count: 2162
+    gate_mean: 0.23318989601099965
+    norm_mean: 938.2644542090657
+    saliency_mean: 224.7148762719704
+    eaft_saliency_mean: 65.86765726179463
+    pos_count: 2162
+    neg_count: 0
+  - expert: 7
+    score: 137035.1875
+    count: 1759
+    gate_mean: 0.20713057526137899
+    norm_mean: 1007.156196702672
+    saliency_mean: 215.68387578169416
+    eaft_saliency_mean: 77.90516628766345
+    pos_count: 1758
+    neg_count: 1
+  - expert: 11
+    score: 126261.3359375
+    count: 2137
+    gate_mean: 0.22810197400890558
+    norm_mean: 919.1269887693028
+    saliency_mean: 213.38374473561066
+    eaft_saliency_mean: 59.08345153837155
+    pos_count: 2136
+    neg_count: 1
+  - expert: 6
+    score: 125640.3984375
+    count: 1317
+    gate_mean: 0.22873063836934082
+    norm_mean: 970.4684889901291
+    saliency_mean: 226.55260535307517
+    eaft_saliency_mean: 95.39893579157176
+    pos_count: 1314
+    neg_count: 3
+  - expert: 12
+    score: 101540.671875
+    count: 855
+    gate_mean: 0.22281990274351243
+    norm_mean: 1026.496418128655
+    saliency_mean: 233.27388523391812
+    eaft_saliency_mean: 118.7610197368421
+    pos_count: 850
+    neg_count: 5
+  - expert: 16
+    score: 85499.6640625
+    count: 1029
+    gate_mean: 0.20266271355780036
+    norm_mean: 895.309159378037
+    saliency_mean: 181.524735787172
+    eaft_saliency_mean: 83.0900525388727
+    pos_count: 948
+    neg_count: 2
+  - expert: 28
+    score: 83978.2734375
+    count: 984
+    gate_mean: 0.19878736356409585
+    norm_mean: 977.6150914634146
+    saliency_mean: 199.11545668191056
+    eaft_saliency_mean: 85.34377381859755
+    pos_count: 984
+    neg_count: 0
+  - expert: 0
+    score: 82313.15625
+    count: 769
+    gate_mean: 0.26167888666160394
+    norm_mean: 1003.5517717815345
+    saliency_mean: 269.61494229518854
+    eaft_saliency_mean: 107.03921488946683
+    pos_count: 764
+    neg_count: 5
+  - expert: 10
+    score: 66412.46875
+    count: 605
+    gate_mean: 0.2208141988959194
+    norm_mean: 938.9354338842975
+    saliency_mean: 210.31390754132232
+    eaft_saliency_mean: 109.77267561983471
+    pos_count: 601
+    neg_count: 4
+  - expert: 23
+    score: 55287.68359375
+    count: 704
+    gate_mean: 0.20553718913685193
+    norm_mean: 1000.7631392045455
+    saliency_mean: 208.77152876420453
+    eaft_saliency_mean: 78.53364146839489
+    pos_count: 704
+    neg_count: 0
+  - expert: 15
+    score: 49815.890625
+    count: 643
+    gate_mean: 0.22324624069000293
+    norm_mean: 1018.1350116640747
+    saliency_mean: 237.07010594867808
+    eaft_saliency_mean: 77.47416893468119
+    pos_count: 643
+    neg_count: 0
+  - expert: 2
+    score: 47963.62890625
+    count: 726
+    gate_mean: 0.20740599408951016
+    norm_mean: 916.0764462809917
+    saliency_mean: 191.5988507231405
+    eaft_saliency_mean: 66.06560455406336
+    pos_count: 726
+    neg_count: 0
+  - expert: 18
+    score: 35735.4921875
+    count: 729
+    gate_mean: 0.27914667325745884
+    norm_mean: 890.6584362139918
+    saliency_mean: 204.64523319615913
+    eaft_saliency_mean: 49.01987954389575
+    pos_count: 650
+    neg_count: 0
+  - expert: 8
+    score: 33247.8984375
+    count: 495
+    gate_mean: 0.18471411502722537
+    norm_mean: 871.4337121212121
+    saliency_mean: 168.28139204545454
+    eaft_saliency_mean: 67.16747159090909
+    pos_count: 495
+    neg_count: 0
+  - expert: 30
+    score: 16159.1025390625
+    count: 261
+    gate_mean: 0.15848750264251826
+    norm_mean: 1127.3336925287356
+    saliency_mean: 212.13504250478928
+    eaft_saliency_mean: 61.91227026460728
+    pos_count: 182
+    neg_count: 0
+  - expert: 14
+    score: 3176.898681640625
+    count: 145
+    gate_mean: 0.07948721523942619
+    norm_mean: 747.4496767241379
+    saliency_mean: 54.66295797413793
+    eaft_saliency_mean: 21.909646080280172
+    pos_count: 66
+    neg_count: 0
+- layer: 15
+  experts:
+  - expert: 10
+    score: 714013.125
+    count: 3453
+    gate_mean: 0.2702202596700333
+    norm_mean: 1497.2379090645816
+    saliency_mean: 413.7504706052708
+    eaft_saliency_mean: 206.78051694178976
+    pos_count: 3453
+    neg_count: 0
+  - expert: 26
+    score: 513770.65625
+    count: 3397
+    gate_mean: 0.26588071161134824
+    norm_mean: 1394.520753606123
+    saliency_mean: 374.40524727700915
+    eaft_saliency_mean: 151.2424657786282
+    pos_count: 3396
+    neg_count: 1
+  - expert: 29
+    score: 462110.25
+    count: 3446
+    gate_mean: 0.2643462196035712
+    norm_mean: 1331.7331688914683
+    saliency_mean: 356.1223157283807
+    eaft_saliency_mean: 134.10047881601858
+    pos_count: 3439
+    neg_count: 7
+  - expert: 7
+    score: 440171.71875
+    count: 2671
+    gate_mean: 0.2560817842758447
+    norm_mean: 1458.0139460876076
+    saliency_mean: 393.8857169599401
+    eaft_saliency_mean: 164.79660005615875
+    pos_count: 2668
+    neg_count: 3
+  - expert: 14
+    score: 426730.90625
+    count: 1997
+    gate_mean: 0.3176625595130978
+    norm_mean: 1461.006885327992
+    saliency_mean: 468.03198547821734
+    eaft_saliency_mean: 213.6859820981472
+    pos_count: 1996
+    neg_count: 1
+  - expert: 9
+    score: 421468.78125
+    count: 3068
+    gate_mean: 0.26489371208976736
+    norm_mean: 1366.8813559322034
+    saliency_mean: 367.63490058670146
+    eaft_saliency_mean: 137.37574356258148
+    pos_count: 3067
+    neg_count: 1
+  - expert: 5
+    score: 416138.78125
+    count: 2089
+    gate_mean: 0.2500702970732109
+    norm_mean: 1607.8793681187171
+    saliency_mean: 421.07787817137387
+    eaft_saliency_mean: 199.20477800382957
+    pos_count: 2089
+    neg_count: 0
+  - expert: 3
+    score: 407409.125
+    count: 4332
+    gate_mean: 0.2714917578305344
+    norm_mean: 1290.3490304709142
+    saliency_mean: 356.5639716066482
+    eaft_saliency_mean: 94.04642774699907
+    pos_count: 4331
+    neg_count: 1
+  - expert: 23
+    score: 388564.09375
+    count: 3310
+    gate_mean: 0.24119467375141615
+    norm_mean: 1221.4400302114805
+    saliency_mean: 298.49924471299096
+    eaft_saliency_mean: 117.39096487915408
+    pos_count: 3309
+    neg_count: 1
+  - expert: 31
+    score: 364148.53125
+    count: 3217
+    gate_mean: 0.2959609335536797
+    norm_mean: 1302.3459745104135
+    saliency_mean: 402.12632110662105
+    eaft_saliency_mean: 113.19506722101336
+    pos_count: 3216
+    neg_count: 1
+  - expert: 2
+    score: 349140.0
+    count: 3723
+    gate_mean: 0.20842214005946985
+    norm_mean: 1289.445474080043
+    saliency_mean: 273.205429089444
+    eaft_saliency_mean: 93.77921031426268
+    pos_count: 3722
+    neg_count: 1
+  - expert: 6
+    score: 302063.96875
+    count: 3251
+    gate_mean: 0.2624369034287527
+    norm_mean: 1252.7353891110427
+    saliency_mean: 333.7843740387573
+    eaft_saliency_mean: 92.91417063980313
+    pos_count: 3251
+    neg_count: 0
+  - expert: 4
+    score: 264070.03125
+    count: 2833
+    gate_mean: 0.24363428958094335
+    norm_mean: 1340.15231203671
+    saliency_mean: 336.39964260501233
+    eaft_saliency_mean: 93.21215363572185
+    pos_count: 2832
+    neg_count: 1
+  - expert: 0
+    score: 260124.515625
+    count: 2478
+    gate_mean: 0.2655406148324001
+    norm_mean: 1364.229721549637
+    saliency_mean: 372.7191787732042
+    eaft_saliency_mean: 104.97357369854721
+    pos_count: 2477
+    neg_count: 1
+  - expert: 18
+    score: 258809.578125
+    count: 1293
+    gate_mean: 0.24704758363090923
+    norm_mean: 1456.6507153905645
+    saliency_mean: 376.23313031709205
+    eaft_saliency_mean: 200.16208671693735
+    pos_count: 1292
+    neg_count: 1
+  - expert: 16
+    score: 241765.796875
+    count: 2429
+    gate_mean: 0.23343442035045286
+    norm_mean: 1134.454302181968
+    saliency_mean: 274.6199310415809
+    eaft_saliency_mean: 99.5330575854261
+    pos_count: 2423
+    neg_count: 6
+  - expert: 28
+    score: 238031.3125
+    count: 1621
+    gate_mean: 0.22556440010988588
+    norm_mean: 1310.6727328809377
+    saliency_mean: 301.21948257248613
+    eaft_saliency_mean: 146.84226557680444
+    pos_count: 1621
+    neg_count: 0
+  - expert: 19
+    score: 226333.28125
+    count: 3030
+    gate_mean: 0.2343778402498453
+    norm_mean: 1031.420792079208
+    saliency_mean: 254.47155528052807
+    eaft_saliency_mean: 74.69745255775578
+    pos_count: 3029
+    neg_count: 1
+  - expert: 8
+    score: 216031.640625
+    count: 2873
+    gate_mean: 0.23979941718967543
+    norm_mean: 1068.5630873651235
+    saliency_mean: 267.2812608771319
+    eaft_saliency_mean: 75.19374891228681
+    pos_count: 2873
+    neg_count: 0
+  - expert: 1
+    score: 213965.9375
+    count: 1470
+    gate_mean: 0.2395165475858312
+    norm_mean: 1163.2257653061224
+    saliency_mean: 296.0031037414966
+    eaft_saliency_mean: 145.55505952380952
+    pos_count: 1469
+    neg_count: 1
+  - expert: 13
+    score: 193865.6875
+    count: 2114
+    gate_mean: 0.21994697043888956
+    norm_mean: 1267.9532876064334
+    saliency_mean: 290.25073912015137
+    eaft_saliency_mean: 91.70562322611164
+    pos_count: 2033
+    neg_count: 2
+  - expert: 15
+    score: 86422.7265625
+    count: 919
+    gate_mean: 0.20501131176040532
+    norm_mean: 1207.4166213275298
+    saliency_mean: 252.43712595212187
+    eaft_saliency_mean: 94.03996361534277
+    pos_count: 918
+    neg_count: 1
+  - expert: 20
+    score: 81669.2734375
+    count: 464
+    gate_mean: 0.2365985081113618
+    norm_mean: 1234.619073275862
+    saliency_mean: 300.17123518318965
+    eaft_saliency_mean: 176.01136516702587
+    pos_count: 463
+    neg_count: 1
+  - expert: 27
+    score: 57919.94140625
+    count: 569
+    gate_mean: 0.24134805206674265
+    norm_mean: 1371.8039323374342
+    saliency_mean: 344.67819090509664
+    eaft_saliency_mean: 101.79251565246045
+    pos_count: 567
+    neg_count: 2
+  - expert: 24
+    score: 57634.15234375
+    count: 495
+    gate_mean: 0.19064401954111426
+    norm_mean: 1244.835984848485
+    saliency_mean: 258.8968592171717
+    eaft_saliency_mean: 116.43263099747475
+    pos_count: 416
+    neg_count: 0
+  - expert: 25
+    score: 57616.72265625
+    count: 386
+    gate_mean: 0.21050894939837678
+    norm_mean: 1278.2393944300518
+    saliency_mean: 278.68521292098444
+    eaft_saliency_mean: 149.266120871114
+    pos_count: 384
+    neg_count: 2
+  - expert: 17
+    score: 56344.875
+    count: 728
+    gate_mean: 0.19507728828178658
+    norm_mean: 934.937242445055
+    saliency_mean: 185.43498883928572
+    eaft_saliency_mean: 77.39680631868131
+    pos_count: 647
+    neg_count: 2
+  - expert: 22
+    score: 51300.33984375
+    count: 901
+    gate_mean: 0.18993586837650006
+    norm_mean: 977.9164816870144
+    saliency_mean: 188.05360363485016
+    eaft_saliency_mean: 56.93711414400666
+    pos_count: 900
+    neg_count: 1
+  - expert: 12
+    score: 34626.42578125
+    count: 513
+    gate_mean: 0.1852837426852994
+    norm_mean: 1093.7404970760233
+    saliency_mean: 204.74456323099415
+    eaft_saliency_mean: 67.49790600633528
+    pos_count: 513
+    neg_count: 0
+  - expert: 30
+    score: 34015.8671875
+    count: 360
+    gate_mean: 0.18141481611463758
+    norm_mean: 1009.3029513888889
+    saliency_mean: 185.07345920138889
+    eaft_saliency_mean: 94.48851996527777
+    pos_count: 360
+    neg_count: 0
+  - expert: 11
+    score: 24939.0859375
+    count: 317
+    gate_mean: 0.20494700531102128
+    norm_mean: 1393.0199132492114
+    saliency_mean: 292.035636829653
+    eaft_saliency_mean: 78.67219538643533
+    pos_count: 316
+    neg_count: 1
+  - expert: 21
+    score: 11526.9736328125
+    count: 253
+    gate_mean: 0.3065621598435956
+    norm_mean: 759.3521492094861
+    saliency_mean: 225.80755928853756
+    eaft_saliency_mean: 45.56116060400198
+    pos_count: 174
+    neg_count: 0
+- layer: 16
+  experts:
+  - expert: 29
+    score: 954946.8125
+    count: 4769
+    gate_mean: 0.24953580517567886
+    norm_mean: 2055.5906898720905
+    saliency_mean: 520.8440972950305
+    eaft_saliency_mean: 200.24047232124136
+    pos_count: 4767
+    neg_count: 2
+  - expert: 5
+    score: 812212.0
+    count: 6056
+    gate_mean: 0.2694162346097878
+    norm_mean: 1869.0923051519155
+    saliency_mean: 516.5116000660502
+    eaft_saliency_mean: 134.11690885072656
+    pos_count: 6055
+    neg_count: 1
+  - expert: 28
+    score: 787527.4375
+    count: 2914
+    gate_mean: 0.2609826836098361
+    norm_mean: 2147.8979066575153
+    saliency_mean: 577.6058253260123
+    eaft_saliency_mean: 270.2564987989019
+    pos_count: 2914
+    neg_count: 0
+  - expert: 18
+    score: 718970.875
+    count: 2781
+    gate_mean: 0.25492971366105943
+    norm_mean: 1913.5925925925926
+    saliency_mean: 504.74986515641854
+    eaft_saliency_mean: 258.52962064005754
+    pos_count: 2781
+    neg_count: 0
+  - expert: 0
+    score: 662394.875
+    count: 3719
+    gate_mean: 0.2638919724671871
+    norm_mean: 1806.471228824953
+    saliency_mean: 479.3123823608497
+    eaft_saliency_mean: 178.1110177467061
+    pos_count: 3718
+    neg_count: 1
+  - expert: 11
+    score: 658931.3125
+    count: 3033
+    gate_mean: 0.2696666623199493
+    norm_mean: 1930.584899439499
+    saliency_mean: 527.5052340916584
+    eaft_saliency_mean: 217.253977085394
+    pos_count: 3032
+    neg_count: 1
+  - expert: 22
+    score: 604876.1875
+    count: 1775
+    gate_mean: 0.341224795059419
+    norm_mean: 1917.189295774648
+    saliency_mean: 667.7542957746479
+    eaft_saliency_mean: 340.7753169014085
+    pos_count: 1772
+    neg_count: 3
+  - expert: 30
+    score: 601145.875
+    count: 3217
+    gate_mean: 0.24582596939841078
+    norm_mean: 1878.0982281628847
+    saliency_mean: 467.5032250543985
+    eaft_saliency_mean: 186.86536369288157
+    pos_count: 3215
+    neg_count: 2
+  - expert: 21
+    score: 543539.0625
+    count: 2891
+    gate_mean: 0.25685360834945736
+    norm_mean: 1926.7222414389485
+    saliency_mean: 504.8298599100657
+    eaft_saliency_mean: 188.0107445520581
+    pos_count: 2891
+    neg_count: 0
+  - expert: 17
+    score: 494081.5
+    count: 3825
+    gate_mean: 0.27303289675245096
+    norm_mean: 1736.6844444444444
+    saliency_mean: 474.02571895424836
+    eaft_saliency_mean: 129.1716339869281
+    pos_count: 3825
+    neg_count: 0
+  - expert: 15
+    score: 475955.03125
+    count: 3842
+    gate_mean: 0.2862507841476607
+    norm_mean: 1531.6009890681937
+    saliency_mean: 444.80355283706405
+    eaft_saliency_mean: 123.88210079385736
+    pos_count: 3841
+    neg_count: 1
+  - expert: 20
+    score: 468136.65625
+    count: 3874
+    gate_mean: 0.24728146200027426
+    norm_mean: 1797.2072792978834
+    saliency_mean: 451.35880227155394
+    eaft_saliency_mean: 120.8406443598348
+    pos_count: 3872
+    neg_count: 2
+  - expert: 12
+    score: 379606.6875
+    count: 2799
+    gate_mean: 0.2180251448271146
+    norm_mean: 1830.1768488745981
+    saliency_mean: 416.920551982851
+    eaft_saliency_mean: 135.6222534833869
+    pos_count: 2798
+    neg_count: 1
+  - expert: 4
+    score: 300781.4375
+    count: 1919
+    gate_mean: 0.25213907707973715
+    norm_mean: 2414.2318916102136
+    saliency_mean: 634.1499478895258
+    eaft_saliency_mean: 156.73863340281397
+    pos_count: 1840
+    neg_count: 0
+  - expert: 26
+    score: 292777.75
+    count: 1403
+    gate_mean: 0.2649131551947835
+    norm_mean: 1836.5365288667142
+    saliency_mean: 507.7802922309337
+    eaft_saliency_mean: 208.67979330007128
+    pos_count: 1397
+    neg_count: 6
+  - expert: 14
+    score: 274280.03125
+    count: 1550
+    gate_mean: 0.24817611202116935
+    norm_mean: 1665.675806451613
+    saliency_mean: 432.2950806451613
+    eaft_saliency_mean: 176.95485887096774
+    pos_count: 1548
+    neg_count: 2
+  - expert: 31
+    score: 234413.875
+    count: 1781
+    gate_mean: 0.20450166662645636
+    norm_mean: 1756.6412128017967
+    saliency_mean: 371.93206064008984
+    eaft_saliency_mean: 131.6192448062886
+    pos_count: 1773
+    neg_count: 1
+  - expert: 10
+    score: 233476.359375
+    count: 2774
+    gate_mean: 0.2037352415496012
+    norm_mean: 1529.1135544340302
+    saliency_mean: 314.4927226027397
+    eaft_saliency_mean: 84.1659550739005
+    pos_count: 2774
+    neg_count: 0
+  - expert: 9
+    score: 225994.734375
+    count: 1282
+    gate_mean: 0.22890411710218408
+    norm_mean: 1714.3590093603743
+    saliency_mean: 414.655616224649
+    eaft_saliency_mean: 176.2829441302652
+    pos_count: 1277
+    neg_count: 5
+  - expert: 6
+    score: 183446.25
+    count: 1130
+    gate_mean: 0.2378565425366427
+    norm_mean: 1660.6366150442477
+    saliency_mean: 398.6779590707965
+    eaft_saliency_mean: 162.34181415929203
+    pos_count: 1125
+    neg_count: 5
+  - expert: 1
+    score: 153828.390625
+    count: 1169
+    gate_mean: 0.2247646517790312
+    norm_mean: 1739.1669161676646
+    saliency_mean: 410.46693220701457
+    eaft_saliency_mean: 131.58972679640718
+    pos_count: 1168
+    neg_count: 1
+  - expert: 24
+    score: 147094.796875
+    count: 1205
+    gate_mean: 0.19375239328724714
+    norm_mean: 1719.554979253112
+    saliency_mean: 344.1226141078838
+    eaft_saliency_mean: 122.07037085062241
+    pos_count: 1126
+    neg_count: 0
+  - expert: 27
+    score: 101286.2109375
+    count: 832
+    gate_mean: 0.1979518853701078
+    norm_mean: 1645.6030649038462
+    saliency_mean: 330.67465444711536
+    eaft_saliency_mean: 121.7382342998798
+    pos_count: 832
+    neg_count: 0
+  - expert: 2
+    score: 93840.96875
+    count: 800
+    gate_mean: 0.21563777923583985
+    norm_mean: 1574.4490625
+    saliency_mean: 345.75234375
+    eaft_saliency_mean: 117.3012109375
+    pos_count: 797
+    neg_count: 3
+  - expert: 23
+    score: 89183.1953125
+    count: 616
+    gate_mean: 0.19320257607992594
+    norm_mean: 1592.3436485389611
+    saliency_mean: 318.57495434253246
+    eaft_saliency_mean: 144.77791446834416
+    pos_count: 616
+    neg_count: 0
+  - expert: 13
+    score: 65148.66796875
+    count: 573
+    gate_mean: 0.1824072393447317
+    norm_mean: 2010.3294066317626
+    saliency_mean: 372.32684336823735
+    eaft_saliency_mean: 113.69750081806282
+    pos_count: 492
+    neg_count: 2
+  - expert: 3
+    score: 46731.4609375
+    count: 380
+    gate_mean: 0.18704303942228617
+    norm_mean: 1519.9120065789473
+    saliency_mean: 293.454296875
+    eaft_saliency_mean: 122.97752878289474
+    pos_count: 380
+    neg_count: 0
+  - expert: 7
+    score: 38832.82421875
+    count: 329
+    gate_mean: 0.19071309979563425
+    norm_mean: 1750.6496960486322
+    saliency_mean: 338.59933035714283
+    eaft_saliency_mean: 118.03290036094225
+    pos_count: 329
+    neg_count: 0
+  - expert: 8
+    score: 29575.642578125
+    count: 221
+    gate_mean: 0.20969451282898224
+    norm_mean: 1754.8921097285067
+    saliency_mean: 398.1762584841629
+    eaft_saliency_mean: 133.8264370050905
+    pos_count: 219
+    neg_count: 0
+  - expert: 19
+    score: 24915.37890625
+    count: 228
+    gate_mean: 0.14825939713862904
+    norm_mean: 2047.560581140351
+    saliency_mean: 319.804961622807
+    eaft_saliency_mean: 109.27797765899123
+    pos_count: 162
+    neg_count: 0
+  - expert: 16
+    score: 23958.6796875
+    count: 185
+    gate_mean: 0.18294706602354308
+    norm_mean: 1760.8236486486487
+    saliency_mean: 331.4061444256757
+    eaft_saliency_mean: 129.50637668918918
+    pos_count: 181
+    neg_count: 0
+  - expert: 25
+    score: 15151.8974609375
+    count: 128
+    gate_mean: 0.16892743110656738
+    norm_mean: 1385.52197265625
+    saliency_mean: 238.30690002441406
+    eaft_saliency_mean: 118.37419891357422
+    pos_count: 127
+    neg_count: 1
+- layer: 17
+  experts:
+  - expert: 22
+    score: 1090315.25
+    count: 3587
+    gate_mean: 0.2692887939248937
+    norm_mean: 2617.577362698634
+    saliency_mean: 731.5694870365207
+    eaft_saliency_mean: 303.9629913576805
+    pos_count: 3583
+    neg_count: 1
+  - expert: 25
+    score: 1066205.875
+    count: 3461
+    gate_mean: 0.28258626607758774
+    norm_mean: 2753.102571511124
+    saliency_mean: 785.7358422421265
+    eaft_saliency_mean: 308.0629514591159
+    pos_count: 3460
+    neg_count: 1
+  - expert: 6
+    score: 1044238.1875
+    count: 3698
+    gate_mean: 0.24477111255239317
+    norm_mean: 2705.673607355327
+    saliency_mean: 675.4845186587345
+    eaft_saliency_mean: 282.37917455381285
+    pos_count: 3697
+    neg_count: 1
+  - expert: 2
+    score: 1005575.5625
+    count: 3584
+    gate_mean: 0.2415513481412615
+    norm_mean: 2775.192801339286
+    saliency_mean: 693.9683314732143
+    eaft_saliency_mean: 280.5735386439732
+    pos_count: 3582
+    neg_count: 2
+  - expert: 12
+    score: 962118.4375
+    count: 2229
+    gate_mean: 0.27626505150501907
+    norm_mean: 2853.349708389412
+    saliency_mean: 810.0836137281292
+    eaft_saliency_mean: 431.6368046209062
+    pos_count: 2229
+    neg_count: 0
+  - expert: 0
+    score: 845369.625
+    count: 3216
+    gate_mean: 0.26690901571245335
+    norm_mean: 2773.362251243781
+    saliency_mean: 761.6235230099503
+    eaft_saliency_mean: 262.86368936567163
+    pos_count: 3215
+    neg_count: 1
+  - expert: 30
+    score: 845079.25
+    count: 2398
+    gate_mean: 0.25250870272753334
+    norm_mean: 2739.091117597998
+    saliency_mean: 713.4726334445371
+    eaft_saliency_mean: 352.4100291909925
+    pos_count: 2397
+    neg_count: 1
+  - expert: 8
+    score: 790420.0
+    count: 3394
+    gate_mean: 0.29818802913919784
+    norm_mean: 2704.9172068355924
+    saliency_mean: 829.331319976429
+    eaft_saliency_mean: 232.88744843842073
+    pos_count: 3393
+    neg_count: 1
+  - expert: 13
+    score: 684301.9375
+    count: 4145
+    gate_mean: 0.25276812471727983
+    norm_mean: 2408.7056694813027
+    saliency_mean: 616.7086248492159
+    eaft_saliency_mean: 165.0909378769602
+    pos_count: 4143
+    neg_count: 2
+  - expert: 28
+    score: 677033.125
+    count: 4079
+    gate_mean: 0.24548416156399394
+    norm_mean: 2429.4653101250306
+    saliency_mean: 608.4287202745771
+    eaft_saliency_mean: 165.98017283647954
+    pos_count: 4078
+    neg_count: 1
+  - expert: 19
+    score: 620069.75
+    count: 3105
+    gate_mean: 0.27389083100593803
+    norm_mean: 2600.9057971014495
+    saliency_mean: 723.1454106280194
+    eaft_saliency_mean: 199.70040257648952
+    pos_count: 3104
+    neg_count: 1
+  - expert: 7
+    score: 587767.125
+    count: 2539
+    gate_mean: 0.2530909414693285
+    norm_mean: 2423.7648680582906
+    saliency_mean: 621.163893265065
+    eaft_saliency_mean: 231.49551988972036
+    pos_count: 2539
+    neg_count: 0
+  - expert: 14
+    score: 566713.75
+    count: 2309
+    gate_mean: 0.2396680089290548
+    norm_mean: 2617.6476829796447
+    saliency_mean: 642.6631658726722
+    eaft_saliency_mean: 245.43687743611954
+    pos_count: 2306
+    neg_count: 3
+  - expert: 5
+    score: 519322.59375
+    count: 1871
+    gate_mean: 0.27106574102877806
+    norm_mean: 4552.996793158739
+    saliency_mean: 2288.835916622127
+    eaft_saliency_mean: 277.56418693212186
+    pos_count: 1788
+    neg_count: 4
+  - expert: 1
+    score: 493758.5
+    count: 3164
+    gate_mean: 0.23442658280904313
+    norm_mean: 2389.0213337547407
+    saliency_mean: 567.2731510745891
+    eaft_saliency_mean: 156.05515170670037
+    pos_count: 3163
+    neg_count: 1
+  - expert: 11
+    score: 479510.6875
+    count: 2337
+    gate_mean: 0.21978004987697902
+    norm_mean: 2581.630081300813
+    saliency_mean: 578.4025994865211
+    eaft_saliency_mean: 205.18215126230209
+    pos_count: 2337
+    neg_count: 0
+  - expert: 9
+    score: 367265.875
+    count: 1470
+    gate_mean: 0.2559295031489158
+    norm_mean: 2506.951530612245
+    saliency_mean: 666.5388605442176
+    eaft_saliency_mean: 249.840731292517
+    pos_count: 1463
+    neg_count: 7
+  - expert: 20
+    score: 344323.84375
+    count: 2357
+    gate_mean: 0.209680841289742
+    norm_mean: 2310.7087399236316
+    saliency_mean: 491.6288714467544
+    eaft_saliency_mean: 146.08563587187103
+    pos_count: 2357
+    neg_count: 0
+  - expert: 4
+    score: 333933.34375
+    count: 1796
+    gate_mean: 0.23284871328646994
+    norm_mean: 2662.4922048997773
+    saliency_mean: 646.100640311804
+    eaft_saliency_mean: 185.9317058741648
+    pos_count: 1790
+    neg_count: 0
+  - expert: 27
+    score: 307867.21875
+    count: 1561
+    gate_mean: 0.2314282453342709
+    norm_mean: 2360.128603459321
+    saliency_mean: 555.465406790519
+    eaft_saliency_mean: 197.2243553811659
+    pos_count: 1561
+    neg_count: 0
+  - expert: 18
+    score: 243556.875
+    count: 1240
+    gate_mean: 0.2303438002063382
+    norm_mean: 2424.1207661290323
+    saliency_mean: 570.0382056451613
+    eaft_saliency_mean: 196.41683467741936
+    pos_count: 1238
+    neg_count: 2
+  - expert: 17
+    score: 208879.3125
+    count: 1431
+    gate_mean: 0.20530025714098532
+    norm_mean: 2212.8169112508735
+    saliency_mean: 460.7953791055206
+    eaft_saliency_mean: 145.96737421383648
+    pos_count: 1430
+    neg_count: 1
+  - expert: 23
+    score: 208404.734375
+    count: 1100
+    gate_mean: 0.21958511352539062
+    norm_mean: 2050.0375
+    saliency_mean: 462.6889772727273
+    eaft_saliency_mean: 189.45884943181818
+    pos_count: 1098
+    neg_count: 2
+  - expert: 29
+    score: 145384.53125
+    count: 478
+    gate_mean: 0.23981300258237448
+    norm_mean: 2355.8104079497907
+    saliency_mean: 584.5613885983264
+    eaft_saliency_mean: 304.1517390167364
+    pos_count: 477
+    neg_count: 1
+  - expert: 16
+    score: 130172.671875
+    count: 494
+    gate_mean: 0.22697580005475868
+    norm_mean: 2715.9493927125504
+    saliency_mean: 667.2883982793522
+    eaft_saliency_mean: 263.50743294534414
+    pos_count: 494
+    neg_count: 0
+  - expert: 26
+    score: 112473.1953125
+    count: 449
+    gate_mean: 0.23487814922375244
+    norm_mean: 3620.456013363029
+    saliency_mean: 874.1591731625836
+    eaft_saliency_mean: 250.49709423719378
+    pos_count: 442
+    neg_count: 0
+  - expert: 15
+    score: 111277.015625
+    count: 600
+    gate_mean: 0.2145311228434245
+    norm_mean: 2830.62875
+    saliency_mean: 659.250625
+    eaft_saliency_mean: 185.46169270833335
+    pos_count: 528
+    neg_count: 0
+  - expert: 24
+    score: 110632.453125
+    count: 636
+    gate_mean: 0.2107801377398413
+    norm_mean: 2647.1686320754716
+    saliency_mean: 607.6736930031446
+    eaft_saliency_mean: 173.95039799528303
+    pos_count: 563
+    neg_count: 3
+  - expert: 10
+    score: 106745.890625
+    count: 487
+    gate_mean: 0.20908540572963455
+    norm_mean: 2131.6479722792606
+    saliency_mean: 473.9908560061602
+    eaft_saliency_mean: 219.1907405030801
+    pos_count: 487
+    neg_count: 0
+  - expert: 21
+    score: 60898.078125
+    count: 357
+    gate_mean: 0.19466750628474047
+    norm_mean: 2521.5838585434176
+    saliency_mean: 572.4799982492997
+    eaft_saliency_mean: 170.5828518907563
+    pos_count: 276
+    neg_count: 2
+  - expert: 3
+    score: 60017.41015625
+    count: 229
+    gate_mean: 0.2315876556796278
+    norm_mean: 2367.7737445414846
+    saliency_mean: 574.252933951965
+    eaft_saliency_mean: 262.08476050764193
+    pos_count: 229
+    neg_count: 0
+  - expert: 31
+    score: 54521.6328125
+    count: 199
+    gate_mean: 0.22733475574895964
+    norm_mean: 2737.0760050251256
+    saliency_mean: 652.528658919598
+    eaft_saliency_mean: 273.97805433417085
+    pos_count: 197
+    neg_count: 2
+- layer: 18
+  experts:
+  - expert: 7
+    score: 2042922.625
+    count: 3639
+    gate_mean: 0.3108919525775453
+    norm_mean: 3952.971420719978
+    saliency_mean: 1260.6052486946965
+    eaft_saliency_mean: 561.3967092607859
+    pos_count: 3612
+    neg_count: 1
+  - expert: 10
+    score: 1681791.5
+    count: 3701
+    gate_mean: 0.24126392478911948
+    norm_mean: 4250.821940016212
+    saliency_mean: 1045.9338016752229
+    eaft_saliency_mean: 454.41542826263174
+    pos_count: 3701
+    neg_count: 0
+  - expert: 27
+    score: 1232568.375
+    count: 3563
+    gate_mean: 0.27645042348771226
+    norm_mean: 3392.918888577042
+    saliency_mean: 944.3655627280382
+    eaft_saliency_mean: 345.93555290485546
+    pos_count: 3563
+    neg_count: 0
+  - expert: 13
+    score: 1098663.625
+    count: 3041
+    gate_mean: 0.21714510254387948
+    norm_mean: 3733.2841170667543
+    saliency_mean: 818.1798750411049
+    eaft_saliency_mean: 361.2836649128576
+    pos_count: 3039
+    neg_count: 2
+  - expert: 20
+    score: 1022691.9375
+    count: 3152
+    gate_mean: 0.2796123136723707
+    norm_mean: 3325.2541243654823
+    saliency_mean: 942.3562817258884
+    eaft_saliency_mean: 324.45810199873097
+    pos_count: 3151
+    neg_count: 1
+  - expert: 30
+    score: 995086.4375
+    count: 994
+    gate_mean: 0.3881866639288858
+    norm_mean: 4101.839285714285
+    saliency_mean: 1626.7980382293763
+    eaft_saliency_mean: 1001.0929954728371
+    pos_count: 993
+    neg_count: 1
+  - expert: 14
+    score: 971547.3125
+    count: 3044
+    gate_mean: 0.24120740852907357
+    norm_mean: 3292.3252299605783
+    saliency_mean: 818.7357917214192
+    eaft_saliency_mean: 319.1679738830486
+    pos_count: 3034
+    neg_count: 3
+  - expert: 23
+    score: 968896.625
+    count: 3713
+    gate_mean: 0.25374597723581
+    norm_mean: 3660.9916509561003
+    saliency_mean: 942.5012119579854
+    eaft_saliency_mean: 260.94711150013467
+    pos_count: 3712
+    neg_count: 1
+  - expert: 18
+    score: 938525.8125
+    count: 2856
+    gate_mean: 0.234556630879891
+    norm_mean: 3528.265406162465
+    saliency_mean: 856.483018207283
+    eaft_saliency_mean: 328.6154805672269
+    pos_count: 2836
+    neg_count: 3
+  - expert: 2
+    score: 864480.75
+    count: 4242
+    gate_mean: 0.2167466022899723
+    norm_mean: 3483.132720414899
+    saliency_mean: 765.8553158887318
+    eaft_saliency_mean: 203.79084158415841
+    pos_count: 4242
+    neg_count: 0
+  - expert: 6
+    score: 807175.9375
+    count: 2998
+    gate_mean: 0.26346224224352693
+    norm_mean: 3553.826217478319
+    saliency_mean: 947.7861907938626
+    eaft_saliency_mean: 269.2381379252835
+    pos_count: 2990
+    neg_count: 1
+  - expert: 9
+    score: 707197.0625
+    count: 3370
+    gate_mean: 0.21913843352999815
+    norm_mean: 3445.0970326409497
+    saliency_mean: 763.359347181009
+    eaft_saliency_mean: 209.85076038575667
+    pos_count: 3369
+    neg_count: 1
+  - expert: 1
+    score: 688435.1875
+    count: 2096
+    gate_mean: 0.23765877002978142
+    norm_mean: 3258.187022900763
+    saliency_mean: 810.2466006679389
+    eaft_saliency_mean: 328.4519024332061
+    pos_count: 2022
+    neg_count: 5
+  - expert: 31
+    score: 675844.6875
+    count: 2140
+    gate_mean: 0.21346371374397635
+    norm_mean: 3625.7093457943924
+    saliency_mean: 807.0338785046729
+    eaft_saliency_mean: 315.8152745327103
+    pos_count: 2138
+    neg_count: 2
+  - expert: 15
+    score: 672388.625
+    count: 2287
+    gate_mean: 0.2930529502264839
+    norm_mean: 3600.7146917358987
+    saliency_mean: 1075.458460865763
+    eaft_saliency_mean: 294.00464582422387
+    pos_count: 2278
+    neg_count: 1
+  - expert: 19
+    score: 634228.8125
+    count: 2183
+    gate_mean: 0.264934600955895
+    norm_mean: 3756.2425561154373
+    saliency_mean: 1035.485226752176
+    eaft_saliency_mean: 290.530834860284
+    pos_count: 2176
+    neg_count: 3
+  - expert: 12
+    score: 619279.8125
+    count: 1919
+    gate_mean: 0.2768369260214467
+    norm_mean: 4061.313183949974
+    saliency_mean: 1172.0218863991663
+    eaft_saliency_mean: 322.70964695153725
+    pos_count: 1906
+    neg_count: 2
+  - expert: 26
+    score: 556467.75
+    count: 1933
+    gate_mean: 0.2529313294183264
+    norm_mean: 3410.143559234351
+    saliency_mean: 880.2769658561821
+    eaft_saliency_mean: 287.87778065183653
+    pos_count: 1925
+    neg_count: 1
+  - expert: 16
+    score: 530631.75
+    count: 2271
+    gate_mean: 0.22704785177750716
+    norm_mean: 3888.354029062087
+    saliency_mean: 900.8189123734038
+    eaft_saliency_mean: 233.65554821664466
+    pos_count: 2268
+    neg_count: 1
+  - expert: 5
+    score: 474002.5
+    count: 1713
+    gate_mean: 0.24233616852857742
+    norm_mean: 3712.9719789842384
+    saliency_mean: 938.0095592527729
+    eaft_saliency_mean: 276.70899007589026
+    pos_count: 1705
+    neg_count: 0
+  - expert: 22
+    score: 410207.15625
+    count: 908
+    gate_mean: 0.2665626929194917
+    norm_mean: 3600.755781938326
+    saliency_mean: 1000.6181167400881
+    eaft_saliency_mean: 451.76999587004406
+    pos_count: 896
+    neg_count: 5
+  - expert: 11
+    score: 405943.875
+    count: 1417
+    gate_mean: 0.2936572369001411
+    norm_mean: 3593.322159491884
+    saliency_mean: 1079.1168842625264
+    eaft_saliency_mean: 286.481210303458
+    pos_count: 1412
+    neg_count: 0
+  - expert: 29
+    score: 400769.625
+    count: 1100
+    gate_mean: 0.21114275845614347
+    norm_mean: 3877.085909090909
+    saliency_mean: 842.3358522727273
+    eaft_saliency_mean: 364.33602272727273
+    pos_count: 1094
+    neg_count: 0
+  - expert: 0
+    score: 381056.5
+    count: 1447
+    gate_mean: 0.24158075486863986
+    norm_mean: 3603.686938493435
+    saliency_mean: 925.1220628887353
+    eaft_saliency_mean: 263.34243261921216
+    pos_count: 1441
+    neg_count: 0
+  - expert: 24
+    score: 378758.5625
+    count: 901
+    gate_mean: 0.2240734714249792
+    norm_mean: 3405.71448390677
+    saliency_mean: 790.3892896781354
+    eaft_saliency_mean: 420.3757630410655
+    pos_count: 898
+    neg_count: 1
+  - expert: 28
+    score: 322231.5
+    count: 1098
+    gate_mean: 0.20356840818088998
+    norm_mean: 3377.007285974499
+    saliency_mean: 704.7168146630237
+    eaft_saliency_mean: 293.47131147540983
+    pos_count: 1097
+    neg_count: 1
+  - expert: 25
+    score: 249978.6875
+    count: 603
+    gate_mean: 0.2244537505344372
+    norm_mean: 3542.4946102819235
+    saliency_mean: 823.7444548092869
+    eaft_saliency_mean: 414.5583540630182
+    pos_count: 552
+    neg_count: 3
+  - expert: 8
+    score: 142319.671875
+    count: 496
+    gate_mean: 0.2425108725024808
+    norm_mean: 4136.484122983871
+    saliency_mean: 1043.627709173387
+    eaft_saliency_mean: 286.934822328629
+    pos_count: 490
+    neg_count: 0
+  - expert: 4
+    score: 74958.8984375
+    count: 370
+    gate_mean: 0.18500964190508867
+    norm_mean: 3238.3976351351353
+    saliency_mean: 618.2237331081081
+    eaft_saliency_mean: 202.59161739864865
+    pos_count: 367
+    neg_count: 0
+  - expert: 3
+    score: 57999.5078125
+    count: 367
+    gate_mean: 0.15587484998988846
+    norm_mean: 3220.391348773842
+    saliency_mean: 515.4606181880109
+    eaft_saliency_mean: 158.03680602861036
+    pos_count: 366
+    neg_count: 1
+  - expert: 17
+    score: 45634.29296875
+    count: 287
+    gate_mean: 0.16027558223711075
+    norm_mean: 2531.6051829268295
+    saliency_mean: 425.58354202961675
+    eaft_saliency_mean: 159.0045051175958
+    pos_count: 220
+    neg_count: 0
+  - expert: 21
+    score: 37544.078125
+    count: 151
+    gate_mean: 0.14605476682549282
+    norm_mean: 3024.9764072847684
+    saliency_mean: 444.40412872516555
+    eaft_saliency_mean: 248.63627897350995
+    pos_count: 151
+    neg_count: 0
+- layer: 19
+  experts:
+  - expert: 11
+    score: 3049498.25
+    count: 4912
+    gate_mean: 0.2694724514740686
+    norm_mean: 5394.203583061889
+    saliency_mean: 1501.7405333876222
+    eaft_saliency_mean: 620.8261909609121
+    pos_count: 4906
+    neg_count: 2
+  - expert: 31
+    score: 2081654.0
+    count: 3769
+    gate_mean: 0.31226327622338484
+    norm_mean: 4828.2775271955425
+    saliency_mean: 1525.5065003979835
+    eaft_saliency_mean: 552.3093658795436
+    pos_count: 3768
+    neg_count: 1
+  - expert: 17
+    score: 1853764.375
+    count: 3138
+    gate_mean: 0.27357791197991355
+    norm_mean: 5201.961440407903
+    saliency_mean: 1451.3822498406628
+    eaft_saliency_mean: 590.7470920968769
+    pos_count: 3131
+    neg_count: 4
+  - expert: 3
+    score: 1838321.5
+    count: 2987
+    gate_mean: 0.25078622353767366
+    norm_mean: 4733.803481754268
+    saliency_mean: 1246.6888182122532
+    eaft_saliency_mean: 615.4407432206227
+    pos_count: 2986
+    neg_count: 1
+  - expert: 29
+    score: 1649822.25
+    count: 3979
+    gate_mean: 0.3065930731064652
+    norm_mean: 4947.213370193516
+    saliency_mean: 1559.1118371450114
+    eaft_saliency_mean: 414.6323825081679
+    pos_count: 3975
+    neg_count: 1
+  - expert: 12
+    score: 1588649.875
+    count: 4715
+    gate_mean: 0.262947996752386
+    norm_mean: 4688.529798515377
+    saliency_mean: 1263.2458112407212
+    eaft_saliency_mean: 336.93528632025453
+    pos_count: 4712
+    neg_count: 1
+  - expert: 13
+    score: 1328073.875
+    count: 2396
+    gate_mean: 0.2569943079367305
+    norm_mean: 5136.382303839733
+    saliency_mean: 1382.4341611018365
+    eaft_saliency_mean: 554.2879277963273
+    pos_count: 2389
+    neg_count: 1
+  - expert: 0
+    score: 1308170.875
+    count: 2497
+    gate_mean: 0.24671343893922706
+    norm_mean: 4430.957949539447
+    saliency_mean: 1214.6431718061674
+    eaft_saliency_mean: 523.897026431718
+    pos_count: 2474
+    neg_count: 2
+  - expert: 27
+    score: 1305845.875
+    count: 2088
+    gate_mean: 0.23952814445641762
+    norm_mean: 5049.941570881226
+    saliency_mean: 1251.2188697318009
+    eaft_saliency_mean: 625.4051125478927
+    pos_count: 2076
+    neg_count: 1
+  - expert: 2
+    score: 1225312.875
+    count: 4768
+    gate_mean: 0.23809837494920563
+    norm_mean: 3904.3020134228186
+    saliency_mean: 943.9362416107383
+    eaft_saliency_mean: 256.98676069630875
+    pos_count: 4767
+    neg_count: 1
+  - expert: 20
+    score: 1152494.0
+    count: 3406
+    gate_mean: 0.27057485082047306
+    norm_mean: 4413.355255431591
+    saliency_mean: 1217.8787433940106
+    eaft_saliency_mean: 338.3716970052848
+    pos_count: 3402
+    neg_count: 0
+  - expert: 6
+    score: 932165.0
+    count: 1608
+    gate_mean: 0.23828675379207478
+    norm_mean: 5091.914490049751
+    saliency_mean: 1264.683302238806
+    eaft_saliency_mean: 579.7046019900497
+    pos_count: 1592
+    neg_count: 3
+  - expert: 4
+    score: 852167.75
+    count: 1776
+    gate_mean: 0.2015153695871164
+    norm_mean: 4959.344031531532
+    saliency_mean: 1050.614161036036
+    eaft_saliency_mean: 479.82418355855856
+    pos_count: 1776
+    neg_count: 0
+  - expert: 1
+    score: 838000.375
+    count: 2694
+    gate_mean: 0.2089849413990001
+    norm_mean: 4316.669636228657
+    saliency_mean: 940.2059205642167
+    eaft_saliency_mean: 311.0617576095026
+    pos_count: 2690
+    neg_count: 2
+  - expert: 8
+    score: 817462.5
+    count: 679
+    gate_mean: 0.2878450329068483
+    norm_mean: 6154.275036818851
+    saliency_mean: 1828.9488217967598
+    eaft_saliency_mean: 1203.921207658321
+    pos_count: 677
+    neg_count: 1
+  - expert: 9
+    score: 799189.0625
+    count: 2400
+    gate_mean: 0.2085558827718099
+    norm_mean: 4257.340416666667
+    saliency_mean: 911.4839583333334
+    eaft_saliency_mean: 332.9954427083333
+    pos_count: 2399
+    neg_count: 1
+  - expert: 15
+    score: 780712.0625
+    count: 1624
+    gate_mean: 0.2533122283484548
+    norm_mean: 5028.2084359605915
+    saliency_mean: 1325.0206280788177
+    eaft_saliency_mean: 480.7340286330049
+    pos_count: 1608
+    neg_count: 0
+  - expert: 25
+    score: 744441.125
+    count: 2196
+    gate_mean: 0.2632778980692879
+    norm_mean: 4282.403916211293
+    saliency_mean: 1163.6881830601094
+    eaft_saliency_mean: 338.9986908014572
+    pos_count: 2185
+    neg_count: 0
+  - expert: 22
+    score: 635933.625
+    count: 1254
+    gate_mean: 0.2567270087283194
+    norm_mean: 4926.6511164274325
+    saliency_mean: 1339.8182814992026
+    eaft_saliency_mean: 507.1241028708134
+    pos_count: 1224
+    neg_count: 5
+  - expert: 10
+    score: 530580.0625
+    count: 1791
+    gate_mean: 0.21032006004414433
+    norm_mean: 4039.9706867671694
+    saliency_mean: 859.3171412618649
+    eaft_saliency_mean: 296.24794109436067
+    pos_count: 1791
+    neg_count: 0
+  - expert: 16
+    score: 459270.0625
+    count: 2120
+    gate_mean: 0.20376060053987324
+    norm_mean: 3540.37570754717
+    saliency_mean: 729.6990566037736
+    eaft_saliency_mean: 216.63682193396227
+    pos_count: 2119
+    neg_count: 1
+  - expert: 7
+    score: 399217.6875
+    count: 1355
+    gate_mean: 0.21721722930119927
+    norm_mean: 4234.849815498155
+    saliency_mean: 960.4387453874539
+    eaft_saliency_mean: 294.6255996309963
+    pos_count: 1323
+    neg_count: 3
+  - expert: 26
+    score: 379365.625
+    count: 824
+    gate_mean: 0.2234415406162299
+    norm_mean: 4696.195084951456
+    saliency_mean: 1077.2970266990292
+    eaft_saliency_mean: 460.39517597087377
+    pos_count: 821
+    neg_count: 1
+  - expert: 19
+    score: 374148.875
+    count: 1493
+    gate_mean: 0.20081625221083807
+    norm_mean: 3895.182183523108
+    saliency_mean: 802.1000502344273
+    eaft_saliency_mean: 250.60205961152042
+    pos_count: 1489
+    neg_count: 0
+  - expert: 18
+    score: 304924.78125
+    count: 358
+    gate_mean: 0.2590614190980709
+    norm_mean: 5413.794343575419
+    saliency_mean: 1508.3613826815642
+    eaft_saliency_mean: 851.7451990223464
+    pos_count: 357
+    neg_count: 0
+  - expert: 21
+    score: 284127.90625
+    count: 530
+    gate_mean: 0.22991724554097878
+    norm_mean: 5690.653773584906
+    saliency_mean: 1428.0977594339622
+    eaft_saliency_mean: 536.0903891509435
+    pos_count: 462
+    neg_count: 0
+  - expert: 24
+    score: 212205.5
+    count: 473
+    gate_mean: 0.21861583233887752
+    norm_mean: 5117.976744186047
+    saliency_mean: 1207.4923361522199
+    eaft_saliency_mean: 448.6374207188161
+    pos_count: 470
+    neg_count: 0
+  - expert: 30
+    score: 211728.96875
+    count: 555
+    gate_mean: 0.2189741254926802
+    norm_mean: 5066.2851351351355
+    saliency_mean: 1171.8329954954954
+    eaft_saliency_mean: 381.49363738738737
+    pos_count: 547
+    neg_count: 1
+  - expert: 14
+    score: 189548.296875
+    count: 366
+    gate_mean: 0.22411548635347292
+    norm_mean: 5771.301229508197
+    saliency_mean: 1376.200819672131
+    eaft_saliency_mean: 517.8915215163935
+    pos_count: 363
+    neg_count: 0
+  - expert: 28
+    score: 173239.65625
+    count: 681
+    gate_mean: 0.1823095694162422
+    norm_mean: 3912.3751835535977
+    saliency_mean: 729.7028726138033
+    eaft_saliency_mean: 254.39009728340676
+    pos_count: 606
+    neg_count: 2
+  - expert: 5
+    score: 119056.6015625
+    count: 351
+    gate_mean: 0.1864810519748264
+    norm_mean: 4227.307692307692
+    saliency_mean: 802.9797008547008
+    eaft_saliency_mean: 339.1925970441595
+    pos_count: 344
+    neg_count: 3
+  - expert: 23
+    score: 57008.046875
+    count: 217
+    gate_mean: 0.15554329656785534
+    norm_mean: 3276.7042050691243
+    saliency_mean: 512.0653081797235
+    eaft_saliency_mean: 262.70989343317973
+    pos_count: 215
+    neg_count: 2
+- layer: 20
+  experts:
+  - expert: 8
+    score: 4099356.75
+    count: 3863
+    gate_mean: 0.3196200519653605
+    norm_mean: 7393.176287859177
+    saliency_mean: 2415.9767020450427
+    eaft_saliency_mean: 1061.1847657261196
+    pos_count: 3837
+    neg_count: 1
+  - expert: 16
+    score: 2177977.25
+    count: 3916
+    gate_mean: 0.26591667822116
+    norm_mean: 5588.38253319714
+    saliency_mean: 1497.6054647599592
+    eaft_saliency_mean: 556.1739657814096
+    pos_count: 3911
+    neg_count: 1
+  - expert: 7
+    score: 2128487.25
+    count: 3021
+    gate_mean: 0.24855293544149287
+    norm_mean: 8129.923204237008
+    saliency_mean: 2057.637206223105
+    eaft_saliency_mean: 704.5638033763654
+    pos_count: 3000
+    neg_count: 3
+  - expert: 23
+    score: 1954407.125
+    count: 2289
+    gate_mean: 0.24160679941773155
+    norm_mean: 7177.573612931411
+    saliency_mean: 1753.748252512014
+    eaft_saliency_mean: 853.8257426823941
+    pos_count: 2276
+    neg_count: 4
+  - expert: 22
+    score: 1926659.0
+    count: 2116
+    gate_mean: 0.24861935361346585
+    norm_mean: 7982.656899810964
+    saliency_mean: 2099.474480151229
+    eaft_saliency_mean: 910.5193761814745
+    pos_count: 2102
+    neg_count: 3
+  - expert: 17
+    score: 1908990.625
+    count: 3153
+    gate_mean: 0.24255880203997185
+    norm_mean: 6938.37297811608
+    saliency_mean: 1709.034094513162
+    eaft_saliency_mean: 605.4521487472249
+    pos_count: 3151
+    neg_count: 1
+  - expert: 13
+    score: 1754013.75
+    count: 4410
+    gate_mean: 0.25669947340915533
+    norm_mean: 5669.9569160997735
+    saliency_mean: 1464.4171201814058
+    eaft_saliency_mean: 397.73554421768705
+    pos_count: 4408
+    neg_count: 1
+  - expert: 0
+    score: 1732844.0
+    count: 3916
+    gate_mean: 0.24182392311291018
+    norm_mean: 5847.58784473953
+    saliency_mean: 1454.8448672114403
+    eaft_saliency_mean: 442.5035750766088
+    pos_count: 3913
+    neg_count: 1
+  - expert: 21
+    score: 1559324.0
+    count: 4257
+    gate_mean: 0.24946985296276722
+    norm_mean: 5192.876673713883
+    saliency_mean: 1321.3605825698849
+    eaft_saliency_mean: 366.2964529011041
+    pos_count: 4255
+    neg_count: 1
+  - expert: 11
+    score: 1532298.25
+    count: 2772
+    gate_mean: 0.2994978162977431
+    norm_mean: 6741.282106782107
+    saliency_mean: 2070.0824314574315
+    eaft_saliency_mean: 552.7771464646464
+    pos_count: 2759
+    neg_count: 1
+  - expert: 31
+    score: 1460576.125
+    count: 3164
+    gate_mean: 0.2478728746493758
+    norm_mean: 5193.739570164349
+    saliency_mean: 1304.645306573957
+    eaft_saliency_mean: 461.6233012010114
+    pos_count: 3157
+    neg_count: 1
+  - expert: 29
+    score: 1411222.25
+    count: 2340
+    gate_mean: 0.22987342247596154
+    norm_mean: 6353.197008547008
+    saliency_mean: 1526.297435897436
+    eaft_saliency_mean: 603.0864316239316
+    pos_count: 2316
+    neg_count: 1
+  - expert: 6
+    score: 1299528.875
+    count: 2870
+    gate_mean: 0.2750941897933907
+    norm_mean: 5721.256097560976
+    saliency_mean: 1617.7257839721253
+    eaft_saliency_mean: 452.7975174216028
+    pos_count: 2862
+    neg_count: 0
+  - expert: 30
+    score: 1239941.875
+    count: 3333
+    gate_mean: 0.2116286274623556
+    norm_mean: 6343.5979597959795
+    saliency_mean: 1357.130213021302
+    eaft_saliency_mean: 372.0197644764476
+    pos_count: 3305
+    neg_count: 2
+  - expert: 5
+    score: 1172594.625
+    count: 1804
+    gate_mean: 0.24579155154344512
+    norm_mean: 6147.84201773836
+    saliency_mean: 1581.1862527716187
+    eaft_saliency_mean: 649.9970205099778
+    pos_count: 1783
+    neg_count: 3
+  - expert: 25
+    score: 1151110.875
+    count: 2732
+    gate_mean: 0.24077406250714906
+    norm_mean: 5067.839311859444
+    saliency_mean: 1239.772327964861
+    eaft_saliency_mean: 421.3436584919473
+    pos_count: 2732
+    neg_count: 0
+  - expert: 12
+    score: 1125972.625
+    count: 1710
+    gate_mean: 0.239182464421144
+    norm_mean: 6377.577192982456
+    saliency_mean: 1549.5530701754385
+    eaft_saliency_mean: 658.4635233918128
+    pos_count: 1703
+    neg_count: 3
+  - expert: 10
+    score: 928144.75
+    count: 1532
+    gate_mean: 0.236720989018134
+    norm_mean: 6258.039817232376
+    saliency_mean: 1555.9699738903394
+    eaft_saliency_mean: 605.8386096605744
+    pos_count: 1523
+    neg_count: 0
+  - expert: 20
+    score: 890542.4375
+    count: 1947
+    gate_mean: 0.2406106330703085
+    norm_mean: 6048.004108885465
+    saliency_mean: 1474.804314329738
+    eaft_saliency_mean: 457.39210965588086
+    pos_count: 1936
+    neg_count: 1
+  - expert: 15
+    score: 769774.25
+    count: 1226
+    gate_mean: 0.26060881622463805
+    norm_mean: 6315.706362153344
+    saliency_mean: 1711.2828303425774
+    eaft_saliency_mean: 627.8745921696574
+    pos_count: 1219
+    neg_count: 1
+  - expert: 1
+    score: 727674.8125
+    count: 1133
+    gate_mean: 0.22809109936114022
+    norm_mean: 6592.389232127096
+    saliency_mean: 1576.0728155339805
+    eaft_saliency_mean: 642.2549095322154
+    pos_count: 1133
+    neg_count: 0
+  - expert: 27
+    score: 721816.75
+    count: 1927
+    gate_mean: 0.2251491734693257
+    norm_mean: 5811.231447846393
+    saliency_mean: 1330.9857291126102
+    eaft_saliency_mean: 374.580565646082
+    pos_count: 1918
+    neg_count: 1
+  - expert: 24
+    score: 607773.75
+    count: 763
+    gate_mean: 0.2574651675643021
+    norm_mean: 7222.4495412844035
+    saliency_mean: 1929.1834862385322
+    eaft_saliency_mean: 796.557994757536
+    pos_count: 760
+    neg_count: 1
+  - expert: 2
+    score: 540852.1875
+    count: 887
+    gate_mean: 0.2063912926021262
+    norm_mean: 5692.9966178128525
+    saliency_mean: 1234.0140924464488
+    eaft_saliency_mean: 609.7544391206313
+    pos_count: 887
+    neg_count: 0
+  - expert: 14
+    score: 537650.3125
+    count: 718
+    gate_mean: 0.2187551854380658
+    norm_mean: 7389.00208913649
+    saliency_mean: 1755.3340877437327
+    eaft_saliency_mean: 748.8165912256268
+    pos_count: 704
+    neg_count: 4
+  - expert: 19
+    score: 270106.375
+    count: 630
+    gate_mean: 0.2181274656265501
+    norm_mean: 6066.562301587302
+    saliency_mean: 1383.3169642857142
+    eaft_saliency_mean: 428.7402777777778
+    pos_count: 549
+    neg_count: 2
+  - expert: 3
+    score: 265882.34375
+    count: 482
+    gate_mean: 0.22469603669099295
+    norm_mean: 7207.45643153527
+    saliency_mean: 1674.1897043568465
+    eaft_saliency_mean: 551.623119813278
+    pos_count: 471
+    neg_count: 2
+  - expert: 18
+    score: 193020.109375
+    count: 352
+    gate_mean: 0.19871768084439365
+    norm_mean: 6970.305397727273
+    saliency_mean: 1430.6975319602273
+    eaft_saliency_mean: 548.3525834517045
+    pos_count: 348
+    neg_count: 0
+  - expert: 28
+    score: 167012.515625
+    count: 271
+    gate_mean: 0.20464430523974428
+    norm_mean: 5208.553505535056
+    saliency_mean: 1117.7208256457563
+    eaft_saliency_mean: 616.2823454797048
+    pos_count: 270
+    neg_count: 1
+  - expert: 26
+    score: 82956.1171875
+    count: 221
+    gate_mean: 0.17368344268108385
+    norm_mean: 4671.476244343891
+    saliency_mean: 790.911411199095
+    eaft_saliency_mean: 375.3670460972851
+    pos_count: 211
+    neg_count: 0
+  - expert: 9
+    score: 62458.890625
+    count: 145
+    gate_mean: 0.17105748406771956
+    norm_mean: 5496.576293103448
+    saliency_mean: 944.2726293103449
+    eaft_saliency_mean: 430.75096982758623
+    pos_count: 145
+    neg_count: 0
+  - expert: 4
+    score: 47585.26953125
+    count: 100
+    gate_mean: 0.16904014587402344
+    norm_mean: 5486.858125
+    saliency_mean: 902.323828125
+    eaft_saliency_mean: 475.8526953125
+    pos_count: 100
+    neg_count: 0
+- layer: 21
+  experts:
+  - expert: 28
+    score: 5110414.5
+    count: 4380
+    gate_mean: 0.2684163690157677
+    norm_mean: 10070.220091324201
+    saliency_mean: 2798.9522831050226
+    eaft_saliency_mean: 1166.761301369863
+    pos_count: 4372
+    neg_count: 2
+  - expert: 6
+    score: 4600170.0
+    count: 2831
+    gate_mean: 0.28494660469467503
+    norm_mean: 11532.800423878489
+    saliency_mean: 3395.015188979159
+    eaft_saliency_mean: 1624.927587424938
+    pos_count: 2810
+    neg_count: 0
+  - expert: 10
+    score: 3683316.75
+    count: 3405
+    gate_mean: 0.2781836690356553
+    norm_mean: 8179.75154185022
+    saliency_mean: 2545.162408223201
+    eaft_saliency_mean: 1081.737665198238
+    pos_count: 3384
+    neg_count: 2
+  - expert: 2
+    score: 2857902.75
+    count: 3592
+    gate_mean: 0.264538635389842
+    norm_mean: 8416.800111358574
+    saliency_mean: 2232.7015590200444
+    eaft_saliency_mean: 795.6299415367483
+    pos_count: 3585
+    neg_count: 1
+  - expert: 1
+    score: 2823199.5
+    count: 4482
+    gate_mean: 0.2636086337537651
+    norm_mean: 8617.871485943775
+    saliency_mean: 2308.574743418117
+    eaft_saliency_mean: 629.8972556894244
+    pos_count: 4461
+    neg_count: 2
+  - expert: 18
+    score: 2735120.5
+    count: 3019
+    gate_mean: 0.25374049072669963
+    norm_mean: 8401.406425968864
+    saliency_mean: 2167.0713812520703
+    eaft_saliency_mean: 905.9690294799602
+    pos_count: 3019
+    neg_count: 0
+  - expert: 27
+    score: 2719590.0
+    count: 4218
+    gate_mean: 0.2724946819249348
+    norm_mean: 8538.680891417733
+    saliency_mean: 2392.4032716927454
+    eaft_saliency_mean: 644.7581792318634
+    pos_count: 4206
+    neg_count: 1
+  - expert: 8
+    score: 2527780.5
+    count: 3369
+    gate_mean: 0.3010443950414162
+    norm_mean: 8342.317601662215
+    saliency_mean: 2543.3647966755716
+    eaft_saliency_mean: 750.3058771148709
+    pos_count: 3368
+    neg_count: 0
+  - expert: 3
+    score: 2469586.25
+    count: 4911
+    gate_mean: 0.23632539078408166
+    norm_mean: 6793.202199144777
+    saliency_mean: 1655.2725514151905
+    eaft_saliency_mean: 502.8683058440236
+    pos_count: 4895
+    neg_count: 2
+  - expert: 9
+    score: 2260942.5
+    count: 3944
+    gate_mean: 0.252673445076778
+    norm_mean: 6997.077079107505
+    saliency_mean: 1785.57796653144
+    eaft_saliency_mean: 573.2612829614604
+    pos_count: 3934
+    neg_count: 1
+  - expert: 25
+    score: 1918417.25
+    count: 2923
+    gate_mean: 0.24610513014374144
+    norm_mean: 8898.289428669175
+    saliency_mean: 2226.9042080054737
+    eaft_saliency_mean: 656.3179096818337
+    pos_count: 2914
+    neg_count: 3
+  - expert: 21
+    score: 1778347.875
+    count: 3314
+    gate_mean: 0.24484752040349653
+    norm_mean: 7323.5123717561855
+    saliency_mean: 1860.1449909474954
+    eaft_saliency_mean: 536.6167395896198
+    pos_count: 3303
+    neg_count: 2
+  - expert: 11
+    score: 1661475.625
+    count: 946
+    gate_mean: 0.2893901284602933
+    norm_mean: 11649.741014799154
+    saliency_mean: 3450.0084566596192
+    eaft_saliency_mean: 1756.3167283298096
+    pos_count: 921
+    neg_count: 3
+  - expert: 29
+    score: 1252187.75
+    count: 1746
+    gate_mean: 0.22155254840304625
+    norm_mean: 8644.571019473082
+    saliency_mean: 1999.9955612829324
+    eaft_saliency_mean: 717.1751145475372
+    pos_count: 1746
+    neg_count: 0
+  - expert: 0
+    score: 1224271.125
+    count: 1956
+    gate_mean: 0.2177224188494536
+    norm_mean: 7577.740286298568
+    saliency_mean: 1743.3433026584867
+    eaft_saliency_mean: 625.9054831288344
+    pos_count: 1952
+    neg_count: 4
+  - expert: 17
+    score: 1214920.5
+    count: 1057
+    gate_mean: 0.26087162014213283
+    norm_mean: 8909.53169347209
+    saliency_mean: 2436.3670766319774
+    eaft_saliency_mean: 1149.4044465468307
+    pos_count: 1005
+    neg_count: 4
+  - expert: 20
+    score: 1139018.625
+    count: 1564
+    gate_mean: 0.20471261651314737
+    norm_mean: 7353.195652173913
+    saliency_mean: 1559.6799872122763
+    eaft_saliency_mean: 728.2727781329924
+    pos_count: 1559
+    neg_count: 1
+  - expert: 22
+    score: 1105236.0
+    count: 2723
+    gate_mean: 0.2221410263123164
+    norm_mean: 6448.209327947117
+    saliency_mean: 1450.329324274697
+    eaft_saliency_mean: 405.88909291222916
+    pos_count: 2723
+    neg_count: 0
+  - expert: 16
+    score: 1059534.625
+    count: 1817
+    gate_mean: 0.2127828981171746
+    norm_mean: 6239.351128233352
+    saliency_mean: 1383.250137589433
+    eaft_saliency_mean: 583.1230737479361
+    pos_count: 1809
+    neg_count: 3
+  - expert: 14
+    score: 1036043.375
+    count: 638
+    gate_mean: 0.28249909212596735
+    norm_mean: 10407.666927899687
+    saliency_mean: 3117.188871473354
+    eaft_saliency_mean: 1623.8924373040752
+    pos_count: 632
+    neg_count: 1
+  - expert: 30
+    score: 785420.5
+    count: 813
+    gate_mean: 0.24535421486417014
+    norm_mean: 8108.9311193111935
+    saliency_mean: 2094.6737392373925
+    eaft_saliency_mean: 966.0768757687576
+    pos_count: 805
+    neg_count: 2
+  - expert: 15
+    score: 532191.1875
+    count: 641
+    gate_mean: 0.2252739059757703
+    norm_mean: 7824.154446177847
+    saliency_mean: 1841.2535101404055
+    eaft_saliency_mean: 830.2514625585023
+    pos_count: 619
+    neg_count: 0
+  - expert: 31
+    score: 522711.0625
+    count: 1378
+    gate_mean: 0.18945837366909696
+    norm_mean: 6411.192307692308
+    saliency_mean: 1224.848965892598
+    eaft_saliency_mean: 379.32587989840346
+    pos_count: 1377
+    neg_count: 1
+  - expert: 23
+    score: 477088.5
+    count: 626
+    gate_mean: 0.22788084962497504
+    norm_mean: 7434.5191693290735
+    saliency_mean: 1761.9313099041533
+    eaft_saliency_mean: 762.1222044728435
+    pos_count: 575
+    neg_count: 0
+  - expert: 4
+    score: 393525.25
+    count: 547
+    gate_mean: 0.19803465960012712
+    norm_mean: 7815.883912248629
+    saliency_mean: 1589.2631398537478
+    eaft_saliency_mean: 719.4245886654479
+    pos_count: 542
+    neg_count: 1
+  - expert: 13
+    score: 362122.8125
+    count: 558
+    gate_mean: 0.19934884621678287
+    norm_mean: 7548.399641577061
+    saliency_mean: 1584.9097222222222
+    eaft_saliency_mean: 648.9656137992831
+    pos_count: 558
+    neg_count: 0
+  - expert: 12
+    score: 332236.5
+    count: 619
+    gate_mean: 0.20926475216768478
+    norm_mean: 6800.373182552504
+    saliency_mean: 1498.2197092084007
+    eaft_saliency_mean: 536.7310177705978
+    pos_count: 611
+    neg_count: 3
+  - expert: 7
+    score: 305545.4375
+    count: 648
+    gate_mean: 0.18539030757951147
+    norm_mean: 6652.287037037037
+    saliency_mean: 1296.274787808642
+    eaft_saliency_mean: 471.52073688271605
+    pos_count: 632
+    neg_count: 0
+  - expert: 24
+    score: 291731.9375
+    count: 407
+    gate_mean: 0.18609197368200053
+    norm_mean: 5460.72113022113
+    saliency_mean: 1015.9629146191646
+    eaft_saliency_mean: 716.7860872235872
+    pos_count: 407
+    neg_count: 0
+  - expert: 26
+    score: 263189.1875
+    count: 461
+    gate_mean: 0.18800229881435568
+    norm_mean: 6409.088394793926
+    saliency_mean: 1276.6016811279826
+    eaft_saliency_mean: 570.9093004338395
+    pos_count: 459
+    neg_count: 0
+  - expert: 5
+    score: 129316.921875
+    count: 209
+    gate_mean: 0.1819730512263102
+    norm_mean: 6328.099880382775
+    saliency_mean: 1172.9794407894738
+    eaft_saliency_mean: 618.7412529904307
+    pos_count: 203
+    neg_count: 1
+  - expert: 19
+    score: 125145.8984375
+    count: 258
+    gate_mean: 0.19290696373281552
+    norm_mean: 7541.579941860465
+    saliency_mean: 1484.0692829457364
+    eaft_saliency_mean: 485.06162185077517
+    pos_count: 258
+    neg_count: 0
+- layer: 22
+  experts:
+  - expert: 25
+    score: 5494012.5
+    count: 6717
+    gate_mean: 0.26530160544723275
+    norm_mean: 9815.896977817478
+    saliency_mean: 2651.7564388864075
+    eaft_saliency_mean: 817.9265297007593
+    pos_count: 6710
+    neg_count: 2
+  - expert: 6
+    score: 4926875.0
+    count: 3381
+    gate_mean: 0.2570913969782886
+    norm_mean: 13399.051168293405
+    saliency_mean: 3516.4347826086955
+    eaft_saliency_mean: 1457.2241940254362
+    pos_count: 3373
+    neg_count: 2
+  - expert: 5
+    score: 4449313.5
+    count: 2639
+    gate_mean: 0.2861274930282541
+    norm_mean: 13220.204622963243
+    saliency_mean: 3890.9768851837816
+    eaft_saliency_mean: 1685.9846532777567
+    pos_count: 2620
+    neg_count: 3
+  - expert: 15
+    score: 4202754.0
+    count: 4173
+    gate_mean: 0.25375720896424936
+    norm_mean: 11330.673376467768
+    saliency_mean: 2888.7764198418404
+    eaft_saliency_mean: 1007.1301222142343
+    pos_count: 4171
+    neg_count: 1
+  - expert: 19
+    score: 3974031.75
+    count: 2917
+    gate_mean: 0.2831430941932529
+    norm_mean: 10931.7565992458
+    saliency_mean: 3171.475488515598
+    eaft_saliency_mean: 1362.369472060336
+    pos_count: 2891
+    neg_count: 1
+  - expert: 18
+    score: 3963861.75
+    count: 5273
+    gate_mean: 0.2740173397718922
+    norm_mean: 9706.196093305518
+    saliency_mean: 2711.7563057083253
+    eaft_saliency_mean: 751.7280011378722
+    pos_count: 5258
+    neg_count: 2
+  - expert: 22
+    score: 3336621.0
+    count: 3745
+    gate_mean: 0.27503344302820426
+    norm_mean: 9082.974632843792
+    saliency_mean: 2503.4363150867825
+    eaft_saliency_mean: 890.9535380507343
+    pos_count: 3738
+    neg_count: 1
+  - expert: 4
+    score: 3061068.75
+    count: 3820
+    gate_mean: 0.2634330390011453
+    norm_mean: 10942.57277486911
+    saliency_mean: 2909.1502617801048
+    eaft_saliency_mean: 801.3268979057592
+    pos_count: 3806
+    neg_count: 0
+  - expert: 13
+    score: 2679923.0
+    count: 2052
+    gate_mean: 0.22090095386170505
+    norm_mean: 12450.296296296296
+    saliency_mean: 2770.221978557505
+    eaft_saliency_mean: 1306.0053606237816
+    pos_count: 2020
+    neg_count: 2
+  - expert: 0
+    score: 2634854.5
+    count: 3334
+    gate_mean: 0.23671150779609704
+    norm_mean: 10632.23875224955
+    saliency_mean: 2551.255548890222
+    eaft_saliency_mean: 790.2982903419316
+    pos_count: 3312
+    neg_count: 1
+  - expert: 26
+    score: 2425728.5
+    count: 1954
+    gate_mean: 0.2791388208082779
+    norm_mean: 11818.564994882292
+    saliency_mean: 3372.349027635619
+    eaft_saliency_mean: 1241.4168372569088
+    pos_count: 1924
+    neg_count: 5
+  - expert: 27
+    score: 2234651.5
+    count: 1921
+    gate_mean: 0.24690277560312013
+    norm_mean: 11712.949505465904
+    saliency_mean: 2959.4341488807913
+    eaft_saliency_mean: 1163.2751171264965
+    pos_count: 1880
+    neg_count: 3
+  - expert: 28
+    score: 2063782.75
+    count: 1382
+    gate_mean: 0.23668382481797215
+    norm_mean: 11445.271345875542
+    saliency_mean: 2829.1454413892907
+    eaft_saliency_mean: 1493.330499276411
+    pos_count: 1367
+    neg_count: 0
+  - expert: 8
+    score: 2028135.375
+    count: 3138
+    gate_mean: 0.20915407918683276
+    norm_mean: 10271.886551943913
+    saliency_mean: 2181.9244741873804
+    eaft_saliency_mean: 646.3146510516252
+    pos_count: 3123
+    neg_count: 1
+  - expert: 29
+    score: 1845333.875
+    count: 2563
+    gate_mean: 0.24887907732942352
+    norm_mean: 9231.492001560671
+    saliency_mean: 2358.7506827936013
+    eaft_saliency_mean: 719.9898068669528
+    pos_count: 2553
+    neg_count: 0
+  - expert: 14
+    score: 1808380.875
+    count: 2213
+    gate_mean: 0.27125879590240903
+    norm_mean: 10719.399005874378
+    saliency_mean: 2956.3228648892905
+    eaft_saliency_mean: 817.1626186172616
+    pos_count: 2198
+    neg_count: 1
+  - expert: 1
+    score: 1617535.5
+    count: 1479
+    gate_mean: 0.19584764089835827
+    norm_mean: 11981.89722785666
+    saliency_mean: 2456.186950642326
+    eaft_saliency_mean: 1093.6683569979716
+    pos_count: 1473
+    neg_count: 1
+  - expert: 12
+    score: 1516150.875
+    count: 530
+    gate_mean: 0.3006337291789505
+    norm_mean: 16764.12075471698
+    saliency_mean: 5224.75141509434
+    eaft_saliency_mean: 2860.662028301887
+    pos_count: 525
+    neg_count: 5
+  - expert: 10
+    score: 1426387.625
+    count: 2440
+    gate_mean: 0.20980722396100154
+    norm_mean: 9690.480327868852
+    saliency_mean: 2044.1581967213115
+    eaft_saliency_mean: 584.5850922131148
+    pos_count: 2439
+    neg_count: 0
+  - expert: 7
+    score: 1196233.25
+    count: 1471
+    gate_mean: 0.2447150442407376
+    norm_mean: 9354.201223657376
+    saliency_mean: 2365.2726036709723
+    eaft_saliency_mean: 813.2109109449354
+    pos_count: 1467
+    neg_count: 1
+  - expert: 16
+    score: 984679.75
+    count: 1041
+    gate_mean: 0.23483685320323758
+    norm_mean: 10372.893371757926
+    saliency_mean: 2528.996157540826
+    eaft_saliency_mean: 945.897934678194
+    pos_count: 1033
+    neg_count: 2
+  - expert: 3
+    score: 890206.8125
+    count: 752
+    gate_mean: 0.24708453645097447
+    norm_mean: 10648.465425531915
+    saliency_mean: 2665.463430851064
+    eaft_saliency_mean: 1183.7856549202127
+    pos_count: 739
+    neg_count: 1
+  - expert: 11
+    score: 706553.6875
+    count: 553
+    gate_mean: 0.1945613978353159
+    norm_mean: 10081.484629294755
+    saliency_mean: 2001.5232820976491
+    eaft_saliency_mean: 1277.67393761302
+    pos_count: 553
+    neg_count: 0
+  - expert: 23
+    score: 657733.6875
+    count: 703
+    gate_mean: 0.17538853695518092
+    norm_mean: 8704.560455192033
+    saliency_mean: 1489.7945412517781
+    eaft_saliency_mean: 935.6097972972973
+    pos_count: 687
+    neg_count: 1
+  - expert: 9
+    score: 623542.0
+    count: 871
+    gate_mean: 0.2090275060432513
+    norm_mean: 9826.083811710678
+    saliency_mean: 2085.1528415614234
+    eaft_saliency_mean: 715.8920780711826
+    pos_count: 871
+    neg_count: 0
+  - expert: 31
+    score: 565028.8125
+    count: 1157
+    gate_mean: 0.19463627319863466
+    norm_mean: 8754.416594641314
+    saliency_mean: 1734.0571521175455
+    eaft_saliency_mean: 488.3567955920484
+    pos_count: 1145
+    neg_count: 0
+  - expert: 20
+    score: 378949.90625
+    count: 390
+    gate_mean: 0.20604876004732572
+    norm_mean: 10941.121794871795
+    saliency_mean: 2286.996955128205
+    eaft_saliency_mean: 971.6664262820512
+    pos_count: 383
+    neg_count: 0
+  - expert: 30
+    score: 325350.5
+    count: 496
+    gate_mean: 0.22333560451384513
+    norm_mean: 10285.172379032258
+    saliency_mean: 2315.061995967742
+    eaft_saliency_mean: 655.9485887096774
+    pos_count: 496
+    neg_count: 0
+  - expert: 21
+    score: 199824.3125
+    count: 383
+    gate_mean: 0.1766292283180177
+    norm_mean: 8503.7454308094
+    saliency_mean: 1543.3219647519581
+    eaft_saliency_mean: 521.7344973890339
+    pos_count: 381
+    neg_count: 1
+  - expert: 24
+    score: 179142.828125
+    count: 266
+    gate_mean: 0.19042109726066875
+    norm_mean: 9695.277255639097
+    saliency_mean: 1876.217105263158
+    eaft_saliency_mean: 673.4692786654135
+    pos_count: 265
+    neg_count: 0
+  - expert: 17
+    score: 152491.796875
+    count: 213
+    gate_mean: 0.18851254243805934
+    norm_mean: 11131.571596244132
+    saliency_mean: 2113.1653462441313
+    eaft_saliency_mean: 715.9239289906103
+    pos_count: 210
+    neg_count: 3
+  - expert: 2
+    score: 27485.1640625
+    count: 33
+    gate_mean: 0.1479382370457505
+    norm_mean: 9999.76893939394
+    saliency_mean: 1445.3794981060605
+    eaft_saliency_mean: 832.883759469697
+    pos_count: 33
+    neg_count: 0
+- layer: 23
+  experts:
+  - expert: 8
+    score: 8198433.0
+    count: 5178
+    gate_mean: 0.3036076091532083
+    norm_mean: 12248.064889918887
+    saliency_mean: 3851.166473541908
+    eaft_saliency_mean: 1583.3203939745076
+    pos_count: 5140
+    neg_count: 2
+  - expert: 16
+    score: 5038745.5
+    count: 3847
+    gate_mean: 0.2625167763385024
+    norm_mean: 11435.561216532364
+    saliency_mean: 3000.634000519886
+    eaft_saliency_mean: 1309.7856771510267
+    pos_count: 3782
+    neg_count: 3
+  - expert: 26
+    score: 4878221.0
+    count: 1212
+    gate_mean: 0.2570629812309844
+    norm_mean: 25516.1699669967
+    saliency_mean: 7640.573432343234
+    eaft_saliency_mean: 4024.934818481848
+    pos_count: 1201
+    neg_count: 3
+  - expert: 31
+    score: 3972154.0
+    count: 6384
+    gate_mean: 0.3216184840764019
+    norm_mean: 6342.563909774436
+    saliency_mean: 2036.1942355889723
+    eaft_saliency_mean: 622.2045739348371
+    pos_count: 6362
+    neg_count: 2
+  - expert: 25
+    score: 3475427.5
+    count: 4504
+    gate_mean: 0.2721199049195854
+    norm_mean: 9318.55595026643
+    saliency_mean: 2521.8900976909413
+    eaft_saliency_mean: 771.6313277087033
+    pos_count: 4494
+    neg_count: 0
+  - expert: 18
+    score: 3238904.75
+    count: 4957
+    gate_mean: 0.20178367948734113
+    norm_mean: 9396.856969941497
+    saliency_mean: 1894.1030865442808
+    eaft_saliency_mean: 653.4001916481743
+    pos_count: 4954
+    neg_count: 1
+  - expert: 0
+    score: 3228441.25
+    count: 5009
+    gate_mean: 0.2853110982263176
+    norm_mean: 7035.926532241964
+    saliency_mean: 1989.5280495108805
+    eaft_saliency_mean: 644.5280994210422
+    pos_count: 4990
+    neg_count: 1
+  - expert: 7
+    score: 2047331.875
+    count: 3050
+    gate_mean: 0.19448774494108606
+    norm_mean: 9557.92393442623
+    saliency_mean: 1857.5575409836065
+    eaft_saliency_mean: 671.2563524590164
+    pos_count: 3048
+    neg_count: 1
+  - expert: 17
+    score: 2020966.875
+    count: 3739
+    gate_mean: 0.2688137645165402
+    norm_mean: 7056.767050013373
+    saliency_mean: 1855.0298208077027
+    eaft_saliency_mean: 540.5099959882322
+    pos_count: 3722
+    neg_count: 0
+  - expert: 6
+    score: 2002255.75
+    count: 1240
+    gate_mean: 0.22131170457409274
+    norm_mean: 14538.495161290322
+    saliency_mean: 3474.611693548387
+    eaft_saliency_mean: 1614.722379032258
+    pos_count: 1237
+    neg_count: 1
+  - expert: 15
+    score: 1954274.625
+    count: 4196
+    gate_mean: 0.2657053813807048
+    norm_mean: 6250.947569113441
+    saliency_mean: 1620.7942087702575
+    eaft_saliency_mean: 465.7470507626311
+    pos_count: 4171
+    neg_count: 2
+  - expert: 5
+    score: 1827684.125
+    count: 2913
+    gate_mean: 0.24599204569226313
+    norm_mean: 8605.602471678681
+    saliency_mean: 2125.106076210093
+    eaft_saliency_mean: 627.4233178853416
+    pos_count: 2904
+    neg_count: 1
+  - expert: 22
+    score: 1764598.0
+    count: 3976
+    gate_mean: 0.24161827348367548
+    norm_mean: 6845.744969818914
+    saliency_mean: 1635.1359406438633
+    eaft_saliency_mean: 443.8123742454728
+    pos_count: 3956
+    neg_count: 2
+  - expert: 28
+    score: 1712232.625
+    count: 1325
+    gate_mean: 0.19521921985554244
+    norm_mean: 11942.966037735849
+    saliency_mean: 2340.0190566037736
+    eaft_saliency_mean: 1292.251037735849
+    pos_count: 1321
+    neg_count: 0
+  - expert: 10
+    score: 1601986.0
+    count: 3174
+    gate_mean: 0.1736619993809566
+    norm_mean: 10098.15626969124
+    saliency_mean: 1735.0434782608695
+    eaft_saliency_mean: 504.7214870825457
+    pos_count: 3169
+    neg_count: 0
+  - expert: 14
+    score: 1444868.75
+    count: 1514
+    gate_mean: 0.21718594388571252
+    norm_mean: 11857.966974900924
+    saliency_mean: 2584.1299537648615
+    eaft_saliency_mean: 954.3386723910172
+    pos_count: 1489
+    neg_count: 3
+  - expert: 13
+    score: 1381975.5
+    count: 1076
+    gate_mean: 0.20329606577366258
+    norm_mean: 12070.312267657993
+    saliency_mean: 2807.77532527881
+    eaft_saliency_mean: 1284.363847583643
+    pos_count: 1060
+    neg_count: 4
+  - expert: 1
+    score: 879010.5625
+    count: 301
+    gate_mean: 0.23286706664633514
+    norm_mean: 19542.435215946844
+    saliency_mean: 5482.206395348837
+    eaft_saliency_mean: 2920.3008720930234
+    pos_count: 299
+    neg_count: 2
+  - expert: 23
+    score: 873814.0625
+    count: 944
+    gate_mean: 0.17724360449839446
+    norm_mean: 9516.739406779661
+    saliency_mean: 1659.012844279661
+    eaft_saliency_mean: 925.6504899364406
+    pos_count: 930
+    neg_count: 0
+  - expert: 27
+    score: 848427.1875
+    count: 662
+    gate_mean: 0.2100079124427634
+    norm_mean: 10586.747734138973
+    saliency_mean: 2234.098753776435
+    eaft_saliency_mean: 1281.6120657099698
+    pos_count: 662
+    neg_count: 0
+  - expert: 11
+    score: 778337.6875
+    count: 303
+    gate_mean: 0.262455150239145
+    norm_mean: 18232.592409240922
+    saliency_mean: 4922.569719471947
+    eaft_saliency_mean: 2568.7712458745873
+    pos_count: 294
+    neg_count: 0
+  - expert: 3
+    score: 756414.875
+    count: 841
+    gate_mean: 0.17548222490780135
+    norm_mean: 11706.86325802616
+    saliency_mean: 2022.4894470868014
+    eaft_saliency_mean: 899.4231569560047
+    pos_count: 839
+    neg_count: 0
+  - expert: 29
+    score: 711080.8125
+    count: 346
+    gate_mean: 0.2607188142103956
+    norm_mean: 20018.29190751445
+    saliency_mean: 5589.161849710983
+    eaft_saliency_mean: 2055.146856936416
+    pos_count: 346
+    neg_count: 0
+  - expert: 24
+    score: 687232.375
+    count: 639
+    gate_mean: 0.19073903019626
+    norm_mean: 9100.6627543036
+    saliency_mean: 1696.721635367762
+    eaft_saliency_mean: 1075.4810250391236
+    pos_count: 638
+    neg_count: 1
+  - expert: 30
+    score: 651755.0625
+    count: 474
+    gate_mean: 0.21616246026276537
+    norm_mean: 12563.08016877637
+    saliency_mean: 2756.7797995780593
+    eaft_saliency_mean: 1375.0106803797469
+    pos_count: 471
+    neg_count: 3
+  - expert: 4
+    score: 596830.375
+    count: 527
+    gate_mean: 0.21900628685272622
+    norm_mean: 12132.988614800759
+    saliency_mean: 2813.9962049335863
+    eaft_saliency_mean: 1132.5054554079697
+    pos_count: 527
+    neg_count: 0
+  - expert: 19
+    score: 560758.5
+    count: 470
+    gate_mean: 0.22265139640645779
+    norm_mean: 10801.791489361702
+    saliency_mean: 2560.959574468085
+    eaft_saliency_mean: 1193.1031914893617
+    pos_count: 466
+    neg_count: 3
+  - expert: 20
+    score: 531398.0
+    count: 414
+    gate_mean: 0.2077073359834975
+    norm_mean: 11398.107487922705
+    saliency_mean: 2420.618206521739
+    eaft_saliency_mean: 1283.5700483091787
+    pos_count: 395
+    neg_count: 5
+  - expert: 2
+    score: 376132.375
+    count: 283
+    gate_mean: 0.1886808442563977
+    norm_mean: 13896.262367491167
+    saliency_mean: 2731.0909893992934
+    eaft_saliency_mean: 1329.089664310954
+    pos_count: 275
+    neg_count: 0
+  - expert: 21
+    score: 373574.53125
+    count: 348
+    gate_mean: 0.1880584366020115
+    norm_mean: 9997.448275862069
+    saliency_mean: 1856.0395114942528
+    eaft_saliency_mean: 1073.4900323275863
+    pos_count: 348
+    neg_count: 0
+  - expert: 9
+    score: 105758.3125
+    count: 100
+    gate_mean: 0.2087152862548828
+    norm_mean: 8018.251875
+    saliency_mean: 1585.9290625
+    eaft_saliency_mean: 1057.583125
+    pos_count: 100
+    neg_count: 0
+  - expert: 12
+    score: 74487.125
+    count: 54
+    gate_mean: 0.2243667002077456
+    norm_mean: 10070.079861111111
+    saliency_mean: 2309.3234953703704
+    eaft_saliency_mean: 1379.3912037037037
+    pos_count: 54
+    neg_count: 0

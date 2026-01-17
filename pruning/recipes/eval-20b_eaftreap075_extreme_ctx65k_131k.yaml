@@ -1,0 +1,56 @@
+schema_version: 1
+kind: eval_recipe
+extends: eval-base.yaml
+
+name: eaft_parity_20b_base_vs_eaftreap075_ctx65k_131k
+description: >
+  Stress-test determinism and quality at very long contexts (65K and 131K),
+  while keeping per-pack token budget ~1M by scaling num_blocks down.
+  This is an expensive “production-style” validation.
+
+pair:
+  left:
+    label: base_20b
+    model_id: openai/gpt-oss-20b
+  right:
+    label: eaftreap_075
+    model_id: eaftreap_budgeted_keepfrac075
+    model_path_from_manifest:
+      manifest_json: harmony/cuda-norm/artifacts/20b_pruned_models_eaftreap_budgeted/manifest.json
+      field: out_dir
+
+run_matrix:
+  - name: ctx65536_blocks16_bs1
+    collector_overrides:
+      seq_lens_csv: "65536"
+      num_blocks: 16
+      batch_size: 1
+      sample_points: 200000
+      top_k: 4
+    engine_overrides:
+      env:
+        MEM_FRACTION_STATIC: "0.86"
+        CHUNKED_PREFILL_SIZE: "16384"
+        # Optional if needed:
+        # MAX_TOTAL_TOKENS: "66560"
+  - name: ctx131072_blocks8_bs1
+    collector_overrides:
+      seq_lens_csv: "131072"
+      num_blocks: 8
+      batch_size: 1
+      sample_points: 200000
+      top_k: 4
+    engine_overrides:
+      env:
+        MEM_FRACTION_STATIC: "0.86"
+        CHUNKED_PREFILL_SIZE: "16384"
+        # Optional if needed:
+        # MAX_TOTAL_TOKENS: "132096"
+
+execution_notes:
+  - "Requires a large-memory GPU; B200 recommended for stability."
+  - "If OOM: decrease sample_points, or reduce blocks (token budget), or set MAX_TOTAL_TOKENS explicitly."
+
+expected_outputs:
+  parity_summary_md: harmony/cuda-norm/reports/eaftreap75_ctx65k_131k.md
+

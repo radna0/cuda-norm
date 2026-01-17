@@ -71,6 +71,7 @@ BATCH_SIZE="1"
 CALIB_PACKS_REPO="radna0/harmony-qwen3-calib-packs-v2-20260113"
 CALIB_PACK_FILES="packs/reasoning_style_10k_v2/reasoning_style_10k_v2.parquet,tool_agentic_10k_v6.parquet,packs/calib_prompt_10000_v2/calib_prompt_10000_v2.parquet"
 CALIB_PACK_SAMPLE_STRATEGY="per_file"
+CALIB_PACK_WEIGHTS_CSV=""
 KEEP_FRACS_CSV="0.75"
 KEEP_FRAC="0.75"
 KEEP_N_ROUND="ceil"
@@ -106,6 +107,7 @@ while [[ $# -gt 0 ]]; do
     --calib-packs-repo) CALIB_PACKS_REPO="$2"; shift 2;;
     --calib-pack-files) CALIB_PACK_FILES="$2"; shift 2;;
     --calib-pack-sample-strategy) CALIB_PACK_SAMPLE_STRATEGY="$2"; shift 2;;
+    --calib-pack-weights-csv) CALIB_PACK_WEIGHTS_CSV="$2"; shift 2;;
     --keep-fracs-csv) KEEP_FRACS_CSV="$2"; shift 2;;
     --keep-frac) KEEP_FRAC="$2"; shift 2;;
     --keep-n-round) KEEP_N_ROUND="$2"; shift 2;;
@@ -167,6 +169,7 @@ python -m versa run \
     --eaft-cc-quantile "${EAFT_CC_Q}" --eaft-uncertain-quantile "${EAFT_UNCERTAIN_Q}" --eaft-entropy-topk "${EAFT_ENTROPY_TOPK}" \
     --eaft-w-good "${EAFT_W_GOOD}" --eaft-w-uncertain "${EAFT_W_UNCERTAIN}" --eaft-w-conflict "${EAFT_W_CONFLICT}" \
     --calib-packs-repo "${CALIB_PACKS_REPO}" --calib-pack-files-csv "${CALIB_PACK_FILES}" --calib-pack-sample-strategy "${CALIB_PACK_SAMPLE_STRATEGY}" \
+    --calib-pack-weights-csv "${CALIB_PACK_WEIGHTS_CSV}" \
     --keep-fracs-csv "${KEEP_FRACS_CSV}" \
     --keep-n-round "${KEEP_N_ROUND}" --keep-n-multiple-of "${KEEP_N_MULTIPLE_OF}" \
     --keep-frac "${KEEP_FRAC}" --min-keep-per-layer "${MIN_KEEP_PER_LAYER}" --max-keep-per-layer "${MAX_KEEP_PER_LAYER}" \
