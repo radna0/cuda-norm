@@ -25,11 +25,13 @@ REPO_ROOT="$(cd "${ROOT_DIR}/../.." && pwd)"
 
 KERNEL_ID=""
 BUILD_REMOTE_LOG=""
+START_BUILD="0"
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --kernel-id) KERNEL_ID="$2"; shift 2;;
     --build-remote-log) BUILD_REMOTE_LOG="$2"; shift 2;;
+    --start-build) START_BUILD="1"; shift 1;;
     -h|--help)
       sed -n '1,120p' "$0"
       exit 0
@@ -44,14 +46,6 @@ done
 if [[ -z "${KERNEL_ID}" ]]; then
   KERNEL_ID="${REMOTE_JUPYTER_KERNEL_ID:-}"
 fi
-if [[ -z "${KERNEL_ID}" ]]; then
-  echo "[err] --kernel-id (or REMOTE_JUPYTER_KERNEL_ID) is required" >&2
-  exit 2
-fi
-if [[ -z "${BUILD_REMOTE_LOG}" ]]; then
-  echo "[err] --build-remote-log is required" >&2
-  exit 2
-fi
 
 set -a
 source "${ROOT_DIR}/.env"
@@ -64,9 +58,71 @@ fi
 
 export REMOTE_JUPYTER_URL="${KAGGLE_URL}"
 
+echo "[*] remote_url=${REMOTE_JUPYTER_URL}"
+
+start_build() {
+  local out
+  out="$(
+    bash "${ROOT_DIR}/scripts/versa_run_pruning_track_kaggle.sh" \
+      ${KERNEL_ID:+--kernel-id "${KERNEL_ID}"} \
+      --task build_pruned_20b_eaftreap_keepfrac \
+      --model-id-20b openai/gpt-oss-20b \
+      --num-rows 2000 --max-seq-length 4096 --batch-size 1 \
+      --calib-packs-repo radna0/harmony-qwen3-calib-packs-v2-20260113 \
+      --calib-pack-files "packs/reasoning_style_10k_v2/reasoning_style_10k_v2.parquet,tool_agentic_10k_v6.parquet,packs/calib_prompt_10000_v2/calib_prompt_10000_v2.parquet" \
+      --calib-pack-sample-strategy "per_file" \
+      --keep-fracs-csv "0.75" \
+      --keep-n-round "ceil" --keep-n-multiple-of 4 \
+      --min-keep-per-layer 24 --max-keep-per-layer 24 \
+      --core-pos-top-m 4 --core-count-top-m 0 \
+      || true
+  )"
+  echo "${out}"
+}
+
+extract_remote_log() {
+  local text="$1"
+  echo "${text}" | rg -n "remote_log=" | tail -n 1 | sed -E 's/^.*remote_log=//'
+}
+
+extract_kernel_id() {
+  local text="$1"
+  python - <<PY
+import re, sys
+s=sys.stdin.read()
+m=re.search(r'\"kernel_id\"\\s*:\\s*\"([0-9a-f\\-]+)\"', s)
+if not m:
+    sys.exit(1)
+print(m.group(1))
+PY
+}
+
+if [[ "${START_BUILD}" == "1" || -z "${BUILD_REMOTE_LOG}" ]]; then
+  echo "[*] starting prune build (keep_frac=0.75, keep_n=24 uniform)..."
+  BUILD_OUT="$(start_build)"
+  echo "${BUILD_OUT}"
+  if [[ -z "${KERNEL_ID}" ]]; then
+    if KERNEL_ID="$(printf "%s" "${BUILD_OUT}" | extract_kernel_id)"; then
+      :
+    else
+      echo "[err] could not infer kernel_id from build output; pass --kernel-id" >&2
+      exit 2
+    fi
+  fi
+  BUILD_REMOTE_LOG="$(extract_remote_log "${BUILD_OUT}")"
+fi
+
+if [[ -z "${KERNEL_ID}" ]]; then
+  echo "[err] kernel_id is unknown; pass --kernel-id or use --start-build" >&2
+  exit 2
+fi
+if [[ -z "${BUILD_REMOTE_LOG}" ]]; then
+  echo "[err] build remote log is unknown; pass --build-remote-log or use --start-build" >&2
+  exit 2
+fi
+
 echo "[*] kernel_id=${KERNEL_ID}"
 echo "[*] build_remote_log=${BUILD_REMOTE_LOG}"
-echo "[*] remote_url=${REMOTE_JUPYTER_URL}"
 
 echo "[*] waiting for prune build completion..."
 bash "${ROOT_DIR}/scripts/versa_monitor_kaggle_log.sh" \
@@ -78,8 +134,33 @@ bash "${ROOT_DIR}/scripts/versa_monitor_kaggle_log.sh" \
 
 echo "[+] prune build complete; downloading manifest + build report"
 
-MANIFEST_REMOTE="artifacts/harmony_cuda_norm/20b_pruned_models_eaftreap_keepfrac/manifest_eaftreap_keepfrac.json"
-BUILD_REPORT_REMOTE="reports/20b_structural_prune_build_eaftreap_keepfrac.md"
+remote_find_one() {
+  local pattern="$1"
+  local out
+  out="$(
+    PYTHONPATH="${REPO_ROOT}/third_party/Versa" python -m versa run \
+      --backend jupyter \
+      --url "${REMOTE_JUPYTER_URL}" \
+      ${REMOTE_JUPYTER_TOKEN:+--token "${REMOTE_JUPYTER_TOKEN}"} \
+      --kernel-id "${KERNEL_ID}" \
+      --cwd "/kaggle/working" \
+      bash -lc "find . -maxdepth 10 -name '${pattern}' -print | head -n 1" \
+      | rg -v '^\\[versa\\]' || true
+  )"
+  out="$(echo "${out}" | tail -n 1 | tr -d '\r' | xargs || true)"
+  if [[ -z "${out}" ]]; then
+    echo "[err] remote_find_one: not found: ${pattern}" >&2
+    return 1
+  fi
+  # Normalize: strip leading ./ and ensure path is relative to /kaggle/working for /files.
+  out="${out#./}"
+  echo "${out}"
+}
+
+# Do not assume a fixed artifacts root: Kaggle/VERSA sync can change layout.
+# Instead, locate the files on the remote filesystem deterministically.
+MANIFEST_REMOTE="$(remote_find_one 'manifest_eaftreap_keepfrac.json')"
+BUILD_REPORT_REMOTE="$(remote_find_one '20b_structural_prune_build_eaftreap_keepfrac.md')"
 
 MANIFEST_LOCAL="harmony/cuda-norm/artifacts/20b_pruned_models_eaftreap_keepfrac/manifest_eaftreap_keepfrac.json"
 BUILD_REPORT_LOCAL="harmony/cuda-norm/reports/20b_structural_prune_build_eaftreap_keepfrac.md"
