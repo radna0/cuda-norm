@@ -482,7 +482,10 @@ def main() -> None:
                 base_len = int(seqbuf.num_computed_tokens[0])
                 scheduled_full_cpu[0] = 1
                 _ctx_unused, greedy_ids, input_ids_buf, position_ids_buf, _m = executor.execute_verify(
-                    num_tokens=1,
+                    # Use a fixed token bucket (block_size) for 1-token steps to
+                    # keep greedy candidate generation numerically consistent
+                    # with the block-verify kernel on TPU.
+                    num_tokens=int(block_size),
                     scheduled_full_cpu=scheduled_full_cpu,
                     active_mask_full_cpu=active_mask_full_cpu,
                     input_ids_buf=input_ids_buf,

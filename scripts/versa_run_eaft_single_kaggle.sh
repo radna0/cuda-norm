@@ -22,6 +22,7 @@ set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 REPO_ROOT="$(cd "${ROOT_DIR}/../.." && pwd)"
+SYNC_DIR="${ROOT_DIR}/.versa_sync_min"
 
 if [[ -z "${REMOTE_JUPYTER_URL:-}" ]]; then
   echo "[err] REMOTE_JUPYTER_URL is not set" >&2
@@ -83,6 +84,10 @@ TS="$(date +%Y%m%d_%H%M%S)"
 SLUG="$(echo "${MODEL_ID}" | tr '/:' '__')"
 REMOTE_LOG="${EAFT_REMOTE_LOG_DIR}/eaft_single_${SLUG}_${TS}.log"
 
+# Ensure the minimal sync tree exists so the remote kernel runs the repo code
+# from `/kaggle/working/cuda-norm/...` (not an ephemeral upload path).
+python "${ROOT_DIR}/scripts/versa_prepare_sync_min.py" --out "${SYNC_DIR}" >/dev/null
+
 EXTRA_ARGS=()
 if [[ "${SKIP_PREDOWNLOAD}" == "1" ]]; then
   EXTRA_ARGS+=(--skip-predownload)
@@ -103,12 +108,19 @@ python -m versa run \
   ${REMOTE_JUPYTER_TOKEN:+--token "${REMOTE_JUPYTER_TOKEN}"} \
   ${KERNEL_ID:+--kernel-id "${KERNEL_ID}"} \
   --cwd "/kaggle/working" \
+  --sync-local-dir "${SYNC_DIR}" \
+  --sync-remote-dir "harmony/cuda-norm" \
   --log-path "${REMOTE_LOG}" \
   ${DETACH:+--detach} \
   --bootstrap-cmd "mkdir -p ${EAFT_REMOTE_LOG_DIR}" \
   --bootstrap-cmd "mkdir -p /kaggle/working/eaft_cache" \
+  --bootstrap-cmd "python -m pip install -U pip" \
+  --bootstrap-cmd "python -m pip install -q modal datasets transformers==4.56.2 tokenizers safetensors pyarrow pandas accelerate huggingface-hub hf_transfer" \
+  --bootstrap-cmd "python -m pip install -q 'sglang[all]'" \
+  --bootstrap-cmd "python -m pip install -q torch==2.9.1 --index-url https://download.pytorch.org/whl/cu128" \
   --env-file "${EAFT_ENV_FILE}" \
   --env "GPU_TYPE=${GPU_TYPE}" \
+  --env "EAFT_LOCAL_MODE=1" \
   --env "SGLANG_ALLOW_OVERWRITE_LONGER_CONTEXT_LEN=1" \
   "${EXTRA_ENV[@]}" \
   "${ROOT_DIR}/modal/collect_calib_packs_eaft_single.py::main" -- \

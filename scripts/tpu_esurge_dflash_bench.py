@@ -79,6 +79,7 @@ def main() -> None:
 
     teacher_snapshot = Path(args.teacher_snapshot_dir).resolve()
     prompt_from_cache_dir = str(args.prompt_from_cache_dir).strip()
+    position_offset = 0
     if prompt_from_cache_dir:
         cache_dir = Path(prompt_from_cache_dir).expanduser().resolve()
         ctx_tokens = np.load(cache_dir / "ctx_token_ids.npy", mmap_mode="r")
@@ -89,6 +90,13 @@ def main() -> None:
         ctx = np.asarray(ctx_tokens[i], dtype=np.int32)
         anchor = int(np.asarray(anchor_ids[i]))
         prompt_ids = np.concatenate([ctx, np.asarray([anchor], dtype=np.int32)], axis=0)
+        pos_path = cache_dir / "ctx_pos_start_i32.npy"
+        if pos_path.exists():
+            try:
+                pos_arr = np.load(pos_path, mmap_mode="r")
+                position_offset = int(np.asarray(pos_arr[i]))
+            except Exception:
+                position_offset = 0
     else:
         tok = AutoTokenizer.from_pretrained(str(teacher_snapshot), local_files_only=True, use_fast=True)
         base_prompt = "You are a helpful assistant.\n\nUser: Explain speculative decoding in one paragraph.\nAssistant:"
@@ -178,6 +186,7 @@ def main() -> None:
         draft_run_dir=str(run_dir),
         draft_cfg=draft_cfg,
         target_rope=rope,
+        position_offset=int(position_offset),
         block_size=int(args.block_size),
         max_new_tokens=int(args.max_new_tokens),
         max_model_len=int(args.max_model_len),

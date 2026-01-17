@@ -161,6 +161,16 @@ def main() -> None:
     page_table_cpu = seqbuf.page_table[0].get_cpu_tensor()
     page_table_version = getattr(seqbuf.page_table[0], "cpu_version", None)
 
+    def _zero(x):
+        if isinstance(x, jax.Array):
+            return jnp.zeros_like(x)
+        return x
+
+    # Ensure KV is empty before the first prefill (match cache builder).
+    with mesh:
+        executor.kv_pages = jax.tree_util.tree_map(_zero, executor.kv_pages)
+        executor.kv_pages = jax.block_until_ready(executor.kv_pages)
+
     # Absolute position offset (must match the cache builder, otherwise
     # multi-token verify predictions will not match cached targets).
     try:
@@ -169,6 +179,16 @@ def main() -> None:
     except Exception:
         pos_off = 0
     pos_off_cpu = np.asarray([np.int32(pos_off)], dtype=np.int32)
+
+    # Match cache-builder initialization: write prompt tokens into SequenceBuffer.
+    seqbuf.token_ids[0, :prompt_len] = prompt_ids
+    seqbuf.num_tokens[0] = int(prompt_len)
+    seqbuf.num_tokens_no_spec[0] = int(prompt_len)
+    seqbuf.num_computed_tokens[0] = 0
+    seqbuf.temperature[0] = 0.0
+    seqbuf.top_k[0] = 1
+    seqbuf.top_p[0] = 1.0
+    seqbuf.min_p[0] = 0.0
 
     # Prefill ctx tokens (exclude anchor).
     done = 0
@@ -197,9 +217,14 @@ def main() -> None:
     seqbuf.num_computed_tokens[0] = int(ctx_len)
 
     # 1-token greedy next.
+    #
+    # IMPORTANT: use a fixed token bucket (block_size) even for 1-token steps.
+    # This matches how we avoid on-demand compile for prefill buckets, and it
+    # keeps the "1-token" path numerically consistent with multi-token verify
+    # on TPU (same compiled executable shape).
     scheduled_full_cpu[0] = 1
     _ctx_unused, greedy1, input_ids_buf, position_ids_buf, _m = executor.execute_verify(
-        num_tokens=1,
+        num_tokens=int(args.block_size),
         scheduled_full_cpu=scheduled_full_cpu,
         active_mask_full_cpu=active_mask_full_cpu,
         input_ids_buf=input_ids_buf,
@@ -228,7 +253,7 @@ def main() -> None:
         base_len = int(seqbuf.num_computed_tokens[0])
         scheduled_full_cpu[0] = 1
         _ctx_unused, greedy_j, input_ids_buf, position_ids_buf, _m = executor.execute_verify(
-            num_tokens=1,
+            num_tokens=int(args.block_size),
             scheduled_full_cpu=scheduled_full_cpu,
             active_mask_full_cpu=active_mask_full_cpu,
             input_ids_buf=input_ids_buf,
@@ -256,11 +281,6 @@ def main() -> None:
     cand[1:] = tgt
 
     # Reset KV and re-prefill, then verify the whole block at once.
-    def _zero(x):
-        if isinstance(x, jax.Array):
-            return jnp.zeros_like(x)
-        return x
-
     with mesh:
         executor.kv_pages = jax.tree_util.tree_map(_zero, executor.kv_pages)
         executor.kv_pages = jax.block_until_ready(executor.kv_pages)

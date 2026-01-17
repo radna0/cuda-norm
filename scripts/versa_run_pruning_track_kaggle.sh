@@ -11,6 +11,7 @@ set -euo pipefail
 #
 # Optional:
 #   export REMOTE_JUPYTER_TOKEN=""
+#   export REMOTE_JUPYTER_KERNEL_ID="" # reuse an existing kernel
 #   export PRUNING_ENV_FILE="/home/kojoe/harmony/cuda-norm/.env"
 #   export PRUNING_REMOTE_LOG_DIR="logs"
 #
@@ -52,6 +53,7 @@ fi
 PRUNING_REMOTE_LOG_DIR="${PRUNING_REMOTE_LOG_DIR:-logs}"
 PRUNING_ENV_FILE="${PRUNING_ENV_FILE:-${ROOT_DIR}/.env}"
 DETACH="1"
+KERNEL_ID="${REMOTE_JUPYTER_KERNEL_ID:-}"
 
 TASK=""
 MODEL_ID_20B="openai/gpt-oss-20b"
@@ -122,6 +124,7 @@ while [[ $# -gt 0 ]]; do
     --eaft-w-good) EAFT_W_GOOD="$2"; shift 2;;
     --eaft-w-uncertain) EAFT_W_UNCERTAIN="$2"; shift 2;;
     --eaft-w-conflict) EAFT_W_CONFLICT="$2"; shift 2;;
+    --kernel-id) KERNEL_ID="$2"; shift 2;;
     --no-detach) DETACH=""; shift 1;;
     -h|--help)
       sed -n '1,140p' "$0"
@@ -142,19 +145,23 @@ fi
 TS="$(date +%Y%m%d_%H%M%S)"
 REMOTE_LOG="${PRUNING_REMOTE_LOG_DIR}/${TASK}_${TS}.log"
 
+python "${ROOT_DIR}/scripts/versa_prepare_sync_min.py" --out "${SYNC_DIR}" >/dev/null
+
 PYTHONPATH="${REPO_ROOT}/third_party/Versa" \
 python -m versa run \
   --backend jupyter \
   --url "${REMOTE_JUPYTER_URL}" \
   ${REMOTE_JUPYTER_TOKEN:+--token "${REMOTE_JUPYTER_TOKEN}"} \
+  ${KERNEL_ID:+--kernel-id "${KERNEL_ID}"} \
   --cwd "/kaggle/working" \
   --sync-local-dir "${SYNC_DIR}" \
-  --sync-remote-dir "cuda-norm" \
+  --sync-remote-dir "harmony/cuda-norm" \
   --log-path "${REMOTE_LOG}" \
   ${DETACH:+--detach} \
   --bootstrap-cmd "mkdir -p /kaggle/working/${PRUNING_REMOTE_LOG_DIR}" \
   --bootstrap-cmd "python -m pip install -U pip" \
-  --bootstrap-cmd "python -m pip install -q modal datasets transformers tokenizers safetensors pyarrow pandas accelerate huggingface-hub hf_transfer" \
+  --bootstrap-cmd "python -m pip install -q modal datasets transformers==4.56.2 tokenizers safetensors pyarrow pandas accelerate huggingface-hub hf_transfer" \
+  --bootstrap-cmd "python -m pip install -q torch==2.9.1 --index-url https://download.pytorch.org/whl/cu128" \
   --bootstrap-cmd "python -m pip uninstall -y kernels || true" \
   --env-file "${PRUNING_ENV_FILE}" \
   --env "PRUNING_LOCAL_MODE=1" \

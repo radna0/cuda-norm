@@ -27,6 +27,7 @@ python -m versa run \
   ${REMOTE_JUPYTER_TOKEN:+--token "${REMOTE_JUPYTER_TOKEN}"} \
   --detach \
   --log-path "logs/versa_smoke.log" \
+  --bootstrap-cmd "mkdir -p logs" \
   --bootstrap-cmd "python -V" \
   --bootstrap-cmd "python -c \"import sys; print(sys.executable)\"" \
   --bootstrap-cmd "nvidia-smi || true" \

@@ -307,6 +307,11 @@ def main() -> None:
 
     cand = np.concatenate([np.asarray([anchor_id], dtype=np.int32), np.asarray(draft_tokens, dtype=np.int32)], axis=0)
     seqbuf.token_ids[0, int(ctx_len) : int(ctx_len) + int(block_size)] = cand
+    # IMPORTANT: verify-mode uses `seq_lens` to build cache metadata and to
+    # decide how many tokens exist in the request. We must extend num_tokens to
+    # include the full verify block, matching the cache builder + runtime decode.
+    seqbuf.num_tokens[0] = int(ctx_len + int(block_size))
+    seqbuf.num_tokens_no_spec[0] = int(ctx_len + int(block_size))
     scheduled_full_cpu[0] = int(block_size)
     _ctx_part, greedy_ids, input_ids_buf, position_ids_buf, _m = executor.execute_verify(
         num_tokens=int(block_size),

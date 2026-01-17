@@ -37,6 +37,26 @@ APP_NAME = "collect-calib-packs-eaft-single"
 
 _KAGGLE_WORKDIR = Path("/kaggle/working")
 
+def _local_mode_enabled() -> bool:
+    # When running inside a Kaggle kernel via Versa, we must not submit Modal jobs.
+    # Instead, execute Modal-decorated functions in-process via `.local()`.
+    flag = (os.environ.get("EAFT_LOCAL_MODE") or os.environ.get("PRUNING_LOCAL_MODE") or "").strip().lower()
+    if flag in ("1", "true", "yes", "y"):
+        return True
+    try:
+        return _KAGGLE_WORKDIR.exists()
+    except Exception:
+        return False
+
+
+_EAFT_LOCAL_MODE = _local_mode_enabled()
+
+
+def _invoke(fn: Any, *args: Any, **kwargs: Any) -> Any:
+    if _EAFT_LOCAL_MODE and hasattr(fn, "local"):
+        return fn.local(*args, **kwargs)
+    return fn.remote(*args, **kwargs)
+
 
 def _default_eaft_cache_root() -> Path:
     override = (os.environ.get("EAFT_CACHE_ROOT") or "").strip()
@@ -1445,14 +1465,15 @@ def main(
         model_path = str(model_path or "").strip()
         if not model_path:
             print(f"[*] CPU predownload model: {model_id}", flush=True)
-            predownload_model.remote(model_id=str(model_id))
+            _invoke(predownload_model, model_id=str(model_id))
         print(f"[*] CPU predownload packs: {dataset_repo} ({len(pack_files)} files)", flush=True)
-        predownload_packs.remote(dataset_repo=str(dataset_repo), pack_files=pack_files)
+        _invoke(predownload_packs, dataset_repo=str(dataset_repo), pack_files=pack_files)
         if bool(predownload_only):
             print("[+] Predownload complete (predownload-only).", flush=True)
             return
 
-    res = collect_calib_packs_eaft_single.remote(
+    res = _invoke(
+        collect_calib_packs_eaft_single,
         dataset_repo=str(dataset_repo),
         pack_files=pack_files,
         model_id=str(model_id),
