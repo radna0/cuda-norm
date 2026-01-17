@@ -169,7 +169,7 @@ python -m versa run \
   --env "PRUNING_MODEL_DIR=/kaggle/working/pruning_cache/model" \
   --env "PRUNING_DATA_DIR=/kaggle/working/pruning_cache/data" \
   --env "PRUNING_HF_HOME=/kaggle/working/pruning_cache/hf_cache" \
-  --env "PRUNING_ARTIFACTS_DIR=/kaggle/working/harmony/cuda-norm/artifacts" \
+  --env "PRUNING_ARTIFACTS_DIR=/kaggle/working/artifacts/harmony_cuda_norm" \
   --env "PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True" \
   --env "MODEL_DIR_20B=/kaggle/input/gpt-oss-20b/transformers/default/1" \
   "${ROOT_DIR}/modal/gpt_oss_pruning_track.py::main" -- \

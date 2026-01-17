@@ -82,14 +82,20 @@ def main() -> None:
     os.environ.setdefault("HF_HOME", "/dev/shm/hf")
     os.environ.setdefault("HF_HUB_CACHE", "/dev/shm/hf/hub")
     os.environ.setdefault("XDG_CACHE_HOME", "/dev/shm/xdg")
-    os.environ.setdefault("JAX_COMPILATION_CACHE_DIR", "/dev/shm/jax_compilation_cache_dflash")
     os.environ.setdefault("JAX_TRACEBACK_FILTERING", "off")
     os.environ.setdefault("TMPDIR", "/dev/shm/tmp")
     Path(os.environ["HF_HOME"]).mkdir(parents=True, exist_ok=True)
     Path(os.environ["HF_HUB_CACHE"]).mkdir(parents=True, exist_ok=True)
     Path(os.environ["XDG_CACHE_HOME"]).mkdir(parents=True, exist_ok=True)
-    Path(os.environ["JAX_COMPILATION_CACHE_DIR"]).mkdir(parents=True, exist_ok=True)
     Path(os.environ["TMPDIR"]).mkdir(parents=True, exist_ok=True)
+
+    # Persistent compilation caches can explode in size and fill /dev/shm.
+    # Default: disabled (still uses in-memory compilation cache).
+    if os.environ.get("ENABLE_JAX_PERSISTENT_COMPILATION_CACHE", "0").lower() in ("1", "true", "yes", "y", "on"):
+        os.environ.setdefault("JAX_COMPILATION_CACHE_DIR", "/dev/shm/jax_compilation_cache_dflash")
+        Path(os.environ["JAX_COMPILATION_CACHE_DIR"]).mkdir(parents=True, exist_ok=True)
+    else:
+        os.environ.pop("JAX_COMPILATION_CACHE_DIR", None)
 
     qk_norm = str(args.qk_norm).lower() in ("1", "true", "yes", "y", "on")
     remat = str(args.remat).lower() in ("1", "true", "yes", "y", "on")

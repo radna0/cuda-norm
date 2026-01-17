@@ -156,6 +156,18 @@ def main() -> None:
         help="If set, writes an mmap-friendly cache directory (meta.json + .npy files).",
     )
     ap.add_argument(
+        "--stream-out-dir",
+        type=str,
+        default="true",
+        help="If out_dir is set, write arrays directly into .npy memmaps (reduces peak RAM).",
+    )
+    ap.add_argument(
+        "--write-npz",
+        type=str,
+        default="true",
+        help="Whether to also write the legacy .npz output. For large runs, set to 'false' to avoid doubling /dev/shm usage.",
+    )
+    ap.add_argument(
         "--sharding-axis-dims",
         default="1,8,1,1,1",
         help="5D sharding axis dims (dp,fsdp,ep,tp,sp). Default fits v6e-8 single host.",
@@ -304,16 +316,42 @@ def main() -> None:
 
     # Host arrays (bf16) in /dev/shm.
     n_out = int(n * rollout_steps)
-    ctx_feats = np.empty((n_out, ctx_len, k * hidden), dtype=ml_dtypes.bfloat16)
-    anchor_emb = np.empty((n_out, hidden), dtype=ml_dtypes.bfloat16)
-    target_ids = np.empty((n_out, block_size - 1), dtype=np.int32)
-    anchor_ids = np.empty((n_out,), dtype=np.int32)
-    ctx_token_ids = np.empty((n_out, ctx_len), dtype=np.int32)
+    stream_out_dir = str(args.stream_out_dir).strip().lower() in ("1", "true", "yes", "y", "on")
+    out_dir = Path(str(args.out_dir)).resolve() if str(args.out_dir).strip() else None
+    using_memmap = bool(out_dir is not None and stream_out_dir)
+
+    if using_memmap:
+        from numpy.lib.format import open_memmap
+
+        out_dir.mkdir(parents=True, exist_ok=True)
+        ctx_feats_u16 = open_memmap(
+            out_dir / "context_features_u16.npy",
+            mode="w+",
+            dtype=np.uint16,
+            shape=(n_out, ctx_len, k * hidden),
+        )
+        anchor_emb_u16 = open_memmap(
+            out_dir / "anchor_embedding_u16.npy",
+            mode="w+",
+            dtype=np.uint16,
+            shape=(n_out, hidden),
+        )
+        target_ids = open_memmap(out_dir / "target_ids.npy", mode="w+", dtype=np.int32, shape=(n_out, block_size - 1))
+        anchor_ids = open_memmap(out_dir / "anchor_ids.npy", mode="w+", dtype=np.int32, shape=(n_out,))
+        ctx_token_ids = open_memmap(out_dir / "ctx_token_ids.npy", mode="w+", dtype=np.int32, shape=(n_out, ctx_len))
+        ctx_pos_start_i32 = open_memmap(out_dir / "ctx_pos_start_i32.npy", mode="w+", dtype=np.int32, shape=(n_out,))
+        anchor_pos_i32 = open_memmap(out_dir / "anchor_pos_i32.npy", mode="w+", dtype=np.int32, shape=(n_out,))
+    else:
+        ctx_feats_u16 = np.empty((n_out, ctx_len, k * hidden), dtype=np.uint16)
+        anchor_emb_u16 = np.empty((n_out, hidden), dtype=np.uint16)
+        target_ids = np.empty((n_out, block_size - 1), dtype=np.int32)
+        anchor_ids = np.empty((n_out,), dtype=np.int32)
+        ctx_token_ids = np.empty((n_out, ctx_len), dtype=np.int32)
     # Absolute position metadata for positional-parity training.
     # ctx positions are contiguous: [ctx_pos_start .. ctx_pos_start + ctx_len - 1]
     # anchor token position is anchor_pos.
-    ctx_pos_start_i32 = np.empty((n_out,), dtype=np.int32)
-    anchor_pos_i32 = np.empty((n_out,), dtype=np.int32)
+        ctx_pos_start_i32 = np.empty((n_out,), dtype=np.int32)
+        anchor_pos_i32 = np.empty((n_out,), dtype=np.int32)
 
     pos_offsets = _parse_csv_ints(str(args.position_offsets))
     if not pos_offsets:
@@ -583,10 +621,12 @@ def main() -> None:
                 emb = model.get_embedding()(jnp.asarray([[anchor_id]], dtype=jnp.int32))[:, 0, :]
                 emb = jax.block_until_ready(emb)
 
-            ctx_feats[out_pos] = np.asarray(
+            ctx_bf16 = np.asarray(
                 jax.device_get(ctx_full.reshape((int(ctx_len), int(k * hidden)))), dtype=ml_dtypes.bfloat16
             )
-            anchor_emb[out_pos] = np.asarray(jax.device_get(emb[0]), dtype=ml_dtypes.bfloat16)
+            emb_bf16 = np.asarray(jax.device_get(emb[0]), dtype=ml_dtypes.bfloat16)
+            ctx_feats_u16[out_pos] = ctx_bf16.view(np.uint16)
+            anchor_emb_u16[out_pos] = emb_bf16.view(np.uint16)
             target_ids[out_pos] = tgt_verify
             anchor_ids[out_pos] = np.int32(anchor_id)
             ctx_token_ids[out_pos] = ctx_ids
@@ -628,6 +668,10 @@ def main() -> None:
         "rollout_steps": int(rollout_steps),
         "num_samples": int(n_out),
         "batch_size": int(args.batch_size),
+        "prefill_chunk": int(args.prefill_chunk),
+        "page_size": int(args.page_size),
+        "hbm_utilization": float(args.hbm_utilization),
+        "sharding_axis_dims": list(sharding_axis_dims),
         "target_layer_ids": target_layer_ids,
         "add_one_for_pre_layer_capture": True,
         "target_ids_mode": "block_verify_target_predict_shifted",
@@ -647,24 +691,39 @@ def main() -> None:
     # NOTE: NumPy does not have a native bfloat16 dtype. If we save ml_dtypes.bfloat16
     # directly, it gets serialized as a void dtype (e.g. |V2), which is annoying to
     # load robustly. Save bf16 tensors as raw uint16 bitpatterns instead.
-    ctx_feats_u16 = ctx_feats.view(np.uint16)
-    anchor_emb_u16 = anchor_emb.view(np.uint16)
+    # ctx_feats_u16 / anchor_emb_u16 are already stored as uint16 bitpatterns.
 
     # Write mmap-friendly directory if requested.
-    if str(args.out_dir).strip():
-        out_dir = Path(str(args.out_dir)).resolve()
+    if out_dir is not None:
         out_dir.mkdir(parents=True, exist_ok=True)
         (out_dir / "meta.json").write_text(json.dumps(meta, indent=2, sort_keys=True), encoding="utf-8")
-        np.save(out_dir / "context_features_u16.npy", ctx_feats_u16)
-        np.save(out_dir / "anchor_embedding_u16.npy", anchor_emb_u16)
-        np.save(out_dir / "anchor_ids.npy", anchor_ids)
-        np.save(out_dir / "ctx_pos_start_i32.npy", ctx_pos_start_i32)
-        np.save(out_dir / "anchor_pos_i32.npy", anchor_pos_i32)
-        np.save(out_dir / "target_ids.npy", target_ids)
-        np.save(out_dir / "ctx_token_ids.npy", ctx_token_ids)
+        if not using_memmap:
+            np.save(out_dir / "context_features_u16.npy", ctx_feats_u16)
+            np.save(out_dir / "anchor_embedding_u16.npy", anchor_emb_u16)
+            np.save(out_dir / "anchor_ids.npy", anchor_ids)
+            np.save(out_dir / "ctx_pos_start_i32.npy", ctx_pos_start_i32)
+            np.save(out_dir / "anchor_pos_i32.npy", anchor_pos_i32)
+            np.save(out_dir / "target_ids.npy", target_ids)
+            np.save(out_dir / "ctx_token_ids.npy", ctx_token_ids)
+        else:
+            # Ensure memmaps are flushed before we return control to the caller.
+            try:
+                ctx_feats_u16.flush()
+                anchor_emb_u16.flush()
+                target_ids.flush()
+                anchor_ids.flush()
+                ctx_token_ids.flush()
+                ctx_pos_start_i32.flush()
+                anchor_pos_i32.flush()
+            except Exception:
+                pass
         print(f"[done] wrote cache_dir={out_dir}", flush=True)
 
-    # Always write legacy .npz output (useful for quick smoke tests).
+    write_npz = str(args.write_npz).strip().lower() in ("1", "true", "yes", "y", "on")
+    if not write_npz:
+        return
+
+    # Write legacy .npz output (useful for quick smoke tests).
     out_path = Path(args.out)
     out_path.parent.mkdir(parents=True, exist_ok=True)
     np.savez(

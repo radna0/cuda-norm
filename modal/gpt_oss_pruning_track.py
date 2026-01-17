@@ -3572,17 +3572,22 @@ def main(
     - inspect_eaftreap_budgeted: validate + list files for latest budgeted prune (debug artifacts/shards)
     """
 
-    # Ensure local outputs (reports/, artifacts/, data/) land under the project
-    # root (harmony/cuda-norm) instead of the caller's CWD.
+    # Ensure local outputs (reports/, artifacts/, data/) land somewhere stable.
     #
-    # - Kaggle/VERSA: the synced checkout lives at `/kaggle/working/harmony/cuda-norm`.
+    # - Kaggle/VERSA: Versa syncs a minimal checkout into `/kaggle/working/harmony/cuda-norm`.
+    #   That directory can be re-synced (and effectively replaced) between jobs, which would
+    #   delete any outputs written under it. So on Kaggle, always write to `/kaggle/working/*`.
+    # - Local dev: write into the repo root (harmony/cuda-norm).
     # - Modal workers: this file is copied to `/root/<script>.py` (no repo checkout).
     #
-    # Only chdir when we can prove the repo layout exists next to this file.
+    # Only chdir when we can prove the target layout exists.
     try:
-        repo_root = Path(__file__).resolve().parents[1]
-        if (repo_root / "modal" / "gpt_oss_pruning_track.py").exists():
-            os.chdir(repo_root)
+        if Path("/kaggle/working").exists():
+            os.chdir("/kaggle/working")
+        else:
+            repo_root = Path(__file__).resolve().parents[1]
+            if (repo_root / "modal" / "gpt_oss_pruning_track.py").exists():
+                os.chdir(repo_root)
     except Exception:
         pass
 

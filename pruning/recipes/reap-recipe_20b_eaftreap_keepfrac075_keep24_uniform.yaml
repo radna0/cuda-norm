@@ -1,0 +1,100 @@
+schema_version: 1
+kind: reap_recipe
+
+name: eaftreap_gptoss20b_keepfrac075_keep24_uniform
+description: >
+  EAFT‑REAP structural prune recipe for GPT‑OSS‑20B at keep_frac=0.75
+  (uniform keep_n=24/32), with a small “core experts” safety set.
+  No finetune; top_k unchanged (=4). This is the current quality-first target.
+
+source:
+  recipe_intent: "Reproducible pruning recipe (GH issue #2 style)"
+  created_from_artifacts:
+    manifest_json: harmony/cuda-norm/artifacts/20b_pruned_models_eaftreap_keepfrac/manifest_eaftreap_keepfrac.json
+    build_report_md: harmony/cuda-norm/reports/20b_structural_prune_build_eaftreap_keepfrac.md
+
+model:
+  base_model_id: openai/gpt-oss-20b
+  pruned_model_label: calib_union_keep24of32_k75_eaftreap
+  keep_frac_requested: 0.75
+  keep_n: 24
+  num_experts: 32
+  uniform_keep_n_across_layers: true
+  top_k_unchanged: true
+  notes:
+    - "GPT‑OSS requires uniform keep_n across all MoE layers."
+    - "We do not change top_k (experts_per_token) in this pruning recipe."
+
+scoring:
+  method: eaftreap
+  top_k: 4
+  entropy_topk: 20
+  cc_quantile: 0.15
+  uncertain_quantile: 0.85
+  weights:
+    w_good: 1.0
+    w_uncertain: 0.25
+    w_conflict: -2.0
+  score_key: eaft_gate_norm_sum
+  score_definition: >
+    For tokens where expert j is selected (top_k),
+    accumulate w_t * gate_j(x) * ||f_j(x)||_2, where w_t is determined from EAFT
+    probability/entropy regions. Rank experts by total accumulated mass.
+
+profiling_data:
+  dataset_repo: radna0/harmony-qwen3-calib-packs-v2-20260113
+  pack_files:
+    - packs/reasoning_style_10k_v2/reasoning_style_10k_v2.parquet
+    - tool_agentic_10k_v6.parquet
+    - packs/calib_prompt_10000_v2/calib_prompt_10000_v2.parquet
+  sampling:
+    strategy: per_file
+    num_rows: 2000
+    seed: 3407
+  max_seq_length: 4096
+  batch_size: 1
+
+selection_constraints:
+  keep_n_multiple_of: 4
+  core_experts:
+    core_pos_top_m: 4
+    core_count_top_m: 0
+    notes:
+      - "core_pos_top_m selects the top-M experts by positive EAFT-REAP saliency mass per layer."
+
+structural_rewrite:
+  writer: safetensors
+  max_shard_size_gb: 5.0
+  shard_bytes_definition: "decimal_gb" # 1GB = 1e9 bytes
+  mapping_file_in_model_dir: expert_mapping.json
+
+evaluation:
+  gates_json: harmony/cuda-norm/pruning/near_lossless_gates.json
+  canonical_eval_regime:
+    seq_lens_csv: "1024,2048"
+    num_blocks: 512
+    batch_size: 1
+    sample_points: 200000
+    top_k: 4
+
+execution:
+  kaggle_versa:
+    notes:
+      - "On Kaggle, store artifacts under /kaggle/working/artifacts/* (not under the synced code dir)."
+    commands:
+      - >-
+        bash harmony/cuda-norm/scripts/versa_run_pruning_track_kaggle.sh
+        --task build_pruned_20b_eaftreap_keepfrac
+        --num-rows 2000 --max-seq-length 4096 --batch-size 1
+        --keep-fracs-csv 0.75
+        --min-keep-per-layer 24 --max-keep-per-layer 24
+        --core-pos-top-m 4 --core-count-top-m 0
+      - >-
+        bash harmony/cuda-norm/scripts/versa_run_eaft_single_kaggle.sh
+        --model-id openai/gpt-oss-20b
+        --seq-lens-csv 1024,2048 --num-blocks 512 --batch-size 1 --sample-points 200000
+      - >-
+        bash harmony/cuda-norm/scripts/versa_run_eaft_single_kaggle.sh
+        --model-id calib_union_keep24of32_k75_eaftreap
+        --model-path <PATH_FROM_MANIFEST>
+        --seq-lens-csv 1024,2048 --num-blocks 512 --batch-size 1 --sample-points 200000

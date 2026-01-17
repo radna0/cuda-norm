@@ -45,8 +45,18 @@ if [[ "${ENABLE_JAX_PERSISTENT_COMPILATION_CACHE:-0}" == "1" ]]; then
   mkdir -p "${JAX_COMPILATION_CACHE_DIR}"
 fi
 
+INSTANCE_TAG="${INSTANCE_TAG:-$(date -u +%Y%m%d_%H%M%S)}"
+
+LOG_PATH_REAL="${LOG_DIR}/${RUN_NAME}.${INSTANCE_TAG}.log"
+PID_PATH_REAL="${LOG_DIR}/${RUN_NAME}.${INSTANCE_TAG}.pid"
+
+# Stable pointers (for humans + helper scripts).
 LOG_PATH="${LOG_DIR}/${RUN_NAME}.log"
 PID_PATH="${LOG_DIR}/${RUN_NAME}.pid"
+
+# Point the stable paths at the unique per-run artifacts.
+ln -sf "$(basename "${LOG_PATH_REAL}")" "${LOG_PATH}"
+ln -sf "$(basename "${PID_PATH_REAL}")" "${PID_PATH}"
 
 TOTAL_BATCH_SIZE="${TOTAL_BATCH_SIZE:-160}"
 GRAD_ACCUM_STEPS="${GRAD_ACCUM_STEPS:-1}"
@@ -90,8 +100,8 @@ nohup "${VENV_PY}" -u "${TRAIN_PY}" \
   --log-steps "${LOG_STEPS}" \
   --report-steps "${REPORT_STEPS}" \
   --disable-wandb \
-  >"${LOG_PATH}" 2>&1 &
-echo $! > "${PID_PATH}"
+  >"${LOG_PATH_REAL}" 2>&1 &
+echo $! > "${PID_PATH_REAL}"
 set +x
 
-echo "pid=$(cat "${PID_PATH}") log=${LOG_PATH} ckpt_root=${CKPT_DIR}/${RUN_NAME}"
+echo "pid=$(cat "${PID_PATH}") log=${LOG_PATH} (real=${LOG_PATH_REAL}) ckpt_root=${CKPT_DIR}/${RUN_NAME}"

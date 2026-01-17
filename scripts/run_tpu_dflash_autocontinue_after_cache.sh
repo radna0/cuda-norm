@@ -33,6 +33,15 @@ SANITY_STEPS="${SANITY_STEPS:-200}"
 SANITY_SAVE_STEPS="${SANITY_SAVE_STEPS:-200}"
 LONG_SAVE_STEPS="${LONG_SAVE_STEPS:-500}"
 
+# Runtime knobs (keep consistent with cache build).
+BLOCK_SIZE="${BLOCK_SIZE:-}"
+PAGE_SIZE="${PAGE_SIZE:-}"
+HBM_UTILIZATION="${HBM_UTILIZATION:-}"
+PREFILL_CHUNK="${PREFILL_CHUNK:-}"
+
+# Optional: speed up teacher load in benches by using an EasyDeL-native teacher dir.
+TEACHER_EASYDEL_DIR="${TEACHER_EASYDEL_DIR:-}"
+
 echo "pid=$$" > "${PID_FILE}"
 
 {
@@ -52,15 +61,31 @@ echo "pid=$$" > "${PID_FILE}"
   done
   echo "[+] cache_dir=${cache_dir}"
 
+  if [[ -f "${cache_dir}/meta.json" ]]; then
+    meta_block_size="$("${VENV_PY}" -c 'import json,sys; print(json.load(open(sys.argv[1])).get("block_size",""))' "${cache_dir}/meta.json")"
+    meta_page_size="$("${VENV_PY}" -c 'import json,sys; print(json.load(open(sys.argv[1])).get("page_size",""))' "${cache_dir}/meta.json")"
+    meta_hbm_util="$("${VENV_PY}" -c 'import json,sys; print(json.load(open(sys.argv[1])).get("hbm_utilization",""))' "${cache_dir}/meta.json")"
+    meta_prefill_chunk="$("${VENV_PY}" -c 'import json,sys; print(json.load(open(sys.argv[1])).get("prefill_chunk",""))' "${cache_dir}/meta.json")"
+    if [[ -z "${BLOCK_SIZE}" && -n "${meta_block_size}" ]]; then BLOCK_SIZE="${meta_block_size}"; fi
+    if [[ -z "${PAGE_SIZE}" && -n "${meta_page_size}" ]]; then PAGE_SIZE="${meta_page_size}"; fi
+    if [[ -z "${HBM_UTILIZATION}" && -n "${meta_hbm_util}" ]]; then HBM_UTILIZATION="${meta_hbm_util}"; fi
+    if [[ -z "${PREFILL_CHUNK}" && -n "${meta_prefill_chunk}" ]]; then PREFILL_CHUNK="${meta_prefill_chunk}"; fi
+  fi
+
+  BLOCK_SIZE="${BLOCK_SIZE:-8}"
+  PAGE_SIZE="${PAGE_SIZE:-128}"
+  HBM_UTILIZATION="${HBM_UTILIZATION:-0.20}"
+  PREFILL_CHUNK="${PREFILL_CHUNK:-256}"
+
   echo "[*] running cache parity check (multitoken verify vs cached targets)..."
   "${VENV_PY}" -u "${SCRIPTS}/tpu_verify_multitoken_parity.py" \
     --cache-dir "${cache_dir}" \
     --teacher-snapshot-dir "${TEACHER_SNAPSHOT_DIR}" \
     --sample-idx 0 \
-    --block-size 8 \
-    --page-size 32 \
-    --hbm-utilization 0.20 \
-    --prefill-chunk 256
+    --block-size "${BLOCK_SIZE}" \
+    --page-size "${PAGE_SIZE}" \
+    --hbm-utilization "${HBM_UTILIZATION}" \
+    --prefill-chunk "${PREFILL_CHUNK}"
 
   echo "[*] starting training sanity run (${SANITY_STEPS} steps)..."
   export CACHE_DIR="${cache_dir}"
@@ -107,11 +132,22 @@ echo "pid=$$" > "${PID_FILE}"
     fi
 
     echo "[*] running cached decode benchmark (blockverify spec-v1) ..."
-    export TEACHER_SNAPSHOT_DIR="${TEACHER_SNAPSHOT_DIR}"
-    export DRAFT_RUN_DIR="${draft_run_dir}"
-    export ALSO_RUN_BASELINE=1
-    "${SCRIPTS}/run_tpu_dflash_decode_cached_logged.sh" --max-new-tokens 256 --block-size 8 --page-size 32 --hbm-utilization 0.20
-    echo "[+] decode bench done (see logs in ${LOG_DIR})"
+    # NOTE: use the eSurge-native benchmark harness (no HF-style use_cache).
+    bench_log="${LOG_DIR}/esurge_bench_${RUN_NAME}_${TS}.log"
+    "${VENV_PY}" -u "${SCRIPTS}/tpu_esurge_dflash_bench.py" \
+      --teacher-snapshot-dir "${TEACHER_SNAPSHOT_DIR}" \
+      ${TEACHER_EASYDEL_DIR:+--teacher-easydel-dir "${TEACHER_EASYDEL_DIR}"} \
+      --draft-run-dir "${draft_run_dir}" \
+      --block-size "${BLOCK_SIZE}" \
+      --max-new-tokens 2048 \
+      --max-model-len 4096 \
+      --page-size "${PAGE_SIZE}" \
+      --hbm-utilization "${HBM_UTILIZATION}" \
+      --prompt-from-cache-dir "${cache_dir}" \
+      --cache-sample-idx 0 \
+      --also-run-baseline \
+      2>&1 | tee "${bench_log}"
+    echo "[+] decode bench done (log: ${bench_log})"
   fi
 } 2>&1 | tee "${PIPE_LOG}"
 

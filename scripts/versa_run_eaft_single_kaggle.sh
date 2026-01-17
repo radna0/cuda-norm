@@ -114,6 +114,7 @@ python -m versa run \
   ${DETACH:+--detach} \
   --bootstrap-cmd "mkdir -p ${EAFT_REMOTE_LOG_DIR}" \
   --bootstrap-cmd "mkdir -p /kaggle/working/eaft_cache" \
+  --bootstrap-cmd "mkdir -p /kaggle/working/artifacts" \
   --bootstrap-cmd "python -m pip install -U pip" \
   --bootstrap-cmd "python -m pip install -q modal datasets transformers==4.56.2 tokenizers safetensors pyarrow pandas accelerate huggingface-hub hf_transfer" \
   --bootstrap-cmd "python -m pip install -q 'sglang[all]'" \
@@ -121,6 +122,7 @@ python -m versa run \
   --env-file "${EAFT_ENV_FILE}" \
   --env "GPU_TYPE=${GPU_TYPE}" \
   --env "EAFT_LOCAL_MODE=1" \
+  --env "EAFT_ARTIFACTS_DIR=/kaggle/working/artifacts/eaft_models" \
   --env "SGLANG_ALLOW_OVERWRITE_LONGER_CONTEXT_LEN=1" \
   "${EXTRA_ENV[@]}" \
   "${ROOT_DIR}/modal/collect_calib_packs_eaft_single.py::main" -- \

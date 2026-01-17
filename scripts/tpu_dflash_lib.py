@@ -36,10 +36,19 @@ def set_shm_caches() -> None:
 
     os.environ.setdefault("HF_HOME", "/dev/shm/hf")
     os.environ.setdefault("HF_HUB_CACHE", "/dev/shm/hf/hub")
-    os.environ.setdefault("TRANSFORMERS_CACHE", "/dev/shm/hf/transformers")
     os.environ.setdefault("XDG_CACHE_HOME", "/dev/shm/xdg")
-    os.environ.setdefault("JAX_COMPILATION_CACHE_DIR", "/dev/shm/jax_compilation_cache")
-    Path(os.environ["JAX_COMPILATION_CACHE_DIR"]).mkdir(parents=True, exist_ok=True)
+    os.environ.setdefault("TMPDIR", "/dev/shm/tmp")
+
+    for d in (os.environ["HF_HOME"], os.environ["HF_HUB_CACHE"], os.environ["XDG_CACHE_HOME"], os.environ["TMPDIR"]):
+        Path(d).mkdir(parents=True, exist_ok=True)
+
+    # Persistent compilation caches can explode in size and fill /dev/shm.
+    # Default: disabled (still uses in-memory compilation cache).
+    if os.environ.get("ENABLE_JAX_PERSISTENT_COMPILATION_CACHE", "0").lower() in ("1", "true", "yes", "y", "on"):
+        os.environ.setdefault("JAX_COMPILATION_CACHE_DIR", "/dev/shm/jax_compilation_cache")
+        Path(os.environ["JAX_COMPILATION_CACHE_DIR"]).mkdir(parents=True, exist_ok=True)
+    else:
+        os.environ.pop("JAX_COMPILATION_CACHE_DIR", None)
 
 
 def require_hf_token() -> None:

@@ -1,0 +1,30 @@
+schema_version: 1
+kind: eval_recipe
+extends: eval-base.yaml
+
+name: eaft_parity_20b_base_vs_eaftreap075_bigblocks_keep24_uniform
+description: >
+  Canonical EAFT parity gate for GPT‑OSS‑20B keep_frac=0.75 (keep_n=24/32, uniform),
+  using the “bigblocks” regime that stabilizes JS2D at seq=1024 and 2048.
+
+pair:
+  left:
+    label: base_20b
+    model_id: openai/gpt-oss-20b
+    model_path: "" # HF
+  right:
+    label: eaftreap_075_keep24
+    model_id: calib_union_keep24of32_k75_eaftreap
+    model_path_from_manifest:
+      manifest_json: harmony/cuda-norm/artifacts/20b_pruned_models_eaftreap_keepfrac/manifest_eaftreap_keepfrac.json
+      field: variants.calib_union_keep24of32_k75_eaftreap
+
+collector_overrides:
+  seq_lens_csv: "1024,2048"
+  num_blocks: 512
+  batch_size: 1
+  sample_points: 200000
+  top_k: 4
+
+expected_outputs:
+  parity_summary_md: harmony/cuda-norm/reports/eaftreap75_bigblocks_1024_2048.md

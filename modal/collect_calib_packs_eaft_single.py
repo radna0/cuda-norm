@@ -73,6 +73,18 @@ _MODEL_DIR = Path(os.environ.get("EAFT_MODEL_DIR", str(_EAFT_CACHE_ROOT / "model
 _DATA_DIR = Path(os.environ.get("EAFT_DATA_DIR", str(_EAFT_CACHE_ROOT / "data")))
 
 
+def _default_eaft_artifacts_root() -> Path:
+    override = (os.environ.get("EAFT_ARTIFACTS_DIR") or os.environ.get("EAFT_ARTIFACTS_ROOT") or "").strip()
+    if override:
+        return Path(override)
+    if _KAGGLE_WORKDIR.exists():
+        return _KAGGLE_WORKDIR / "artifacts" / "eaft_models"
+    return Path(__file__).resolve().parents[1] / "artifacts" / "eaft_models"
+
+
+_EAFT_ARTIFACTS_ROOT = _default_eaft_artifacts_root()
+
+
 def _env_true(name: str, default: str = "0") -> bool:
     v = (os.environ.get(name, default) or "").strip().lower()
     return v in ("1", "true", "yes", "y", "on")
@@ -1502,7 +1514,7 @@ def main(
 
     run_id = time.strftime("%Y%m%d_%H%M%S")
     safe_name = str(model_id).replace("/", "_")
-    out_dir = Path(__file__).resolve().parents[1] / "artifacts" / "eaft_models" / run_id
+    out_dir = _EAFT_ARTIFACTS_ROOT / run_id
     out_dir.mkdir(parents=True, exist_ok=True)
     data_path = out_dir / f"{safe_name}.json"
     # Attach run_id so a dashboard can disambiguate multiple runs of the same model_id.

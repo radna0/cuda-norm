@@ -1,0 +1,32 @@
+schema_version: 1
+kind: reap_scores
+
+method: eaftreap
+score_key: eaft_gate_norm_sum
+score_definition: >
+  Total expert contribution mass accumulated over selected tokens.
+  For EAFT‑REAP this is w_t * gate_j(x) * ||f_j(x)||_2 summed over tokens where expert
+  j was selected.
+
+inputs:
+  # These paths are expected to be emitted by the keepfrac build task.
+  # If they are missing, the build needs to be re-run with scores persistence enabled.
+  saliency_parquet: harmony/cuda-norm/artifacts/20b_pruned_models_eaftreap_keepfrac/eaftreap_saliency.parquet
+  ranking_by_layer_json: harmony/cuda-norm/artifacts/20b_pruned_models_eaftreap_keepfrac/eaftreap_saliency_ranking_by_layer.json
+  manifest_json: harmony/cuda-norm/artifacts/20b_pruned_models_eaftreap_keepfrac/manifest_eaftreap_keepfrac.json
+
+profile_meta_expected:
+  model_id: openai/gpt-oss-20b
+  top_k: 4
+  entropy_topk: 20
+  cc_quantile: 0.15
+  uncertain_quantile: 0.85
+  w_good: 1.0
+  w_uncertain: 0.25
+  w_conflict: -2.0
+  num_experts: 32
+  keep_n: 24
+  max_seq_length: 4096
+  num_rows: 2000
+  dataset_repo: radna0/harmony-qwen3-calib-packs-v2-20260113
+  sampling_strategy: per_file
