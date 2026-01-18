@@ -498,13 +498,20 @@ def main() -> None:
     # Additional causality check: do the *captured context features* for token 0
     # change when we mutate future draft tokens? They must not for a causal
     # verify implementation; otherwise the draft conditions on non-causal data.
-    ctx0_feat_mae = None
+    ctx_feat_mae_by_pos = None
+    ctx_feat_mae_mean = None
+    ctx_feat_mae_max = None
     try:
-        a0 = np.asarray(jax.device_get(jnp.asarray(ctx_block)[0, :]), dtype=np.float32)
-        b0 = np.asarray(jax.device_get(jnp.asarray(ctx_block_zero)[0, :]), dtype=np.float32)
-        ctx0_feat_mae = float(np.mean(np.abs(a0 - b0)))
+        a = np.asarray(jax.device_get(jnp.asarray(ctx_block)[: int(args.block_size), :]), dtype=np.float32)
+        b = np.asarray(jax.device_get(jnp.asarray(ctx_block_zero)[: int(args.block_size), :]), dtype=np.float32)
+        per = np.mean(np.abs(a - b), axis=-1)  # [B]
+        ctx_feat_mae_by_pos = [float(x) for x in per.tolist()]
+        ctx_feat_mae_mean = float(np.mean(per))
+        ctx_feat_mae_max = float(np.max(per))
     except Exception:
-        ctx0_feat_mae = None
+        ctx_feat_mae_by_pos = None
+        ctx_feat_mae_mean = None
+        ctx_feat_mae_max = None
 
     print(
         json.dumps(
@@ -522,7 +529,9 @@ def main() -> None:
                 "verify_block_zero_greedy": [int(x) for x in greedy_block_zero[: int(args.block_size)].tolist()],
                 "verify_block_head": [int(x) for x in greedy_block[:3].tolist()],
                 "verify_block0_changes_with_future": bool(block0_changes_with_future),
-                "verify_ctx0_feat_mae": ctx0_feat_mae,
+                "verify_ctx_feat_mae_by_pos": ctx_feat_mae_by_pos,
+                "verify_ctx_feat_mae_mean": ctx_feat_mae_mean,
+                "verify_ctx_feat_mae_max": ctx_feat_mae_max,
                 "match_1tok_vs_block0": bool(int(next1) == int(greedy_block[0])),
                 "match_cached_targets_vs_verify": bool(
                     cached_targets.shape[0] == (int(args.block_size) - 1)
