@@ -25,6 +25,15 @@ def main() -> None:
     ap.add_argument("--cache-dir", required=True, help="DFlash cache dir (for ctx_token_ids/anchor_ids).")
     ap.add_argument("--sample-idx", type=int, default=0)
     ap.add_argument("--teacher-snapshot-dir", required=True)
+    ap.add_argument(
+        "--teacher-easydel-dir",
+        default="",
+        help=(
+            "Optional EasyDeL-native checkpoint dir for the teacher. If provided and exists, "
+            "load the teacher from here (must match what the cache builder used), instead "
+            "of converting from --teacher-snapshot-dir."
+        ),
+    )
     ap.add_argument("--block-size", type=int, default=8)
     ap.add_argument("--page-size", type=int, default=32)
     ap.add_argument("--hbm-utilization", type=float, default=0.20)
@@ -78,15 +87,27 @@ def main() -> None:
         raise RuntimeError(f"Expected prompt_len={ctx_len+1}, got {prompt_len}")
 
     teacher_snapshot = Path(args.teacher_snapshot_dir).resolve()
-    teacher = AutoEasyDeLModelForCausalLM.from_pretrained(
-        str(teacher_snapshot),
-        dtype=jnp.bfloat16,
-        param_dtype=jnp.bfloat16,
-        auto_shard_model=True,
-        sharding_axis_dims=(1, 8, 1, 1, 1),
-        verbose=False,
-        from_torch=True,
-    )
+    teacher_easydel_dir = Path(str(args.teacher_easydel_dir)).expanduser().resolve() if args.teacher_easydel_dir else None
+    if teacher_easydel_dir is not None and teacher_easydel_dir.exists():
+        teacher = AutoEasyDeLModelForCausalLM.from_pretrained(
+            str(teacher_easydel_dir),
+            dtype=jnp.bfloat16,
+            param_dtype=jnp.bfloat16,
+            auto_shard_model=True,
+            sharding_axis_dims=(1, 8, 1, 1, 1),
+            verbose=False,
+            from_torch=False,
+        )
+    else:
+        teacher = AutoEasyDeLModelForCausalLM.from_pretrained(
+            str(teacher_snapshot),
+            dtype=jnp.bfloat16,
+            param_dtype=jnp.bfloat16,
+            auto_shard_model=True,
+            sharding_axis_dims=(1, 8, 1, 1, 1),
+            verbose=False,
+            from_torch=True,
+        )
     if os.environ.get("DFLASH_FORCE_RAGGED_V2", "1").lower() in ("1", "true", "yes", "y", "on"):
         teacher = teacher.merge_module(
             teacher.new_graphdef(attn_mechanism="ragged_page_attention_v2"),
@@ -247,7 +268,9 @@ def main() -> None:
         if wanted:
             part_np = np.asarray(jax.device_get(jnp.asarray(ctx_part)[:step, :]))
             for x in wanted:
-                online_sel[int(x)] = np.asarray(part_np[int(x - start)], copy=True)
+                # NumPy's `asarray(..., copy=...)` is only available on newer versions.
+                # Use `np.array(..., copy=True)` for broad compatibility.
+                online_sel[int(x)] = np.array(part_np[int(x - start)], copy=True)
         done += step
     seqbuf.num_computed_tokens[0] = int(ctx_len)
 

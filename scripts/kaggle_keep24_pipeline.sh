@@ -17,6 +17,7 @@ set -euo pipefail
 #   export KEEP24_BATCH_SIZE=1
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+KERNEL_STATE_FILE="${ROOT_DIR}/.kaggle_kernel_id"
 
 set -a
 source "${ROOT_DIR}/.env"
@@ -29,23 +30,48 @@ fi
 
 export REMOTE_JUPYTER_URL="${KAGGLE_URL}"
 
+# Resolve an active kernel-id if not provided, or if the stored one is stale.
+resolve_kernel_id() {
+  local kid="${REMOTE_JUPYTER_KERNEL_ID:-}"
+  if [[ -n "${kid}" ]]; then
+    echo "${kid}"
+    return 0
+  fi
+  if [[ -f "${KERNEL_STATE_FILE}" ]]; then
+    kid="$(tr -d '\n\r ' < "${KERNEL_STATE_FILE}" || true)"
+  fi
+  if [[ -n "${kid}" ]]; then
+    # Validate the kernel exists for this KAGGLE_URL.
+    local base="${KAGGLE_URL%/}"
+    local code
+    code="$(curl -s -o /dev/null -w \"%{http_code}\" \"${base}/api/kernels/${kid}\" || true)"
+    if [[ "${code}" == "200" ]]; then
+      echo "${kid}"
+      return 0
+    fi
+    echo "[warn] stale kernel-id '${kid}' (api/kernels/${kid} -> http ${code}); auto-detecting" >&2
+  fi
+  bash "${ROOT_DIR}/scripts/kaggle_get_active_kernel_id.sh"
+}
+
+# If we have a previously used kernel-id for this server, reuse it to avoid
+# leaking VRAM to zombie processes across multiple kernels.
+REMOTE_JUPYTER_KERNEL_ID="$(resolve_kernel_id)"
+export REMOTE_JUPYTER_KERNEL_ID
+
 NUM_ROWS="${KEEP24_NUM_ROWS:-2000}"
 MAX_SEQ_LENGTH="${KEEP24_MAX_SEQ_LENGTH:-4096}"
 BATCH_SIZE="${KEEP24_BATCH_SIZE:-1}"
 
-if [[ -n "${REMOTE_JUPYTER_KERNEL_ID:-}" ]]; then
-  PREFLIGHT_CLEANUP="${KEEP24_PREFLIGHT_CLEANUP:-1}"
-  if [[ "${PREFLIGHT_CLEANUP}" != "0" ]]; then
-    echo "[*] preflight: Kaggle GPU cleanup on existing kernel=${REMOTE_JUPYTER_KERNEL_ID}"
-    # Best-effort: kill leaked Versa modal_run processes holding VRAM from
-    # previous runs, then print nvidia-smi. Hard timeout so we never hang.
-    PYTHONPATH="third_party/Versa${PYTHONPATH:+:${PYTHONPATH}}" \
-    timeout 180s python "${ROOT_DIR}/scripts/kaggle_gpu_cleanup.py" \
-      --kernel-id "${REMOTE_JUPYTER_KERNEL_ID}" \
-      --aggressive || echo "[warn] preflight cleanup failed/timeout; continuing"
-  else
-    echo "[*] preflight: cleanup disabled (KEEP24_PREFLIGHT_CLEANUP=0)"
-  fi
+PREFLIGHT_CLEANUP="${KEEP24_PREFLIGHT_CLEANUP:-1}"
+if [[ -n "${REMOTE_JUPYTER_KERNEL_ID:-}" && "${PREFLIGHT_CLEANUP}" != "0" ]]; then
+  echo "[*] preflight: Kaggle GPU cleanup on kernel=${REMOTE_JUPYTER_KERNEL_ID}"
+  # Best-effort: kill leaked Versa modal_run processes holding VRAM from previous
+  # runs, then print nvidia-smi. Hard timeout so we never hang.
+  PYTHONPATH="third_party/Versa${PYTHONPATH:+:${PYTHONPATH}}" \
+  timeout 180s python "${ROOT_DIR}/scripts/kaggle_gpu_cleanup.py" \
+    --kernel-id "${REMOTE_JUPYTER_KERNEL_ID}" \
+    --aggressive || echo "[warn] preflight cleanup failed/timeout; continuing"
 fi
 
 echo "[*] launching keep24 build on Kaggle..."
@@ -64,6 +90,7 @@ bash "${ROOT_DIR}/scripts/versa_run_pruning_track_kaggle.sh" \
   --keep-n-round ceil --keep-n-multiple-of 4 \
   --min-keep-per-layer 24 --max-keep-per-layer 24 \
   --core-pos-top-m 4 --core-count-top-m 0 \
+  ${REMOTE_JUPYTER_KERNEL_ID:+--kernel-id "${REMOTE_JUPYTER_KERNEL_ID}"} \
   2>&1 | tee "${tmp}"
 rc="${PIPESTATUS[0]}"
 set -e
@@ -74,37 +101,35 @@ OUT="$(cat "${tmp}" || true)"
 
 KERNEL_ID="$(
   python - <<PY
-import json
+import re
 from pathlib import Path
 
 txt = Path("${tmp}").read_text(encoding="utf-8", errors="ignore")
 
-try:
-    start = txt.find("{")
-    end = txt.rfind("}")
-    if start == -1 or end == -1 or end <= start:
-        raise ValueError("no json block found")
-    obj = json.loads(txt[start : end + 1])
-    details = obj.get("details") or {}
-    print(details.get("kernel_id") or "")
-except Exception:
-    print("")
+m = re.search(r'\"kernel_id\"\\s*:\\s*\"([0-9a-f\\-]+)\"', txt, flags=re.I)
+if m:
+    print(m.group(1))
+    raise SystemExit(0)
+m = re.search(r'\\[\\+\\]\\s*kernel_id=([0-9a-f\\-]+)\\s*$', txt, flags=re.I | re.M)
+if m:
+    print(m.group(1))
+    raise SystemExit(0)
+print("")
 PY
 )"
 BUILD_REMOTE_LOG="$(
   python - <<PY
-import json
+import re
 from pathlib import Path
 
 txt = Path("${tmp}").read_text(encoding="utf-8", errors="ignore")
 
 try:
-    start = txt.find("{")
-    end = txt.rfind("}")
-    if start == -1 or end == -1 or end <= start:
-        raise ValueError("no json block found")
-    obj = json.loads(txt[start : end + 1])
-    print(obj.get("log_path") or "")
+    m = re.search(r'\"log_path\"\\s*:\\s*\"([^\"]+)\"', txt)
+    if m:
+        print(m.group(1))
+    else:
+        print("")
 except Exception:
     print("")
 PY
@@ -118,6 +143,9 @@ fi
 
 echo "[+] kernel_id=${KERNEL_ID}"
 echo "[+] build_remote_log=${BUILD_REMOTE_LOG}"
+
+# Persist the kernel-id so the next run can reuse it for cleanup + stability.
+printf "%s" "${KERNEL_ID}" > "${KERNEL_STATE_FILE}"
 
 exec bash "${ROOT_DIR}/scripts/kaggle_orchestrate_keep24_bigblocks_curl.sh" \
   --kernel-id "${KERNEL_ID}" \

@@ -1705,7 +1705,7 @@ def profile_20b_reap_saliency(
     import torch
     import pyarrow as pa
     import pyarrow.parquet as pq
-    from transformers import AutoModelForCausalLM, AutoTokenizer
+    from transformers import AutoModelForCausalLM, AutoTokenizer, Mxfp4Config
 
     _ensure_hf_env()
 
@@ -1743,11 +1743,18 @@ def profile_20b_reap_saliency(
     # truncation so we keep the tail instead of chopping it off.
     tokenizer.truncation_side = "left"
 
+    # REAP-lite needs access to the experts' projection weights as real PyTorch
+    # tensors (we do per-expert matmuls to estimate ||f_j(x)||_2). When loading
+    # MXFP4 with kernels/triton enabled, Transformers can replace expert weights
+    # with `triton_kernels.*.tensor.Tensor` wrappers which are not compatible
+    # with this profiling path. For profiling only, dequantize MXFP4 to BF16.
+    qconfig = Mxfp4Config(dequantize=True)
     model = AutoModelForCausalLM.from_pretrained(
         str(model_dir),
         torch_dtype="auto",
         device_map={"": 0},
         trust_remote_code=True,
+        quantization_config=qconfig,
     )
     model.eval()
 
@@ -1757,6 +1764,25 @@ def profile_20b_reap_saliency(
     top_k = int(getattr(model.config, "num_experts_per_tok", 0) or getattr(model.config, "experts_per_token", 4))
     if num_experts <= 0 or top_k <= 0:
         raise RuntimeError("Could not determine num_local_experts / top_k from config.")
+
+    # Fail fast if MXFP4 weights are still wrapped (this would crash in the
+    # per-expert matmul path later, after wasting a lot of GPU time).
+    try:
+        experts0 = getattr(layers[0].mlp, "experts", None)
+        gate_up0 = getattr(experts0, "gate_up_proj", None)
+        down0 = getattr(experts0, "down_proj", None)
+        print(
+            "[*] reap weight types: "
+            f"gate_up_proj={type(gate_up0)} down_proj={type(down0)}",
+            flush=True,
+        )
+        if not torch.is_tensor(gate_up0) or not torch.is_tensor(down0):
+            raise TypeError(
+                "REAP-lite requires PyTorch expert weights; MXFP4 did not dequantize. "
+                f"gate_up_proj={type(gate_up0)} down_proj={type(down0)}"
+            )
+    except Exception:
+        raise
 
     # Global per-batch token mask used by hooks (CUDA bool [batch, seq]).
     current_keep_mask = {"mask": None}
@@ -2120,10 +2146,13 @@ def profile_20b_eaftreap_saliency(
     import hashlib
     import math
 
+    # Mitigate allocator fragmentation for long runs.
+    os.environ.setdefault("PYTORCH_CUDA_ALLOC_CONF", "expandable_segments:True")
+
     import torch
     import pyarrow as pa
     import pyarrow.parquet as pq
-    from transformers import AutoModelForCausalLM, AutoTokenizer
+    from transformers import AutoModelForCausalLM, AutoTokenizer, Mxfp4Config
 
     _ensure_hf_env()
 
@@ -2158,11 +2187,18 @@ def profile_20b_eaftreap_saliency(
     tokenizer.padding_side = "right"
     tokenizer.truncation_side = "left"
 
+    # EAFT-REAP needs access to the experts' projection weights as real PyTorch
+    # tensors (we do per-expert matmuls to estimate ||f_j(x)||_2). When loading
+    # MXFP4 with kernels/triton enabled, Transformers can replace expert weights
+    # with `triton_kernels.*.tensor.Tensor` wrappers which are not compatible
+    # with this profiling path. For profiling only, dequantize MXFP4 to BF16.
+    qconfig = Mxfp4Config(dequantize=True)
     model = AutoModelForCausalLM.from_pretrained(
         str(model_dir),
         torch_dtype="auto",
         device_map={"": 0},
         trust_remote_code=True,
+        quantization_config=qconfig,
     )
     model.eval()
 
@@ -2172,6 +2208,25 @@ def profile_20b_eaftreap_saliency(
     top_k = int(getattr(model.config, "num_experts_per_tok", 0) or getattr(model.config, "experts_per_token", 4))
     if num_experts <= 0 or top_k <= 0:
         raise RuntimeError("Could not determine num_local_experts / top_k from config.")
+
+    # Fail fast if MXFP4 weights are still wrapped (this would crash in the
+    # per-expert matmul path later, after wasting a lot of GPU time).
+    try:
+        experts0 = getattr(layers[0].mlp, "experts", None)
+        gate_up0 = getattr(experts0, "gate_up_proj", None)
+        down0 = getattr(experts0, "down_proj", None)
+        print(
+            "[*] eaftreap weight types: "
+            f"gate_up_proj={type(gate_up0)} down_proj={type(down0)}",
+            flush=True,
+        )
+        if not torch.is_tensor(gate_up0) or not torch.is_tensor(down0):
+            raise TypeError(
+                "EAFT-REAP requires PyTorch expert weights; MXFP4 did not dequantize. "
+                f"gate_up_proj={type(gate_up0)} down_proj={type(down0)}"
+            )
+    except Exception:
+        raise
 
     # We only compute p/H/weights for the same sampled token subset that REAP-lite
     # uses for expert-norm computation (first N kept tokens), for efficiency.
@@ -5060,7 +5115,9 @@ def main(
             raise SystemExit(f"Invalid EAFT-REAP meta: num_layers={num_layers} num_experts={num_experts}")
 
         # Save profiling artifacts for audit/debug (no finetune).
-        artifacts_dir = Path("artifacts/20b_pruned_models_eaftreap_keepfrac")
+        # Write under the configured artifacts root (Kaggle needs this under
+        # /kaggle/working to persist within the kernel session).
+        artifacts_dir = _ARTIFACTS_DIR / "20b_pruned_models_eaftreap_keepfrac"
         artifacts_dir.mkdir(parents=True, exist_ok=True)
         (artifacts_dir / "eaftreap_saliency.parquet").write_bytes(prof["parquet_bytes"])
         (artifacts_dir / "eaftreap_saliency_ranking_by_layer.json").write_text(
@@ -5154,6 +5211,65 @@ def main(
             encoding="utf-8",
         )
 
+        # REAP metadata exports (requested by community; enables reproducing a
+        # pruned checkpoint or exploring other keep_frac values without
+        # re-profiling).
+        try:
+            import yaml
+
+            recipe = {
+                "schema_version": 1,
+                "name": "gpt-oss-20b_eaftreap_keepfrac_sweep",
+                "method": "eaftreap",
+                "base_model": str(model_id_20b),
+                "constraints": {
+                    "top_k_unchanged": True,
+                    "keep_n_same_per_layer": True,
+                    "keep_n_multiple_of": int(mult),
+                },
+                "profiling": {
+                    "kind": "eaftreap_saliency",
+                    "num_rows": int(num_rows),
+                    "max_seq_length": int(max_seq_length),
+                    "batch_size": int(batch_size),
+                    "eaft": manifest.get("eaft", {}),
+                    "meta": meta,
+                    "calib_packs": manifest.get("calib_packs", {}),
+                    "artifacts": {
+                        "saliency_parquet": str(artifacts_dir / "eaftreap_saliency.parquet"),
+                        "ranking_by_layer_json": str(artifacts_dir / "eaftreap_saliency_ranking_by_layer.json"),
+                    },
+                },
+                "variants": manifest.get("variants", {}),
+                "keep": manifest.get("keep", {}),
+            }
+
+            scores = {
+                "schema_version": 1,
+                "kind": "reap_scores",
+                "method": "eaftreap",
+                "score_key": "eaft_gate_norm_sum",
+                "definition": "EAFT-weighted REAP mass: sum over selected tokens of w_t * gate_j(x) * ||f_j(x)||_2",
+                "inputs": {
+                    "saliency_parquet": str(artifacts_dir / "eaftreap_saliency.parquet"),
+                    "ranking_by_layer_json": str(artifacts_dir / "eaftreap_saliency_ranking_by_layer.json"),
+                },
+                "profile_meta": meta,
+            }
+
+            (artifacts_dir / "reap-recipe.yaml").write_text(
+                yaml.safe_dump(recipe, sort_keys=False),
+                encoding="utf-8",
+            )
+            (artifacts_dir / "reap-scores.yaml").write_text(
+                yaml.safe_dump(scores, sort_keys=False),
+                encoding="utf-8",
+            )
+            print(f"[+] Wrote {artifacts_dir/'reap-recipe.yaml'}")
+            print(f"[+] Wrote {artifacts_dir/'reap-scores.yaml'}")
+        except Exception as e:
+            print(f"[warn] could not write REAP YAML exports: {e}", flush=True)
+
         rep = Path("reports/20b_structural_prune_build_eaftreap_keepfrac.md")
         rep.parent.mkdir(parents=True, exist_ok=True)
         lines = [
@@ -5204,14 +5320,24 @@ def main(
         if num_layers <= 0 or num_experts <= 0:
             raise SystemExit(f"Invalid config: num_layers={num_layers} num_experts={num_experts}")
         keep_by_layer = [list(range(num_experts)) for _ in range(num_layers)]
+        noop_out_subdir = "20b_pruned_models_noop"
+        try:
+            if _KAGGLE_WORKDIR.exists() and Path("/kaggle/temp").exists():
+                # /kaggle/working is small; a full keep_n=32 rewrite is ~the full
+                # model size and will often exceed the quota. Write the large
+                # rewritten weights to /kaggle/temp, but keep the manifest under
+                # the configured artifacts root.
+                noop_out_subdir = str(Path("/kaggle/temp") / "harmony_cuda_norm" / "20b_pruned_models_noop")
+        except Exception:
+            pass
         out_dir = _invoke(
             structural_prune_20b_build,
             model_id=str(model_id_20b),
             variant_name="noop_rewrite_keepall_experts",
             keep_experts_by_layer_json=json.dumps(keep_by_layer),
-            out_subdir="20b_pruned_models_noop",
+            out_subdir=str(noop_out_subdir),
         )
-        artifacts_dir = Path("artifacts/20b_pruned_models_noop")
+        artifacts_dir = _ARTIFACTS_DIR / "20b_pruned_models_noop"
         artifacts_dir.mkdir(parents=True, exist_ok=True)
         (artifacts_dir / "manifest.json").write_text(
             json.dumps(

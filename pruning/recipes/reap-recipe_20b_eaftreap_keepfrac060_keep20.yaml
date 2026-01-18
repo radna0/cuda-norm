@@ -1,0 +1,70 @@
+schema_version: 1
+kind: reap_recipe
+
+name: eaftreap_gptoss20b_keepfrac060_keep20
+description: >
+  EAFT‑REAP structural prune recipe for GPT‑OSS‑20B targeting keep_frac=0.60,
+  but using keep_n=20/32 (0.625) to satisfy the fixed-kernel constraint
+  keep_n % 4 == 0 (SGLang FlashInfer MXFP4 MoE routing).
+  No finetune; top_k unchanged.
+
+source:
+  manifest_json: harmony/cuda-norm/artifacts/20b_pruned_models_eaftreap_keepfrac/manifest_eaftreap_keepfrac.json
+  scores_yaml: null  # to be produced by the keep_n=20 profiling run
+
+model:
+  base_model_id: openai/gpt-oss-20b
+  pruned_model_label: calib_union_keep20of32_k62_eaftreap
+  keep_frac_requested: 0.60
+  keep_frac_actual: 0.625
+  keep_n: 20
+  num_experts: 32
+  uniform_keep_n_across_layers: true
+  top_k_unchanged: true
+  constraints:
+    keep_n_multiple_of: 4
+
+profiling_data:
+  dataset_repo: radna0/harmony-qwen3-calib-packs-v2-20260113
+  sampling:
+    strategy: per_file
+    # This is deliberately high for near-lossless (no finetune) at 0.60.
+    num_rows: 30000
+    seed: 3407
+  max_seq_length: 2048
+  batch_size: 30
+  eaft:
+    entropy_topk: 20
+    cc_quantile: 0.15
+    uncertain_quantile: 0.85
+    w_good: 1.0
+    w_uncertain: 0.25
+    w_conflict: -2.0
+
+evaluation:
+  gates_json: harmony/cuda-norm/pruning/near_lossless_gates.json
+  status: PENDING
+  intended_eval_regime:
+    seq_lens_csv: "1024,2048"
+    num_blocks: 512
+    batch_size: 1
+    sample_points: 200000
+    top_k: 4
+
+execution:
+  modal:
+    note: "Run only if the active Modal profile has budget."
+    commands:
+      - >
+        modal run harmony/cuda-norm/modal/gpt_oss_pruning_track.py --task build_pruned_20b_eaftreap_keepfrac
+        --keep-fracs-csv 0.60 --keep-n-round ceil --keep-n-multiple-of 4
+      - >
+        env GPU_TYPE=H100:1 modal run harmony/cuda-norm/modal/collect_calib_packs_eaft_single.py
+        --model-id calib_union_keep20of32_k62_eaftreap --model-path <OUT_DIR>
+        --seq-lens-csv 1024,2048 --num-blocks 512 --batch-size 1 --sample-points 200000 --top-k 4
+  kaggle_versa:
+    commands:
+      - >
+        bash harmony/cuda-norm/scripts/versa_run_pruning_track_kaggle.sh
+        --task build_pruned_20b_eaftreap_keepfrac
+        --keep-fracs-csv 0.60 --keep-n-round ceil --keep-n-multiple-of 4

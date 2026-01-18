@@ -53,6 +53,9 @@ if [[ -z "${KAGGLE_URL:-}" ]]; then
   exit 2
 fi
 
+# kaggle_download_file.sh expects REMOTE_JUPYTER_URL.
+export REMOTE_JUPYTER_URL="${KAGGLE_URL}"
+
 echo "[*] kernel_id=${KERNEL_ID}"
 echo "[*] build_remote_log=${BUILD_REMOTE_LOG}"
 
@@ -66,13 +69,23 @@ bash "${ROOT_DIR}/scripts/kaggle_watch_file.sh" \
 
 echo "[+] prune build complete; downloading manifest + build report"
 
-MANIFEST_REMOTE="artifacts/harmony_cuda_norm/20b_pruned_models_eaftreap_keepfrac/manifest_eaftreap_keepfrac.json"
+MANIFEST_REMOTE_PRIMARY="artifacts/harmony_cuda_norm/20b_pruned_models_eaftreap_keepfrac/manifest_eaftreap_keepfrac.json"
+# Back-compat: older pruning runs wrote directly under /kaggle/working/artifacts/...
+# (not under artifacts/harmony_cuda_norm). Try this if the primary path 404s.
+MANIFEST_REMOTE_FALLBACK="artifacts/20b_pruned_models_eaftreap_keepfrac/manifest_eaftreap_keepfrac.json"
 BUILD_REPORT_REMOTE="reports/20b_structural_prune_build_eaftreap_keepfrac.md"
 
 MANIFEST_LOCAL="${REPO_ROOT}/harmony/cuda-norm/artifacts/20b_pruned_models_eaftreap_keepfrac/manifest_eaftreap_keepfrac.json"
 BUILD_REPORT_LOCAL="${REPO_ROOT}/harmony/cuda-norm/reports/20b_structural_prune_build_eaftreap_keepfrac.md"
 
-bash "${ROOT_DIR}/scripts/kaggle_download_file.sh" --remote-path "${MANIFEST_REMOTE}" --out "${MANIFEST_LOCAL}"
+set +e
+bash "${ROOT_DIR}/scripts/kaggle_download_file.sh" --remote-path "${MANIFEST_REMOTE_PRIMARY}" --out "${MANIFEST_LOCAL}"
+rc="$?"
+set -e
+if [[ "${rc}" != "0" ]]; then
+  echo "[warn] manifest not found at ${MANIFEST_REMOTE_PRIMARY}; trying fallback ${MANIFEST_REMOTE_FALLBACK}" >&2
+  bash "${ROOT_DIR}/scripts/kaggle_download_file.sh" --remote-path "${MANIFEST_REMOTE_FALLBACK}" --out "${MANIFEST_LOCAL}"
+fi
 bash "${ROOT_DIR}/scripts/kaggle_download_file.sh" --remote-path "${BUILD_REPORT_REMOTE}" --out "${BUILD_REPORT_LOCAL}"
 
 PRUNED_VARIANT_NAME="$(

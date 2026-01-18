@@ -43,7 +43,6 @@ set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 REPO_ROOT="$(cd "${ROOT_DIR}/../.." && pwd)"
-SYNC_DIR="${ROOT_DIR}/.versa_sync_min"
 
 if [[ -z "${REMOTE_JUPYTER_URL:-}" ]]; then
   echo "[err] REMOTE_JUPYTER_URL is not set" >&2
@@ -148,53 +147,63 @@ fi
 TS="$(date +%Y%m%d_%H%M%S)"
 REMOTE_LOG="${PRUNING_REMOTE_LOG_DIR}/${TASK}_${TS}.log"
 
-python "${ROOT_DIR}/scripts/versa_prepare_sync_min.py" --out "${SYNC_DIR}" >/dev/null
+# Do not leak KAGGLE_URL (auth token) into the remote environment or Versa logs.
+# The remote kernel does not need KAGGLE_URL; it's only used locally for /files downloads.
+ENV_TMP="$(mktemp -t pruning_env_XXXXXX)"
+trap 'rm -f "${ENV_TMP}"' EXIT
+if [[ -f "${PRUNING_ENV_FILE}" ]]; then
+  rg -v '^KAGGLE_URL=' "${PRUNING_ENV_FILE}" > "${ENV_TMP}" || true
+else
+  : > "${ENV_TMP}"
+fi
 
 PYTHONPATH="${REPO_ROOT}/third_party/Versa" \
-python -m versa run \
-  --backend jupyter \
-  --url "${REMOTE_JUPYTER_URL}" \
-  ${REMOTE_JUPYTER_TOKEN:+--token "${REMOTE_JUPYTER_TOKEN}"} \
-  ${KERNEL_ID:+--kernel-id "${KERNEL_ID}"} \
-  --cwd "/kaggle/working" \
-  --sync-local-dir "${SYNC_DIR}" \
-  --sync-remote-dir "harmony/cuda-norm" \
-  --log-path "${REMOTE_LOG}" \
-  ${DETACH:+--detach} \
-  --bootstrap-cmd "mkdir -p /kaggle/working/${PRUNING_REMOTE_LOG_DIR}" \
-  --bootstrap-cmd "python -m pip install -U pip" \
-  --bootstrap-cmd "python -m pip install -q modal datasets transformers==4.56.2 tokenizers safetensors pyarrow pandas accelerate huggingface-hub hf_transfer" \
-  --bootstrap-cmd "python -m pip uninstall -y torchvision || true" \
-  --bootstrap-cmd "python -m pip install -q triton==${TRITON_VERSION} kernels==${KERNELS_VERSION}" \
-  --bootstrap-cmd "python -c \"import triton, kernels; ver=tuple(int(x) for x in triton.__version__.split('.')[:2]); assert ver >= (3,4), f'triton too old: {triton.__version__}'; print('[bootstrap] triton', triton.__version__, 'kernels OK')\"" \
-  --bootstrap-cmd "python -c 'import torch; print(torch.__version__)' || python -m pip install -q torch --index-url ${TORCH_INDEX_URL}" \
-  --env-file "${PRUNING_ENV_FILE}" \
-  --env "PYTHONFAULTHANDLER=1" \
-  --env "TORCH_SHOW_CPP_STACKTRACES=1" \
-  --env "TRANSFORMERS_NO_TORCHVISION=1" \
-  --env "PRUNING_LOCAL_MODE=1" \
-  --env "PRUNING_CACHE_ROOT=/kaggle/working/pruning_cache" \
-  --env "PRUNING_MODEL_DIR=/kaggle/working/pruning_cache/model" \
-  --env "PRUNING_DATA_DIR=/kaggle/working/pruning_cache/data" \
-  --env "PRUNING_HF_HOME=/kaggle/working/pruning_cache/hf_cache" \
-  --env "PRUNING_ARTIFACTS_DIR=/kaggle/working/artifacts/harmony_cuda_norm" \
-  --env "PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True" \
-  --env "MODEL_DIR_20B=/kaggle/input/gpt-oss-20b/transformers/default/1" \
-  "${ROOT_DIR}/modal/gpt_oss_pruning_track.py::main" -- \
-    --task "${TASK}" \
-    --model-id-20b "${MODEL_ID_20B}" \
-    --dataset-id "${DATASET_ID}" --dataset-split "${DATASET_SPLIT}" --text-column "${TEXT_COLUMN}" \
-    --domain "${DOMAIN}" --domain-column "${DOMAIN_COLUMN}" \
-    --math-dataset-id "${MATH_DATASET_ID}" --math-dataset-split "${MATH_DATASET_SPLIT}" --math-text-column "${MATH_TEXT_COLUMN}" \
-    --num-rows "${NUM_ROWS}" --max-seq-length "${MAX_SEQ_LENGTH}" --batch-size "${BATCH_SIZE}" \
-    --eaft-cc-quantile "${EAFT_CC_Q}" --eaft-uncertain-quantile "${EAFT_UNCERTAIN_Q}" --eaft-entropy-topk "${EAFT_ENTROPY_TOPK}" \
-    --eaft-w-good "${EAFT_W_GOOD}" --eaft-w-uncertain "${EAFT_W_UNCERTAIN}" --eaft-w-conflict "${EAFT_W_CONFLICT}" \
-    --calib-packs-repo "${CALIB_PACKS_REPO}" --calib-pack-files-csv "${CALIB_PACK_FILES}" --calib-pack-sample-strategy "${CALIB_PACK_SAMPLE_STRATEGY}" \
-    --calib-pack-weights-csv "${CALIB_PACK_WEIGHTS_CSV}" \
-    --keep-fracs-csv "${KEEP_FRACS_CSV}" \
-    --keep-n-round "${KEEP_N_ROUND}" --keep-n-multiple-of "${KEEP_N_MULTIPLE_OF}" \
-    --keep-frac "${KEEP_FRAC}" --min-keep-per-layer "${MIN_KEEP_PER_LAYER}" --max-keep-per-layer "${MAX_KEEP_PER_LAYER}" \
-    --core-pos-top-m "${CORE_POS_TOP_M}" --core-count-top-m "${CORE_COUNT_TOP_M}"
+bash -lc "
+  set -euo pipefail
+  cd \"${ROOT_DIR}\"
+  python -m versa run \
+    --backend jupyter \
+    --url \"${REMOTE_JUPYTER_URL}\" \
+    ${REMOTE_JUPYTER_TOKEN:+--token \"${REMOTE_JUPYTER_TOKEN}\"} \
+    ${KERNEL_ID:+--kernel-id \"${KERNEL_ID}\"} \
+    --repo-root \"${ROOT_DIR}\" \
+    --log-path \"${REMOTE_LOG}\" \
+    ${DETACH:+--detach} \
+    --bootstrap-cmd \"mkdir -p ${PRUNING_REMOTE_LOG_DIR}\" \
+    --bootstrap-cmd \"python -m pip install -U pip\" \
+    --bootstrap-cmd \"python -m pip install -q modal datasets transformers==4.56.2 tokenizers safetensors pyarrow pandas accelerate huggingface-hub hf_transfer\" \
+    --bootstrap-cmd \"python -m pip uninstall -y torchvision || true\" \
+    --bootstrap-cmd \"python -m pip install -q triton==${TRITON_VERSION} kernels==${KERNELS_VERSION}\" \
+    --bootstrap-cmd \"python -c \\\"import triton, kernels; ver=tuple(int(x) for x in triton.__version__.split('.')[:2]); assert ver >= (3,4), f'triton too old: {triton.__version__}'; print('[bootstrap] triton', triton.__version__, 'kernels OK')\\\"\" \
+    --bootstrap-cmd \"python -c 'import torch; print(torch.__version__)' || python -m pip install -q torch --index-url ${TORCH_INDEX_URL}\" \
+    --env-file \"${ENV_TMP}\" \
+    --env \"PYTHONFAULTHANDLER=1\" \
+    --env \"TORCH_SHOW_CPP_STACKTRACES=1\" \
+    --env \"TRANSFORMERS_NO_TORCHVISION=1\" \
+    --env \"PRUNING_LOCAL_MODE=1\" \
+    --env \"PRUNING_CACHE_ROOT=/kaggle/working/pruning_cache\" \
+    --env \"PRUNING_MODEL_DIR=/kaggle/working/pruning_cache/model\" \
+    --env \"PRUNING_DATA_DIR=/kaggle/working/pruning_cache/data\" \
+    --env \"PRUNING_HF_HOME=/kaggle/working/pruning_cache/hf_cache\" \
+    --env \"PRUNING_ARTIFACTS_DIR=/kaggle/working/artifacts/harmony_cuda_norm\" \
+    --env \"PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True\" \
+    --env \"MODEL_DIR_20B=/kaggle/input/gpt-oss-20b/transformers/default/1\" \
+    modal/gpt_oss_pruning_track.py::main -- \
+      --task \"${TASK}\" \
+      --model-id-20b \"${MODEL_ID_20B}\" \
+      --dataset-id \"${DATASET_ID}\" --dataset-split \"${DATASET_SPLIT}\" --text-column \"${TEXT_COLUMN}\" \
+      --domain \"${DOMAIN}\" --domain-column \"${DOMAIN_COLUMN}\" \
+      --math-dataset-id \"${MATH_DATASET_ID}\" --math-dataset-split \"${MATH_DATASET_SPLIT}\" --math-text-column \"${MATH_TEXT_COLUMN}\" \
+      --num-rows \"${NUM_ROWS}\" --max-seq-length \"${MAX_SEQ_LENGTH}\" --batch-size \"${BATCH_SIZE}\" \
+      --eaft-cc-quantile \"${EAFT_CC_Q}\" --eaft-uncertain-quantile \"${EAFT_UNCERTAIN_Q}\" --eaft-entropy-topk \"${EAFT_ENTROPY_TOPK}\" \
+      --eaft-w-good \"${EAFT_W_GOOD}\" --eaft-w-uncertain \"${EAFT_W_UNCERTAIN}\" --eaft-w-conflict \"${EAFT_W_CONFLICT}\" \
+      --calib-packs-repo \"${CALIB_PACKS_REPO}\" --calib-pack-files-csv \"${CALIB_PACK_FILES}\" --calib-pack-sample-strategy \"${CALIB_PACK_SAMPLE_STRATEGY}\" \
+      --calib-pack-weights-csv \"${CALIB_PACK_WEIGHTS_CSV}\" \
+      --keep-fracs-csv \"${KEEP_FRACS_CSV}\" \
+      --keep-n-round \"${KEEP_N_ROUND}\" --keep-n-multiple-of \"${KEEP_N_MULTIPLE_OF}\" \
+      --keep-frac \"${KEEP_FRAC}\" --min-keep-per-layer \"${MIN_KEEP_PER_LAYER}\" --max-keep-per-layer \"${MAX_KEEP_PER_LAYER}\" \
+      --core-pos-top-m \"${CORE_POS_TOP_M}\" --core-count-top-m \"${CORE_COUNT_TOP_M}\"
+"
 
 echo "[+] started pruning task"
 echo "    task=${TASK}"

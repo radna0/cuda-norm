@@ -1,0 +1,48 @@
+schema_version: 1
+kind: eval_recipe
+extends: eval-base.yaml
+
+name: eaft_parity_20b_base_vs_eaftreap060_longseq_tokenbudget1m_keep20_uniform
+description: >
+  Long-seq parity check for GPT‑OSS‑20B keep_n=20/32 (0.625) uniform, holding
+  per‑pack predicted‑token budget ~constant (~1,048,576 tokens) by scaling
+  num_blocks down.
+
+pair:
+  left:
+    label: base_20b
+    model_id: openai/gpt-oss-20b
+    model_path: /kaggle/input/gpt-oss-20b/transformers/default/1
+  right:
+    label: eaftreap_060_keep20_uniform
+    model_id: calib_union_keep20of32_k62_eaftreap
+    model_path_from_manifest:
+      manifest_json: harmony/cuda-norm/artifacts/20b_pruned_models_eaftreap_keepfrac/manifest_eaftreap_keepfrac.json
+      field: variants.calib_union_keep20of32_k62_eaftreap
+
+run_matrix:
+  - name: seq4096_blocks256_bs4
+    collector_overrides:
+      seq_lens_csv: "4096"
+      num_blocks: 256
+      batch_size: 4
+      sample_points: 200000
+      top_k: 4
+  - name: seq8192_blocks128_bs2
+    collector_overrides:
+      seq_lens_csv: "8192"
+      num_blocks: 128
+      batch_size: 2
+      sample_points: 200000
+      top_k: 4
+  - name: seq16384_blocks64_bs1
+    collector_overrides:
+      seq_lens_csv: "16384"
+      num_blocks: 64
+      batch_size: 1
+      sample_points: 200000
+      top_k: 4
+
+expected_outputs:
+  parity_summary_md: harmony/cuda-norm/reports/eaftreap60_longseq_tokenbudget1m_keep20_uniform.md
+

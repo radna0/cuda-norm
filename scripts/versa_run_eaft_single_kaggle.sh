@@ -22,7 +22,6 @@ set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 REPO_ROOT="$(cd "${ROOT_DIR}/../.." && pwd)"
-SYNC_DIR="${ROOT_DIR}/.versa_sync_min"
 
 if [[ -z "${REMOTE_JUPYTER_URL:-}" ]]; then
   echo "[err] REMOTE_JUPYTER_URL is not set" >&2
@@ -87,10 +86,6 @@ TS="$(date +%Y%m%d_%H%M%S)"
 SLUG="$(echo "${MODEL_ID}" | tr '/:' '__')"
 REMOTE_LOG="${EAFT_REMOTE_LOG_DIR}/eaft_single_${SLUG}_${TS}.log"
 
-# Ensure the minimal sync tree exists so the remote kernel runs the repo code
-# from `/kaggle/working/cuda-norm/...` (not an ephemeral upload path).
-python "${ROOT_DIR}/scripts/versa_prepare_sync_min.py" --out "${SYNC_DIR}" >/dev/null
-
 EXTRA_ARGS=()
 if [[ "${SKIP_PREDOWNLOAD}" == "1" ]]; then
   EXTRA_ARGS+=(--skip-predownload)
@@ -104,47 +99,59 @@ if [[ -n "${MAX_NEW_TOKENS}" ]]; then
   EXTRA_ENV+=(--env "EAFT_MAX_NEW_TOKENS=${MAX_NEW_TOKENS}")
 fi
 
+# Do not leak KAGGLE_URL (auth token) into the remote environment or Versa logs.
+# The remote kernel does not need KAGGLE_URL; it's only used locally for /files downloads.
+ENV_TMP="$(mktemp -t eaft_env_XXXXXX)"
+trap 'rm -f "${ENV_TMP}"' EXIT
+if [[ -f "${EAFT_ENV_FILE}" ]]; then
+  rg -v '^KAGGLE_URL=' "${EAFT_ENV_FILE}" > "${ENV_TMP}" || true
+else
+  : > "${ENV_TMP}"
+fi
+
 PYTHONPATH="${REPO_ROOT}/third_party/Versa" \
-python -m versa run \
-  --backend jupyter \
-  --url "${REMOTE_JUPYTER_URL}" \
-  ${REMOTE_JUPYTER_TOKEN:+--token "${REMOTE_JUPYTER_TOKEN}"} \
-  ${KERNEL_ID:+--kernel-id "${KERNEL_ID}"} \
-  --cwd "/kaggle/working" \
-  --sync-local-dir "${SYNC_DIR}" \
-  --sync-remote-dir "harmony/cuda-norm" \
-  --log-path "${REMOTE_LOG}" \
-  ${DETACH:+--detach} \
-  --bootstrap-cmd "mkdir -p ${EAFT_REMOTE_LOG_DIR}" \
-  --bootstrap-cmd "mkdir -p /kaggle/working/eaft_cache" \
-  --bootstrap-cmd "mkdir -p /kaggle/working/artifacts" \
-  --bootstrap-cmd "python -m pip install -U pip" \
-  --bootstrap-cmd "python -m pip install -q modal datasets transformers==4.56.2 tokenizers safetensors pyarrow pandas accelerate huggingface-hub hf_transfer" \
-  --bootstrap-cmd "python -m pip uninstall -y torchvision || true" \
-  --bootstrap-cmd "python -m pip install -q triton==${TRITON_VERSION} kernels==${KERNELS_VERSION}" \
-  --bootstrap-cmd "python -c \"import triton, kernels; ver=tuple(int(x) for x in triton.__version__.split('.')[:2]); assert ver >= (3,4), f'triton too old: {triton.__version__}'; print('[bootstrap] triton', triton.__version__, 'kernels OK')\"" \
-  --bootstrap-cmd "python -m pip install -q 'sglang[all]'" \
-  --bootstrap-cmd "python -c 'import torch; print(torch.__version__)' || python -m pip install -q torch --index-url ${TORCH_INDEX_URL}" \
-  --env-file "${EAFT_ENV_FILE}" \
-  --env "GPU_TYPE=${GPU_TYPE}" \
-  --env "EAFT_LOCAL_MODE=1" \
-  --env "EAFT_ARTIFACTS_DIR=/kaggle/working/artifacts/eaft_models" \
-  --env "SGLANG_ALLOW_OVERWRITE_LONGER_CONTEXT_LEN=1" \
-  --env "PYTHONFAULTHANDLER=1" \
-  --env "TORCH_SHOW_CPP_STACKTRACES=1" \
-  --env "TRANSFORMERS_NO_TORCHVISION=1" \
-  "${EXTRA_ENV[@]}" \
-  "${ROOT_DIR}/modal/collect_calib_packs_eaft_single.py::main" -- \
-    --model-id "${MODEL_ID}" \
-    ${MODEL_PATH:+--model-path "${MODEL_PATH}"} \
-    --seq-lens-csv "${SEQ_LENS_CSV}" \
-    --num-blocks "${NUM_BLOCKS}" \
-    --batch-size "${BATCH_SIZE}" \
-    --sample-points "${SAMPLE_POINTS}" \
-    --top-k "${TOP_K}" \
-    --entropy-topk "${ENTROPY_TOPK}" \
-    --cc-quantile "${CC_QUANTILE}" \
-    "${EXTRA_ARGS[@]}"
+bash -lc "
+  set -euo pipefail
+  cd \"${ROOT_DIR}\"
+  python -m versa run \
+    --backend jupyter \
+    --url \"${REMOTE_JUPYTER_URL}\" \
+    ${REMOTE_JUPYTER_TOKEN:+--token \"${REMOTE_JUPYTER_TOKEN}\"} \
+    ${KERNEL_ID:+--kernel-id \"${KERNEL_ID}\"} \
+    --repo-root \"${ROOT_DIR}\" \
+    --log-path \"${REMOTE_LOG}\" \
+    ${DETACH:+--detach} \
+    --bootstrap-cmd \"mkdir -p ${EAFT_REMOTE_LOG_DIR}\" \
+    --bootstrap-cmd \"mkdir -p eaft_cache\" \
+    --bootstrap-cmd \"mkdir -p artifacts\" \
+    --bootstrap-cmd \"python -m pip install -U pip\" \
+    --bootstrap-cmd \"python -m pip install -q modal datasets transformers==4.56.2 tokenizers safetensors pyarrow pandas accelerate huggingface-hub hf_transfer\" \
+    --bootstrap-cmd \"python -m pip uninstall -y torchvision || true\" \
+    --bootstrap-cmd \"python -m pip install -q triton==${TRITON_VERSION} kernels==${KERNELS_VERSION}\" \
+    --bootstrap-cmd \"python -c \\\"import triton, kernels; ver=tuple(int(x) for x in triton.__version__.split('.')[:2]); assert ver >= (3,4), f'triton too old: {triton.__version__}'; print('[bootstrap] triton', triton.__version__, 'kernels OK')\\\"\" \
+    --bootstrap-cmd \"python -m pip install -q 'sglang[all]'\" \
+    --bootstrap-cmd \"python -c 'import torch; print(torch.__version__)' || python -m pip install -q torch --index-url ${TORCH_INDEX_URL}\" \
+    --env-file \"${ENV_TMP}\" \
+    --env \"GPU_TYPE=${GPU_TYPE}\" \
+    --env \"EAFT_LOCAL_MODE=1\" \
+    --env \"EAFT_ARTIFACTS_DIR=/kaggle/working/artifacts/eaft_models\" \
+    --env \"SGLANG_ALLOW_OVERWRITE_LONGER_CONTEXT_LEN=1\" \
+    --env \"PYTHONFAULTHANDLER=1\" \
+    --env \"TORCH_SHOW_CPP_STACKTRACES=1\" \
+    --env \"TRANSFORMERS_NO_TORCHVISION=1\" \
+    ${EXTRA_ENV[*]:+${EXTRA_ENV[*]}} \
+    modal/collect_calib_packs_eaft_single.py::main -- \
+      --model-id \"${MODEL_ID}\" \
+      ${MODEL_PATH:+--model-path \"${MODEL_PATH}\"} \
+      --seq-lens-csv \"${SEQ_LENS_CSV}\" \
+      --num-blocks \"${NUM_BLOCKS}\" \
+      --batch-size \"${BATCH_SIZE}\" \
+      --sample-points \"${SAMPLE_POINTS}\" \
+      --top-k \"${TOP_K}\" \
+      --entropy-topk \"${ENTROPY_TOPK}\" \
+      --cc-quantile \"${CC_QUANTILE}\" \
+      ${EXTRA_ARGS[*]:+${EXTRA_ARGS[*]}}
+"
 
 echo "[+] started"
 echo "    model_id=${MODEL_ID}"

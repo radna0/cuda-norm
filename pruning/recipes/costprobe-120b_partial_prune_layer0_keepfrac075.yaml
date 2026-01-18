@@ -1,0 +1,41 @@
+schema_version: 1
+kind: cost_probe
+
+name: gptoss120b_partial_prune_dryrun_layer0_keepfrac075
+description: >
+  120B structural-prune cost probe: rewrite a single MoE layer (layer 0)
+  at keep_frac=0.75 (keep_n computed at runtime), measure IO + time + RAM.
+  This is a feasibility probe only (no full prune).
+
+model:
+  model_id: openai/gpt-oss-120b
+
+probe:
+  layer_index: 0
+  keep_frac: 0.75
+  keep_n_multiple_of: 4
+  max_shard_size_gb: 5.0
+  shard_bytes_definition: decimal_gb
+
+metrics:
+  - peak_rss_gb
+  - wall_time_s
+  - bytes_read
+  - bytes_written
+  - num_shards_touched
+
+execution:
+  local_cpu:
+    notes:
+      - "Requires enough local disk + RAM to download and rewrite 120B shards."
+    command: >
+      python harmony/cuda-norm/pruning/partial_prune_dryrun_120b.py
+      --model-id openai/gpt-oss-120b
+      --layer-idx 0
+      --keep-frac 0.75
+      --keep-n-multiple-of 4
+      --max-shard-size-gb 5
+  modal_cpu:
+    notes:
+      - "Use only if Modal profile has budget; CPU-only is fine for IO probe."
+    command: "TBD (no Modal wrapper yet; use local_cpu or a one-off Modal function)"

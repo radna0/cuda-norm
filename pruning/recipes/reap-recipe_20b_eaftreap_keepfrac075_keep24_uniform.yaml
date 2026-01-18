@@ -53,6 +53,13 @@ profiling_data:
     seed: 3407
   max_seq_length: 4096
   batch_size: 1
+  implementation_notes:
+    - >
+      Profiling requires direct access to expert projection weights as real
+      PyTorch tensors. When GPT‑OSS MXFP4 loads with kernels/triton enabled,
+      Transformers may wrap weights in `triton_kernels.*.tensor.Tensor`, which
+      breaks the per-expert matmul norm estimator. Our profiler loads MXFP4 with
+      `Mxfp4Config(dequantize=True)` to force BF16 tensors for profiling only.
 
 selection_constraints:
   keep_n_multiple_of: 4

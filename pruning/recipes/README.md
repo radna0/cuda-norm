@@ -32,3 +32,29 @@ Recipes include an `execution` section with suggested commands for:
 
 The YAML is intentionally tool-agnostic; it’s a single source of truth for what to run and what outputs to expect.
 
+## Current recipes
+
+**Pruning recipes**
+- `reap-recipe_20b_eaftreap_keepfrac075_keep24_uniform.yaml`
+- `reap-recipe_20b_eaftreap_keepfrac060_keep20.yaml` (0.60 target, 0.625 actual due to keep_n%4 constraint)
+- `reap-recipe_120b_eaftreap_keepfrac075_planned.yaml` (planned)
+
+**Scores snapshots**
+- `reap-scores_20b_eaftreap_keepfrac075_keep24_uniform.yaml`
+- `reap-scores_20b_eaftreap_keepfrac075_budgeted.yaml` (historical)
+- `reap-scores_20b_eaftreap_keepfrac060_keep19.yaml`
+  - historical: the old “floor(0.60*32)=19” target; we now treat 0.60 as keep_n=20 (0.625) for kernel compatibility.
+
+**Eval recipes**
+- `eval-20b_base_vs_base_noise_bigblocks.yaml`
+- `eval-20b_noop_rewrite_lossless_bigblocks.yaml`
+- `eval-20b_eaftreap075_bigblocks_keep24_uniform.yaml`
+- `eval-20b_eaftreap075_longseq_tokenbudget1m_keep24_uniform.yaml`
+- `eval-20b_eaftreap060_bigblocks_keep20_uniform.yaml`
+- `eval-20b_eaftreap060_longseq_tokenbudget1m_keep20_uniform.yaml`
+- `eval-20b_eaftreap075_extreme_ctx65k_131k.yaml` (production stress)
+- `eval-120b_base_bigblocks.yaml`
+- `eval-120b_base_longseq_tokenbudget1m.yaml`
+
+**Cost probes**
+- `costprobe-120b_partial_prune_layer0_keepfrac075.yaml`

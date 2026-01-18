@@ -135,6 +135,47 @@ def main() -> None:
         default=1,
         help="How many consecutive DFlash steps to simulate per base block (produces num_blocks*rollout_steps samples).",
     )
+    ap.add_argument(
+        "--rollout-accept-len-mode",
+        type=str,
+        default="full",
+        choices=["full", "uniform", "geometric"],
+        help=(
+            "How to advance the synthetic teacher-only rollout after each verify block.\n"
+            "\n"
+            "In real DFlash decoding, accept_len is often < (block_size-1) early; if we build caches assuming perfect\n"
+            "acceptance, the next-step contexts seen during inference diverge from training distribution and\n"
+            "acceptance can collapse after the first few blocks.\n"
+            "\n"
+            "full: accept_len = block_size-1 (old behavior).\n"
+            "uniform: accept_len ~ Uniform{0..block_size-1}.\n"
+            "geometric: accept_len sampled from geometric(p) biased toward small values.\n"
+            "\n"
+            "This changes only the rollout state transition (next ctx_ids/anchor_id). Labels remain teacher greedy tokens."
+        ),
+    )
+    ap.add_argument(
+        "--rollout-accept-len-p",
+        type=float,
+        default=0.35,
+        help="Geometric accept_len parameter p (only used when --rollout-accept-len-mode=geometric).",
+    )
+    ap.add_argument(
+        "--rollout-state-evolution",
+        type=str,
+        default="dflash_commit",
+        choices=["dflash_commit", "teacher_commit"],
+        help=(
+            "How to advance the synthetic rollout token history after each verify.\n"
+            "\n"
+            "dflash_commit (recommended): commit the *candidate* tokens that a draft would have produced, i.e.\n"
+            "  committed = [anchor] + cand[1:1+accept_len]\n"
+            "and set the next anchor to the target bonus token.\n"
+            "\n"
+            "teacher_commit: commit the target-predicted tokens (tgt_verify[:accept_len]) instead.\n"
+            "This can drift from the actual KV/features used during verification if cand != tgt_verify.\n"
+        ),
+    )
     ap.add_argument("--batch-size", type=int, default=1, help="Blocks per host loop iteration (1 = simplest/correct).")
     ap.add_argument("--seed", type=int, default=0)
     ap.add_argument(
@@ -401,6 +442,7 @@ def main() -> None:
         pos_offsets = clamped
 
     input_ids = np.asarray(input_ids_np, dtype=np.int32)
+    rng = np.random.default_rng(int(args.seed))
 
     # ---- eSurge-parity verify-mode prefill for context features ----
     mesh = model.mesh
@@ -500,22 +542,38 @@ def main() -> None:
     out_pos = 0
     for i in range(int(n)):
         # Initial state (from packed dataset tokens).
-        ctx_ids = input_ids[i, :ctx_len].astype(np.int32)  # [ctx_len]
-        anchor_id = int(input_ids[i, ctx_len])
-        pos_base = int(pos_offsets[int(i) % len(pos_offsets)])
+        ctx_ids = input_ids[i, :ctx_len].astype(np.int32)  # [ctx_len] (prefix excluding anchor)
+        anchor_id = int(input_ids[i, ctx_len])  # "current token" (anchor)
+        if str(args.position_offset_mode) == "cycle_samples":
+            ctx_pos_start = int(pos_offsets[int(out_pos) % len(pos_offsets)])
+        else:
+            ctx_pos_start = int(pos_offsets[int(i) % len(pos_offsets)])
 
         block_t0 = time.time()
+        # Maintain a rolling context-feature window that evolves exactly like
+        # runtime DFlash: append ctx features for committed tokens coming from
+        # the block-verify forward, and drop from the left to keep ctx_len.
+        #
+        # IMPORTANT: these features correspond to the *candidate* tokens (cand)
+        # used during verification, not to the target predictions. If rollout
+        # advances token IDs using a different sequence, ctx_token_ids and
+        # context_features will silently mismatch.
+        ctx_feat_win_bf16: np.ndarray | None = None  # [ctx_len, K*hidden]
+
         for step_idx in range(int(rollout_steps)):
             # Generate one training sample for this (ctx_ids, anchor_id) state.
             tgt = np.empty((int(block_size - 1),), dtype=np.int32)
-            if str(args.position_offset_mode) == "cycle_samples":
-                pos_off = int(pos_offsets[int(out_pos) % len(pos_offsets)])
-            else:
-                # Perfect-accept rollout: each step shifts the ctx window forward
-                # by `block_size` tokens. Track absolute RoPE positions by
-                # advancing ctx_pos_start accordingly.
-                pos_off = int(pos_base + int(step_idx) * int(block_size))
+            pos_off = int(ctx_pos_start)
             pos_off_cpu = np.asarray([np.int32(pos_off)], dtype=np.int32)
+            if max_pos_emb > 0:
+                max_pos_index = int(max_pos_emb - 1)
+                worst = int(pos_off + int(ctx_len) + int(block_size) - 1)
+                if worst > max_pos_index:
+                    raise ValueError(
+                        f"position overflow during rollout: ctx_pos_start={pos_off} "
+                        f"ctx_len={int(ctx_len)} block_size={int(block_size)} "
+                        f"worst_pos={worst} max_pos={max_pos_index}"
+                    )
 
             _reset_kv_pages()
 
@@ -560,6 +618,14 @@ def main() -> None:
             ctx_full = jnp.concatenate(parts, axis=0) if parts else jnp.zeros((0, k * hidden), dtype=jnp.bfloat16)
             if int(ctx_full.shape[0]) != int(ctx_len):
                 raise RuntimeError(f"ctx_full length mismatch: got {int(ctx_full.shape[0])}, expected {int(ctx_len)}")
+            # Initialize rolling window from the very first prefill; subsequent
+            # steps update this window using verify-mode ctx features for
+            # committed tokens (runtime-parity).
+            if ctx_feat_win_bf16 is None:
+                ctx_feat_win_bf16 = np.asarray(
+                    jax.device_get(ctx_full.reshape((int(ctx_len), int(k * hidden)))),
+                    dtype=ml_dtypes.bfloat16,
+                ).copy()
 
             # Greedy decode candidates (block_size-1) using 1-token verify steps.
             seqbuf.num_computed_tokens[0] = int(ctx_len)
@@ -640,7 +706,7 @@ def main() -> None:
             seqbuf.num_tokens_no_spec[0] = int(ctx_len + int(block_size))
 
             scheduled_full_cpu[0] = int(block_size)
-            _ctx_v, greedy_block, input_ids_buf, position_ids_buf, _m = executor.execute_verify(
+            ctx_v, greedy_block, input_ids_buf, position_ids_buf, _m = executor.execute_verify(
                 num_tokens=int(block_size),
                 scheduled_full_cpu=scheduled_full_cpu,
                 active_mask_full_cpu=active_mask_full_cpu,
@@ -663,31 +729,86 @@ def main() -> None:
                     f"verify greedy_block length mismatch: got {greedy_block.shape}, expected >=({int(block_size)},)"
                 )
             tgt_verify = greedy_block[: int(block_size) - 1].astype(np.int32)
-            bonus_next = int(greedy_block[int(block_size) - 1])
+            # NOTE: actual bonus used by DFlash is greedy_block[accept_len]; we
+            # compute it after sampling accept_len below.
 
             with mesh:
-                ctx_full = jax.block_until_ready(ctx_full)
                 emb = model.get_embedding()(jnp.asarray([[anchor_id]], dtype=jnp.int32))[:, 0, :]
                 emb = jax.block_until_ready(emb)
 
-            ctx_bf16 = np.asarray(
-                jax.device_get(ctx_full.reshape((int(ctx_len), int(k * hidden)))), dtype=ml_dtypes.bfloat16
-            )
+            assert ctx_feat_win_bf16 is not None
             emb_bf16 = np.asarray(jax.device_get(emb[0]), dtype=ml_dtypes.bfloat16)
-            ctx_feats_u16[out_pos] = ctx_bf16.view(np.uint16)
+            ctx_feats_u16[out_pos] = np.asarray(ctx_feat_win_bf16, dtype=ml_dtypes.bfloat16).view(np.uint16)
             anchor_emb_u16[out_pos] = emb_bf16.view(np.uint16)
             target_ids[out_pos] = tgt_verify
             anchor_ids[out_pos] = np.int32(anchor_id)
-            ctx_token_ids[out_pos] = ctx_ids
-            ctx_pos_start_i32[out_pos] = np.int32(pos_off)
-            anchor_pos_i32[out_pos] = np.int32(pos_off + int(ctx_len))
+            ctx_token_ids[out_pos] = np.asarray(ctx_ids, dtype=np.int32)
+            ctx_pos_start_i32[out_pos] = np.int32(ctx_pos_start)
+            anchor_pos_i32[out_pos] = np.int32(int(ctx_pos_start) + int(ctx_len))
             out_pos += 1
 
-            # Roll forward in a "perfect acceptance" world:
-            # committed tokens become part of context; next current token is bonus_next.
-            hist = np.concatenate([ctx_ids, np.asarray([anchor_id], dtype=np.int32), tgt_verify], axis=0)
-            ctx_ids = hist[-int(ctx_len) :].astype(np.int32)
-            anchor_id = int(bonus_next)
+            # Roll forward to synthesize the next prompt prefix.
+            #
+            # Real DFlash decoding commits:
+            #   keep = 1 + accept_len
+            # tokens from the verify block, and advances the "current token" to the
+            # target greedy token at index accept_len (bonus token).
+            #
+            # We approximate this by sampling an accept_len and advancing the
+            # teacher-only rollout accordingly. This keeps the rollout on teacher
+            # distribution while covering partial-commit regimes.
+            mode = str(args.rollout_accept_len_mode).strip().lower()
+            if mode == "full":
+                accept_len = int(block_size) - 1
+            elif mode == "uniform":
+                accept_len = int(rng.integers(0, int(block_size), dtype=np.int64))
+            elif mode == "geometric":
+                p = float(args.rollout_accept_len_p)
+                if not (0.0 < p <= 1.0):
+                    raise ValueError(f"rollout_accept_len_p must be in (0,1], got {p}")
+                accept_len = int(min(int(rng.geometric(p)) - 1, int(block_size) - 1))
+            else:
+                raise ValueError(f"Unknown rollout_accept_len_mode={mode!r}")
+
+            keep = int(1 + accept_len)
+            bonus = int(greedy_block[accept_len])
+
+            # Update rolling ctx features (runtime-parity): append ctx features
+            # for committed tokens [anchor] + accepted draft tokens.
+            #
+            # `ctx_v` is the verify-mode captured ctx features for the *candidate*
+            # tokens in `cand`. This is exactly what runtime uses to condition
+            # the next draft step.
+            ctx_block_bf16 = np.asarray(
+                jax.device_get(jnp.asarray(ctx_v)[: int(block_size), :]),
+                dtype=ml_dtypes.bfloat16,
+            )
+            if keep > 0:
+                if keep >= int(ctx_len):
+                    ctx_feat_win_bf16 = ctx_block_bf16[:keep, :][-int(ctx_len) :, :].copy()
+                else:
+                    assert ctx_feat_win_bf16 is not None
+                    ctx_feat_win_bf16[:-keep, :] = ctx_feat_win_bf16[keep:, :]
+                    ctx_feat_win_bf16[-keep:, :] = ctx_block_bf16[:keep, :]
+
+            # Advance token history. For DFlash parity, commit candidate tokens.
+            if str(args.rollout_state_evolution).strip().lower() == "teacher_commit":
+                committed = tgt_verify[:accept_len].astype(np.int32, copy=False)
+            else:
+                committed = cand[1 : 1 + int(accept_len)].astype(np.int32, copy=False)
+
+            if keep > 0:
+                keep_tokens = np.concatenate(
+                    [np.asarray([anchor_id], dtype=np.int32), np.asarray(committed, dtype=np.int32)], axis=0
+                )
+                if keep >= int(ctx_len):
+                    ctx_ids = keep_tokens[-int(ctx_len) :].astype(np.int32, copy=False)
+                else:
+                    ctx_ids[:-keep] = ctx_ids[keep:]
+                    ctx_ids[-keep:] = keep_tokens
+
+            anchor_id = int(bonus)
+            ctx_pos_start = int(ctx_pos_start + keep)
 
             # Heartbeat for long rollouts: print a stable progress line without spamming.
             if (step_idx + 1) % 8 == 0 or (step_idx + 1) == int(rollout_steps):

@@ -70,32 +70,39 @@ fi
         # (because the pattern appears in the current process cmdline). Instead,
         # find target PIDs via `ps` and kill explicitly, excluding our own PID.
         remote_script += r"""
-echo "[cleanup] aggressive: killing leaked Versa modal_run processes..."
+echo "[cleanup] aggressive: killing leaked Versa modal_run python processes..."
 python - <<'PY'
 import os
 import signal
 import subprocess
 
 me = os.getpid()
-txt = subprocess.check_output(["ps", "-eo", "pid,args"], text=True, errors="ignore")
+parent = os.getppid()
+
+txt = subprocess.check_output(["ps", "-eo", "pid,comm,args"], text=True, errors="ignore")
 targets = []
-for line in txt.splitlines()[1:]:
-    line = line.strip()
+for raw in txt.splitlines()[1:]:
+    line = raw.strip()
     if not line:
         continue
-    parts = line.split(None, 1)
-    if not parts:
+    parts = line.split(None, 2)
+    if len(parts) < 3:
         continue
     try:
         pid = int(parts[0])
     except Exception:
         continue
-    if pid == me:
+    comm = parts[1]
+    args = parts[2]
+    if pid in (me, parent):
         continue
-    if ".versa/modal_run.py" in line:
+    # Important: only kill the actual python runner. Our wrapper `sh -c ...`
+    # often contains the substring too, and killing it would kill the cleanup
+    # command itself.
+    if comm.startswith("python") and ".versa/modal_run.py" in args:
         targets.append(pid)
 
-print("[cleanup] modal_run_pids=", targets)
+print("[cleanup] modal_run_py_pids=", targets)
 for pid in targets:
     try:
         os.kill(pid, signal.SIGKILL)
@@ -131,7 +138,9 @@ pulse_ps
 
     env = os.environ.copy()
     env["PYTHONPATH"] = versa_py_path + (os.pathsep + env["PYTHONPATH"] if env.get("PYTHONPATH") else "")
-    print("[*] running:", " ".join(shlex.quote(x) for x in cmd), flush=True)
+    # Do not print the full Kaggle URL (it contains an auth token).
+    cmd_redacted = [("<kaggle_url_redacted>" if x == kaggle_url else x) for x in cmd]
+    print("[*] running:", " ".join(shlex.quote(x) for x in cmd_redacted), flush=True)
     subprocess.run(cmd, env=env, check=True)
 
 
