@@ -59,6 +59,11 @@ def main() -> None:
         help="Index into ctx_token_ids/anchor_ids when --prompt-from-cache-dir is set.",
     )
     ap.add_argument("--also-run-baseline", action="store_true", help="Also run baseline greedy (slow) for speedup_x.")
+    ap.add_argument(
+        "--check-output-match",
+        action="store_true",
+        help="If set (and --also-run-baseline), compare generated token IDs for dflash vs baseline and report match stats.",
+    )
     args = ap.parse_args()
 
     repo_root = Path(__file__).resolve().parents[1]
@@ -144,6 +149,19 @@ def main() -> None:
         enc = tok(prompt, truncation=True, max_length=int(args.prompt_len), return_tensors="np")
         prompt_ids = enc["input_ids"][0].astype(np.int32)
 
+    # If benchmarking on a cached prompt, prefer using the same EasyDeL-native
+    # teacher checkpoint that produced the cache. Otherwise, you can end up
+    # with a different conversion path (from_torch=True) which changes verify
+    # greedy IDs and collapses accept_len (draft never matches).
+    if prompt_from_cache_dir and not str(args.teacher_easydel_dir).strip():
+        try:
+            meta = json.loads((cache_dir / "meta.json").read_text(encoding="utf-8"))
+            meta_teacher = str(meta.get("teacher_easydel_dir") or "").strip()
+            if meta_teacher:
+                args.teacher_easydel_dir = meta_teacher
+        except Exception:
+            pass
+
     teacher_easydel_dir = Path(str(args.teacher_easydel_dir)).resolve() if str(args.teacher_easydel_dir).strip() else None
     if teacher_easydel_dir is not None and teacher_easydel_dir.exists():
         teacher = AutoEasyDeLModelForCausalLM.from_pretrained(
@@ -223,21 +241,54 @@ def main() -> None:
     draft_cfg_dict["block_size"] = int(args.block_size)
     draft_cfg = DFlashDraftModelConfig(**draft_cfg_dict)
 
-    dflash_res, base_res = bench_esurge_dflash_decode_single(
-        teacher=teacher,
-        prompt_ids=prompt_ids,
-        draft_run_dir=str(run_dir),
-        draft_cfg=draft_cfg,
-        target_rope=rope,
-        lm_head_weight=lm_w,
-        position_offset=int(position_offset),
-        block_size=int(args.block_size),
-        max_new_tokens=int(args.max_new_tokens),
-        max_model_len=int(args.max_model_len),
-        page_size=int(args.page_size),
-        hbm_utilization=float(args.hbm_utilization),
-        also_run_baseline=bool(args.also_run_baseline),
-    )
+    output_match = None
+    if bool(args.check_output_match):
+        from easydel.inference.speculative.dflash_esurge_tpu import esurge_dflash_decode_single
+
+        outs = esurge_dflash_decode_single(
+            teacher=teacher,
+            prompt_ids=prompt_ids,
+            draft_run_dir=str(run_dir),
+            draft_cfg=draft_cfg,
+            target_rope=rope,
+            lm_head_weight=lm_w,
+            position_offset=int(position_offset),
+            block_size=int(args.block_size),
+            max_new_tokens=int(args.max_new_tokens),
+            max_model_len=int(args.max_model_len),
+            page_size=int(args.page_size),
+            hbm_utilization=float(args.hbm_utilization),
+            also_run_baseline=bool(args.also_run_baseline),
+        )
+        dflash_res, base_res = outs.dflash, outs.baseline
+        if outs.baseline_token_ids is not None:
+            n = min(len(outs.dflash_token_ids), len(outs.baseline_token_ids))
+            prefix = 0
+            for i in range(n):
+                if outs.dflash_token_ids[i] != outs.baseline_token_ids[i]:
+                    break
+                prefix += 1
+            output_match = {
+                "n_compared": int(n),
+                "match_prefix_len": int(prefix),
+                "match_frac": float(prefix / max(1, n)),
+            }
+    else:
+        dflash_res, base_res = bench_esurge_dflash_decode_single(
+            teacher=teacher,
+            prompt_ids=prompt_ids,
+            draft_run_dir=str(run_dir),
+            draft_cfg=draft_cfg,
+            target_rope=rope,
+            lm_head_weight=lm_w,
+            position_offset=int(position_offset),
+            block_size=int(args.block_size),
+            max_new_tokens=int(args.max_new_tokens),
+            max_model_len=int(args.max_model_len),
+            page_size=int(args.page_size),
+            hbm_utilization=float(args.hbm_utilization),
+            also_run_baseline=bool(args.also_run_baseline),
+        )
 
     print(
         json.dumps(
@@ -246,6 +297,7 @@ def main() -> None:
                 "position_offset": int(position_offset),
                 "dflash": dflash_res.__dict__,
                 "baseline": base_res.__dict__ if base_res else None,
+                "output_match": output_match,
             },
             indent=2,
         )

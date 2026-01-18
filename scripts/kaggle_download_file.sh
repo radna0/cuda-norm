@@ -50,6 +50,7 @@ fi
 # Normalize slashes.
 REMOTE_PATH="${REMOTE_PATH#/}"
 REMOTE_PATH="${REMOTE_PATH#/kaggle/working/}"
+REMOTE_PATH="${REMOTE_PATH#kaggle/working/}"
 
 mkdir -p "$(dirname "${OUT}")"
 

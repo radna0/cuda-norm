@@ -150,7 +150,18 @@ REMOTE_LOG="${PRUNING_REMOTE_LOG_DIR}/${TASK}_${TS}.log"
 # Do not leak KAGGLE_URL (auth token) into the remote environment or Versa logs.
 # The remote kernel does not need KAGGLE_URL; it's only used locally for /files downloads.
 ENV_TMP="$(mktemp -t pruning_env_XXXXXX)"
-trap 'rm -f "${ENV_TMP}"' EXIT
+# IMPORTANT: DO NOT set --repo-root to the full local repo (it is ~14GB because
+# it contains artifacts/). Versa will package it for upload and hang for a long
+# time. Instead, build a minimal bundle with only the required entry file.
+BUNDLE_DIR="$(mktemp -d -t versa_bundle_pruning_XXXXXX)"
+cleanup_tmp() {
+  rm -f "${ENV_TMP}" 2>/dev/null || true
+  rm -rf "${BUNDLE_DIR}" 2>/dev/null || true
+}
+trap cleanup_tmp EXIT
+
+mkdir -p "${BUNDLE_DIR}/modal"
+cp -f "${ROOT_DIR}/modal/gpt_oss_pruning_track.py" "${BUNDLE_DIR}/modal/gpt_oss_pruning_track.py"
 if [[ -f "${PRUNING_ENV_FILE}" ]]; then
   rg -v '^KAGGLE_URL=' "${PRUNING_ENV_FILE}" > "${ENV_TMP}" || true
 else
@@ -160,13 +171,13 @@ fi
 PYTHONPATH="${REPO_ROOT}/third_party/Versa" \
 bash -lc "
   set -euo pipefail
-  cd \"${ROOT_DIR}\"
+  cd \"${BUNDLE_DIR}\"
   python -m versa run \
     --backend jupyter \
     --url \"${REMOTE_JUPYTER_URL}\" \
     ${REMOTE_JUPYTER_TOKEN:+--token \"${REMOTE_JUPYTER_TOKEN}\"} \
     ${KERNEL_ID:+--kernel-id \"${KERNEL_ID}\"} \
-    --repo-root \"${ROOT_DIR}\" \
+    --repo-root \"${BUNDLE_DIR}\" \
     --log-path \"${REMOTE_LOG}\" \
     ${DETACH:+--detach} \
     --bootstrap-cmd \"mkdir -p ${PRUNING_REMOTE_LOG_DIR}\" \

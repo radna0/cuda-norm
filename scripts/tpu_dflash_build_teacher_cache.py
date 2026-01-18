@@ -836,6 +836,9 @@ def main() -> None:
         "block_size": int(block_size),
         "num_blocks": int(n),
         "rollout_steps": int(rollout_steps),
+        "rollout_accept_len_mode": str(args.rollout_accept_len_mode),
+        "rollout_accept_len_p": float(args.rollout_accept_len_p),
+        "rollout_state_evolution": str(args.rollout_state_evolution),
         "num_samples": int(n_out),
         "batch_size": int(args.batch_size),
         "prefill_chunk": int(args.prefill_chunk),
@@ -854,6 +857,9 @@ def main() -> None:
         "positions_contiguous": True,
         "ctx_pos_start_file": "ctx_pos_start_i32.npy",
         "anchor_pos_file": "anchor_pos_i32.npy",
+        "teacher_easydel_dir": str(Path(str(args.teacher_easydel_dir)).expanduser().resolve())
+        if str(args.teacher_easydel_dir).strip()
+        else "",
         "calib_repo_id": str(args.calib_repo_id),
         "calib_data_files": data_files,
         "max_rows_per_pack": int(args.max_rows_per_pack),

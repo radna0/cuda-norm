@@ -68,6 +68,7 @@ fi
 BASE_URL="${BASE_URL%/}"
 REMOTE_PATH="${REMOTE_PATH#/}"
 REMOTE_PATH="${REMOTE_PATH#/kaggle/working/}"
+REMOTE_PATH="${REMOTE_PATH#kaggle/working/}"
 
 FILES_URL="${BASE_URL}/files/${REMOTE_PATH}"
 CONTENTS_URL="${BASE_URL}/api/contents/${REMOTE_PATH}?content=1"

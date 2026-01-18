@@ -1,0 +1,55 @@
+schema_version: 1
+kind: eval_recipe
+extends: eval-base.yaml
+
+name: eaft_parity_20b_base_vs_eaftreap075_longseq_tokenbudget10m_keep24_uniform
+description: >
+  High-confidence long-seq validation for the keep_n=24/32 (keep_frac=0.75)
+  EAFT‑REAP prune, at fixed top_k=4 (unchanged), with a ~10M predicted-token
+  budget per pack by scaling num_blocks up from the 1M token-budget matrix.
+
+pair:
+  left:
+    label: base_20b
+    model_id: openai/gpt-oss-20b
+    model_path: /kaggle/input/gpt-oss-20b/transformers/default/1
+  right:
+    label: eaftreap_075_keep24_uniform
+    model_id: calib_union_keep24of32_k75_eaftreap
+    model_path_from_manifest:
+      manifest_json: harmony/cuda-norm/artifacts/20b_pruned_models_eaftreap_keepfrac/manifest_eaftreap_keepfrac.json
+      field: variants.calib_union_keep24of32_k75_eaftreap
+
+run_matrix:
+  # Maintain ~10,485,760 tokens per pack:
+  #   blocks = 10_485_760 / seq_len
+  - name: seq4096_blocks2560_bs4
+    collector_overrides:
+      seq_lens_csv: "4096"
+      num_blocks: 2560
+      batch_size: 4
+      sample_points: 200000
+      top_k: 4
+  - name: seq8192_blocks1280_bs2
+    collector_overrides:
+      seq_lens_csv: "8192"
+      num_blocks: 1280
+      batch_size: 2
+      sample_points: 200000
+      top_k: 4
+  - name: seq16384_blocks640_bs1
+    collector_overrides:
+      seq_lens_csv: "16384"
+      num_blocks: 640
+      batch_size: 1
+      sample_points: 200000
+      top_k: 4
+
+execution_notes:
+  - "Same long-seq regime as tokenbudget1m, but 10x more tokens."
+  - "If runtime is too high, drop blocks by 2x (still 5M tokens/pack)."
+  - "Quality-first; do not change top_k."
+
+expected_outputs:
+  parity_summary_md: harmony/cuda-norm/reports/eaftreap75_longseq_tokenbudget10m_keep24_uniform.md
+

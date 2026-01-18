@@ -37,6 +37,8 @@ LOG_PATH="${LOG_DIR}/${RUN_NAME}.log"
 PID_PATH="${LOG_DIR}/${RUN_NAME}.pid"
 
 OUT_DIR="${OUT_DIR:-/dev/shm/dflash_cache/${RUN_NAME}}"
+# Stream writes directly into out_dir as mmap arrays (lower peak RAM).
+STREAM_OUT_DIR="${STREAM_OUT_DIR:-${OUT_DIR}}"
 # Default: do NOT also write the legacy .npz for large caches.
 WRITE_NPZ="${WRITE_NPZ:-false}"
 
@@ -48,6 +50,9 @@ BLOCK_SIZE="${BLOCK_SIZE:-8}"
 NUM_CONTEXT_FEATURES="${NUM_CONTEXT_FEATURES:-4}"
 NUM_BLOCKS="${NUM_BLOCKS:-16}"
 ROLLOUT_STEPS="${ROLLOUT_STEPS:-64}"
+ROLLOUT_ACCEPT_LEN_MODE="${ROLLOUT_ACCEPT_LEN_MODE:-geometric}"
+ROLLOUT_ACCEPT_LEN_P="${ROLLOUT_ACCEPT_LEN_P:-0.35}"
+ROLLOUT_STATE_EVOLUTION="${ROLLOUT_STATE_EVOLUTION:-dflash_commit}"
 BATCH_SIZE="${BATCH_SIZE:-1}"
 SEED="${SEED:-0}"
 PREFILL_CHUNK="${PREFILL_CHUNK:-256}"
@@ -84,6 +89,9 @@ nohup bash -c 'exec 9>"$1"; flock -x 9; shift; exec "$@"' bash "${TPU_LOCK_PATH}
   --num-context-features "${NUM_CONTEXT_FEATURES}" \
   --num-blocks "${NUM_BLOCKS}" \
   --rollout-steps "${ROLLOUT_STEPS}" \
+  --rollout-accept-len-mode "${ROLLOUT_ACCEPT_LEN_MODE}" \
+  --rollout-accept-len-p "${ROLLOUT_ACCEPT_LEN_P}" \
+  --rollout-state-evolution "${ROLLOUT_STATE_EVOLUTION}" \
   --batch-size "${BATCH_SIZE}" \
   --seed "${SEED}" \
   --prefill-chunk "${PREFILL_CHUNK}" \
@@ -96,6 +104,7 @@ nohup bash -c 'exec 9>"$1"; flock -x 9; shift; exec "$@"' bash "${TPU_LOCK_PATH}
   --position-offsets "${POSITION_OFFSETS}" \
   --position-offset-mode "${POSITION_OFFSET_MODE}" \
   --out-dir "${OUT_DIR}" \
+  --stream-out-dir "${STREAM_OUT_DIR}" \
   --write-npz "${WRITE_NPZ}" \
   >"${LOG_PATH}" 2>&1 &
 echo $! > "${PID_PATH}"

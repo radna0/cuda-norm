@@ -50,6 +50,7 @@ The YAML is intentionally tool-agnostic; it’s a single source of truth for wha
 - `eval-20b_noop_rewrite_lossless_bigblocks.yaml`
 - `eval-20b_eaftreap075_bigblocks_keep24_uniform.yaml`
 - `eval-20b_eaftreap075_longseq_tokenbudget1m_keep24_uniform.yaml`
+- `eval-20b_eaftreap075_longseq_tokenbudget10m_keep24_uniform.yaml`
 - `eval-20b_eaftreap060_bigblocks_keep20_uniform.yaml`
 - `eval-20b_eaftreap060_longseq_tokenbudget1m_keep20_uniform.yaml`
 - `eval-20b_eaftreap075_extreme_ctx65k_131k.yaml` (production stress)

@@ -89,6 +89,7 @@ tpu_exec() {
   tpu_exec "${VENV_PY}" -u "${SCRIPTS}/tpu_verify_multitoken_parity.py" \
     --cache-dir "${cache_dir}" \
     --teacher-snapshot-dir "${TEACHER_SNAPSHOT_DIR}" \
+    ${TEACHER_EASYDEL_DIR:+--teacher-easydel-dir "${TEACHER_EASYDEL_DIR}"} \
     --sample-idx 0 \
     --block-size "${BLOCK_SIZE}" \
     --page-size "${PAGE_SIZE}" \

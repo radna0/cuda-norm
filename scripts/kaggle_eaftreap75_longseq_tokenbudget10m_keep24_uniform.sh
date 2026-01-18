@@ -1,17 +1,14 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# Kaggle/VERSA: validate EAFT parity at longer sequence lengths (quality-first)
-# for the keep_n=24/32 (keep_frac=0.75) EAFT-REAP prune, while holding token
-# budget ~constant (~1,048,576 tokens per pack).
-#
-# This is the next step after bigblocks PASS + noise-floor + noop-rewrite PASS:
-# it tests scalability (longer seq + higher batch) without changing top_k.
+# Kaggle/VERSA: high-confidence long-seq EAFT parity check for keep_n=24/32
+# (keep_frac=0.75) EAFT-REAP, at fixed top_k=4 (unchanged), with a ~10M
+# predicted-token budget per pack.
 #
 # Always run under nohup and monitor the local log.
 #
 # Usage:
-#   bash harmony/cuda-norm/scripts/kaggle_eaftreap75_longseq_tokenbudget1m_keep24_uniform.sh --kernel-id <id>
+#   bash harmony/cuda-norm/scripts/kaggle_eaftreap75_longseq_tokenbudget10m_keep24_uniform.sh --kernel-id <id>
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 REPO_ROOT="$(cd "${ROOT_DIR}/../.." && pwd)"
@@ -21,7 +18,7 @@ while [[ $# -gt 0 ]]; do
   case "$1" in
     --kernel-id) KERNEL_ID="$2"; shift 2;;
     -h|--help)
-      sed -n '1,120p' "$0"
+      sed -n '1,160p' "$0"
       exit 0
       ;;
     *)
@@ -48,7 +45,7 @@ export REMOTE_JUPYTER_KERNEL_ID="${KERNEL_ID}"
 echo "[*] kernel_id=${KERNEL_ID}"
 
 RUN_TAG="$(date +%Y%m%d_%H%M%S)"
-TMP_DIR="${REPO_ROOT}/harmony/cuda-norm/reports/_tmp_runs/eaftreap75_longseq_tokenbudget1m_keep24_uniform_${RUN_TAG}"
+TMP_DIR="${REPO_ROOT}/harmony/cuda-norm/reports/_tmp_runs/eaftreap75_longseq_tokenbudget10m_keep24_uniform_${RUN_TAG}"
 mkdir -p "${TMP_DIR}"
 
 MANIFEST_LOCAL="${REPO_ROOT}/harmony/cuda-norm/artifacts/20b_pruned_models_eaftreap_keepfrac/manifest_eaftreap_keepfrac.json"
@@ -57,26 +54,12 @@ if [[ ! -f "${MANIFEST_LOCAL}" ]]; then
   exit 2
 fi
 
-PRUNED_VARIANT_NAME="$(
-  python - <<PY
-import json
-from pathlib import Path
-manifest_path = Path("${MANIFEST_LOCAL}")
-m=json.loads(manifest_path.read_text())
-vs=m.get("variants") or {}
-if not isinstance(vs, dict) or not vs:
-    raise SystemExit("missing variants")
-if "calib_union_keep24of32_k75_eaftreap" not in vs:
-    raise SystemExit(f"expected calib_union_keep24of32_k75_eaftreap in {list(vs)}")
-print("calib_union_keep24of32_k75_eaftreap")
-PY
-)"
+PRUNED_VARIANT_NAME="calib_union_keep24of32_k75_eaftreap"
 PRUNED_MODEL_PATH="$(
   python - <<PY
 import json
 from pathlib import Path
-manifest_path = Path("${MANIFEST_LOCAL}")
-m=json.loads(manifest_path.read_text())
+m=json.loads(Path("${MANIFEST_LOCAL}").read_text())
 print(m["variants"]["calib_union_keep24of32_k75_eaftreap"])
 PY
 )"
@@ -86,13 +69,7 @@ echo "[+] pruned_model_path=${PRUNED_MODEL_PATH}"
 
 remote_path_exists() {
   local path="$1"
-  # Fast preflight to avoid wasting GPU time: the pruned checkpoint lives under
-  # /kaggle/working (ephemeral per kernel). If it's missing, we must rebuild it
-  # (or mount it as a Kaggle dataset under /kaggle/input) before running EAFT.
-  #
-  # Use Jupyter Contents API: 200 means the path exists.
   local rel="${path#/}"
-  # Handle both "/kaggle/working/..." and "kaggle/working/..." after trimming "/".
   rel="${rel#/kaggle/working/}"
   rel="${rel#kaggle/working/}"
   local base="${KAGGLE_URL%/}"
@@ -165,7 +142,7 @@ for line in txt.splitlines()[::-1]:
             p=m.group(1)
             print(p.replace('/kaggle/working/','',1))
             raise SystemExit(0)
-raise SystemExit("could not find JSON write path in remote log")
+raise SystemExit(\"could not find JSON write path in remote log\")
 PY
 }
 
@@ -232,15 +209,15 @@ run_pair_one() {
 
 mkdir -p "${REPO_ROOT}/harmony/cuda-norm/reports"
 
-# ~1,048,576 tokens per pack:
-#   blocks = 1_048_576 / seq_len
-run_pair_one "seq4096_blocks256_bs4" 4096 256 4
-run_pair_one "seq8192_blocks128_bs2" 8192 128 2
-run_pair_one "seq16384_blocks64_bs1" 16384 64 1
+# ~10,485,760 tokens per pack:
+#   blocks = 10_485_760 / seq_len
+run_pair_one "seq4096_blocks2560_bs4" 4096 2560 4
+run_pair_one "seq8192_blocks1280_bs2" 8192 1280 2
+run_pair_one "seq16384_blocks640_bs1" 16384 640 1
 
-FINAL_MD="${REPO_ROOT}/harmony/cuda-norm/reports/eaftreap75_longseq_tokenbudget1m_keep24_uniform.md"
+FINAL_MD="${REPO_ROOT}/harmony/cuda-norm/reports/eaftreap75_longseq_tokenbudget10m_keep24_uniform.md"
 {
-  echo "# EAFT parity (long-seq tokenbudget ~1M) — keep24/32 EAFT-REAP"
+  echo "# EAFT parity (long-seq tokenbudget ~10M) — keep24/32 EAFT-REAP"
   echo
   echo "- Base: \`openai/gpt-oss-20b\`"
   echo "- Pruned: \`${PRUNED_VARIANT_NAME}\`"
