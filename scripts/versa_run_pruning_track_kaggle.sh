@@ -54,6 +54,9 @@ PRUNING_REMOTE_LOG_DIR="${PRUNING_REMOTE_LOG_DIR:-logs}"
 PRUNING_ENV_FILE="${PRUNING_ENV_FILE:-${ROOT_DIR}/.env}"
 DETACH="1"
 KERNEL_ID="${REMOTE_JUPYTER_KERNEL_ID:-}"
+TORCH_INDEX_URL="${TORCH_INDEX_URL:-https://download.pytorch.org/whl/cu121}"
+TRITON_VERSION="${TRITON_VERSION:-3.4.0}"
+KERNELS_VERSION="${KERNELS_VERSION:-0.11.7}"
 
 TASK=""
 MODEL_ID_20B="openai/gpt-oss-20b"
@@ -161,9 +164,14 @@ python -m versa run \
   --bootstrap-cmd "mkdir -p /kaggle/working/${PRUNING_REMOTE_LOG_DIR}" \
   --bootstrap-cmd "python -m pip install -U pip" \
   --bootstrap-cmd "python -m pip install -q modal datasets transformers==4.56.2 tokenizers safetensors pyarrow pandas accelerate huggingface-hub hf_transfer" \
-  --bootstrap-cmd "python -m pip install -q torch==2.9.1 --index-url https://download.pytorch.org/whl/cu128" \
-  --bootstrap-cmd "python -m pip uninstall -y kernels || true" \
+  --bootstrap-cmd "python -m pip uninstall -y torchvision || true" \
+  --bootstrap-cmd "python -m pip install -q triton==${TRITON_VERSION} kernels==${KERNELS_VERSION}" \
+  --bootstrap-cmd "python -c \"import triton, kernels; ver=tuple(int(x) for x in triton.__version__.split('.')[:2]); assert ver >= (3,4), f'triton too old: {triton.__version__}'; print('[bootstrap] triton', triton.__version__, 'kernels OK')\"" \
+  --bootstrap-cmd "python -c 'import torch; print(torch.__version__)' || python -m pip install -q torch --index-url ${TORCH_INDEX_URL}" \
   --env-file "${PRUNING_ENV_FILE}" \
+  --env "PYTHONFAULTHANDLER=1" \
+  --env "TORCH_SHOW_CPP_STACKTRACES=1" \
+  --env "TRANSFORMERS_NO_TORCHVISION=1" \
   --env "PRUNING_LOCAL_MODE=1" \
   --env "PRUNING_CACHE_ROOT=/kaggle/working/pruning_cache" \
   --env "PRUNING_MODEL_DIR=/kaggle/working/pruning_cache/model" \

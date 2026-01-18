@@ -210,6 +210,8 @@ os.environ.setdefault("TRANSFORMERS_NO_FLAX", "1")
 os.environ.setdefault("USE_TF", "0")
 os.environ.setdefault("USE_FLAX", "0")
 os.environ.setdefault("USE_JAX", "0")
+# Kaggle: avoid importing torchvision (can segfault due to extension ABI mismatch).
+os.environ.setdefault("TRANSFORMERS_NO_TORCHVISION", "1")
 
 # Kaggle: Triton sometimes ships non-executable tool stubs inside the bundled
 # wheel; force a working `ptxas` from the CUDA toolkit when available.

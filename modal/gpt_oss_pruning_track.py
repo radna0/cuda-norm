@@ -22,6 +22,11 @@ APP_NAME = "gpt-oss-pruning-track"
 
 _KAGGLE_WORKDIR = Path("/kaggle/working")
 
+# Kaggle can ship a `torchvision` wheel whose native extension segfaults on
+# import (CUDA extension ABI mismatch). Transformers may import torchvision
+# indirectly via image utilities even though we don't use any vision features.
+os.environ.setdefault("TRANSFORMERS_NO_TORCHVISION", "1")
+
 
 def _default_pruning_cache_root() -> Path:
     override = (os.environ.get("PRUNING_CACHE_ROOT") or "").strip()
@@ -1170,7 +1175,7 @@ def profile_20b_expert_usage(
     import torch
     import pyarrow as pa
     import pyarrow.parquet as pq
-    from transformers import AutoModelForCausalLM, AutoTokenizer
+    from transformers import AutoModelForCausalLM, AutoTokenizer, Mxfp4Config
 
     _ensure_hf_env()
 
@@ -1188,11 +1193,18 @@ def profile_20b_expert_usage(
         tokenizer.pad_token = tokenizer.eos_token
     tokenizer.padding_side = "right"
 
+    # EAFT-REAP needs access to the experts' projection weights as real PyTorch
+    # tensors (we do per-expert matmuls to estimate ||f_j(x)||_2). When loading
+    # MXFP4 with kernels/triton enabled, Transformers replaces expert weights
+    # with `triton_kernels.tensor.Tensor` wrappers which are not compatible with
+    # this profiling path. For profiling only, dequantize MXFP4 to BF16 tensors.
+    qconfig = Mxfp4Config(dequantize=True)
     model = AutoModelForCausalLM.from_pretrained(
         str(model_dir),
         torch_dtype="auto",
         device_map={"": 0},
         trust_remote_code=True,
+        quantization_config=qconfig,
     )
     model.eval()
 
@@ -5136,6 +5148,11 @@ def main(
             json.dumps(manifest, indent=2, sort_keys=True),
             encoding="utf-8",
         )
+        # Compatibility alias: some orchestration scripts expect `manifest.json`.
+        (artifacts_dir / "manifest.json").write_text(
+            json.dumps(manifest, indent=2, sort_keys=True),
+            encoding="utf-8",
+        )
 
         rep = Path("reports/20b_structural_prune_build_eaftreap_keepfrac.md")
         rep.parent.mkdir(parents=True, exist_ok=True)
@@ -5174,6 +5191,7 @@ def main(
         ]
         rep.write_text("\n".join(lines), encoding="utf-8")
         print(f"[+] Wrote {artifacts_dir/'manifest_eaftreap_keepfrac.json'}")
+        print(f"[+] Wrote {artifacts_dir/'manifest.json'}")
         print(f"[+] Wrote {rep}")
         return
 

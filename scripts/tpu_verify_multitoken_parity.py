@@ -67,6 +67,7 @@ def main() -> None:
     ctx_token_ids = np.load(cache_dir / "ctx_token_ids.npy", mmap_mode="r")
     anchor_ids = np.load(cache_dir / "anchor_ids.npy", mmap_mode="r")
     target_ids = np.load(cache_dir / "target_ids.npy", mmap_mode="r")
+    ctx_feat_u16 = np.load(cache_dir / "context_features_u16.npy", mmap_mode="r")
     ctx_ids = np.asarray(ctx_token_ids[i]).astype(np.int32)
     anchor_id = int(np.asarray(anchor_ids[i]))
     cached_targets = np.asarray(target_ids[i]).astype(np.int32)
@@ -194,12 +195,35 @@ def main() -> None:
     seqbuf.min_p[0] = 0.0
 
     # Prefill ctx tokens (exclude anchor).
+    # Also capture a small set of ctx-feature rows to compare against the cache.
+    try:
+        import ml_dtypes
+    except Exception:
+        ml_dtypes = None  # type: ignore[assignment]
+
+    sel_idx = [
+        0,
+        1,
+        2,
+        3,
+        max(0, int(ctx_len // 2) - 2),
+        max(0, int(ctx_len // 2) - 1),
+        int(ctx_len // 2),
+        min(int(ctx_len - 1), int(ctx_len // 2) + 1),
+        max(0, int(ctx_len - 4)),
+        max(0, int(ctx_len - 3)),
+        max(0, int(ctx_len - 2)),
+        max(0, int(ctx_len - 1)),
+    ]
+    sel_idx = sorted({int(x) for x in sel_idx if 0 <= int(x) < int(ctx_len)})
+    online_sel: dict[int, np.ndarray] = {}
+
     done = 0
     while done < int(ctx_len):
         step = int(min(prefill_bucket, int(ctx_len) - done))
         seqbuf.num_computed_tokens[0] = int(done)
         scheduled_full_cpu[0] = int(step)
-        _ctx_unused, _greedy_unused, input_ids_buf, position_ids_buf, _m = executor.execute_verify(
+        ctx_part, _greedy_unused, input_ids_buf, position_ids_buf, _m = executor.execute_verify(
             num_tokens=int(prefill_bucket),
             scheduled_full_cpu=scheduled_full_cpu,
             active_mask_full_cpu=active_mask_full_cpu,
@@ -216,8 +240,33 @@ def main() -> None:
             page_table_cpu=page_table_cpu,
             page_table_version=page_table_version,
         )
+        # Capture only the selected token rows (small) to avoid huge host transfers.
+        start = int(done)
+        end = int(done + step)
+        wanted = [x for x in sel_idx if start <= x < end]
+        if wanted:
+            part_np = np.asarray(jax.device_get(jnp.asarray(ctx_part)[:step, :]))
+            for x in wanted:
+                online_sel[int(x)] = np.asarray(part_np[int(x - start)], copy=True)
         done += step
     seqbuf.num_computed_tokens[0] = int(ctx_len)
+
+    # Compare captured ctx features against the cache (selected rows only).
+    cache_sel_ok = bool(int(ctx_feat_u16.shape[1]) == int(ctx_len)) and bool(int(ctx_feat_u16.shape[0]) > int(i))
+    ctx_feat_sel_mae = None
+    ctx_feat_sel_max_abs = None
+    ctx_feat_sel_cos_mean = None
+    if cache_sel_ok and ml_dtypes is not None and all(k in online_sel for k in sel_idx):
+        cache_rows_u16 = np.asarray(ctx_feat_u16[i, sel_idx, :], dtype=np.uint16)
+        cache_rows = cache_rows_u16.view(ml_dtypes.bfloat16).astype(np.float32, copy=False)
+        online_rows = np.stack([online_sel[int(k)] for k in sel_idx], axis=0).astype(np.float32, copy=False)
+        diff = online_rows - cache_rows
+        ctx_feat_sel_mae = float(np.mean(np.abs(diff)))
+        ctx_feat_sel_max_abs = float(np.max(np.abs(diff)))
+        # Cosine similarity per-row (mean over rows).
+        num = np.sum(online_rows * cache_rows, axis=-1)
+        den = (np.linalg.norm(online_rows, axis=-1) * np.linalg.norm(cache_rows, axis=-1)) + 1e-8
+        ctx_feat_sel_cos_mean = float(np.mean(num / den))
 
     # 1-token greedy next.
     #
@@ -361,7 +410,7 @@ def main() -> None:
     seqbuf.num_tokens[0] = int(ctx_len + int(args.block_size))
     seqbuf.num_tokens_no_spec[0] = int(ctx_len + int(args.block_size))
     scheduled_full_cpu[0] = int(args.block_size)
-    _ctx_unused, greedy_block, input_ids_buf, position_ids_buf, _m = executor.execute_verify(
+    ctx_block, greedy_block, input_ids_buf, position_ids_buf, _m = executor.execute_verify(
         num_tokens=int(args.block_size),
         scheduled_full_cpu=scheduled_full_cpu,
         active_mask_full_cpu=active_mask_full_cpu,
@@ -427,7 +476,7 @@ def main() -> None:
     seqbuf.num_tokens[0] = int(ctx_len + int(args.block_size))
     seqbuf.num_tokens_no_spec[0] = int(ctx_len + int(args.block_size))
     scheduled_full_cpu[0] = int(args.block_size)
-    _ctx_unused, greedy_block_zero, input_ids_buf, position_ids_buf, _m = executor.execute_verify(
+    ctx_block_zero, greedy_block_zero, input_ids_buf, position_ids_buf, _m = executor.execute_verify(
         num_tokens=int(args.block_size),
         scheduled_full_cpu=scheduled_full_cpu,
         active_mask_full_cpu=active_mask_full_cpu,
@@ -446,6 +495,16 @@ def main() -> None:
     )
     greedy_block_zero = np.asarray(greedy_block_zero, dtype=np.int32)
     block0_changes_with_future = bool(int(greedy_block_zero[0]) != int(greedy_block[0]))
+    # Additional causality check: do the *captured context features* for token 0
+    # change when we mutate future draft tokens? They must not for a causal
+    # verify implementation; otherwise the draft conditions on non-causal data.
+    ctx0_feat_mae = None
+    try:
+        a0 = np.asarray(jax.device_get(jnp.asarray(ctx_block)[0, :]), dtype=np.float32)
+        b0 = np.asarray(jax.device_get(jnp.asarray(ctx_block_zero)[0, :]), dtype=np.float32)
+        ctx0_feat_mae = float(np.mean(np.abs(a0 - b0)))
+    except Exception:
+        ctx0_feat_mae = None
 
     print(
         json.dumps(
@@ -463,11 +522,16 @@ def main() -> None:
                 "verify_block_zero_greedy": [int(x) for x in greedy_block_zero[: int(args.block_size)].tolist()],
                 "verify_block_head": [int(x) for x in greedy_block[:3].tolist()],
                 "verify_block0_changes_with_future": bool(block0_changes_with_future),
+                "verify_ctx0_feat_mae": ctx0_feat_mae,
                 "match_1tok_vs_block0": bool(int(next1) == int(greedy_block[0])),
                 "match_cached_targets_vs_verify": bool(
                     cached_targets.shape[0] == (int(args.block_size) - 1)
                     and np.all(cached_targets == greedy_block[: int(args.block_size) - 1])
                 ),
+                "prefill_ctx_feat_sel_idx": sel_idx,
+                "prefill_ctx_feat_sel_mae": ctx_feat_sel_mae,
+                "prefill_ctx_feat_sel_max_abs": ctx_feat_sel_max_abs,
+                "prefill_ctx_feat_sel_cos_mean": ctx_feat_sel_cos_mean,
             },
             indent=2,
         ),

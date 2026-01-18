@@ -1,27 +1,33 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# Orchestrate the “0.75 keep24 uniform” ablation end-to-end on Kaggle/VERSA:
-#   1) Wait for a pruning build to finish
-#   2) Download manifest + build report (stable remote paths)
-#   3) Run EAFT single-model collectors (base + pruned) in bigblocks regime
-#   4) Download the resulting JSONs
-#   5) Produce a pair parity markdown via summarize_eaft_pair.py
+# Wrapper orchestrator for keep24 (0.75) bigblocks on Kaggle/VERSA.
 #
-# Intended usage: run this script under nohup and monitor its log.
+# This script is intentionally a thin wrapper around:
+#   harmony/cuda-norm/scripts/kaggle_orchestrate_keep24_bigblocks_curl.sh
 #
-# Required env:
-#   KAGGLE_URL=... (from harmony/cuda-norm/.env)
-# Optional env:
-#   REMOTE_JUPYTER_KERNEL_ID=... (defaults to arg)
+# Why:
+# - curl /files polling is more robust than Versa "tail" when the Kaggle proxy
+#   URL is restarted.
+# - still supports a convenience "start build" mode.
 #
-# Usage:
+# Always run via nohup and monitor the produced local log.
+#
+# Required:
+# - harmony/cuda-norm/.env must contain KAGGLE_URL (the Kaggle /proxy url)
+#
+# Usage (recommended):
+#   bash harmony/cuda-norm/scripts/kaggle_keep24_pipeline.sh
+#
+# Usage (resume; if you already have ids):
 #   bash harmony/cuda-norm/scripts/kaggle_orchestrate_keep24_bigblocks.sh \
-#     --kernel-id <kernel_id> \
+#     --kernel-id <uuid> \
 #     --build-remote-log logs/build_pruned_20b_eaftreap_keepfrac_<ts>.log
+#
+# Usage (start build + orchestrate):
+#   bash harmony/cuda-norm/scripts/kaggle_orchestrate_keep24_bigblocks.sh --start-build
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-REPO_ROOT="$(cd "${ROOT_DIR}/../.." && pwd)"
 
 KERNEL_ID=""
 BUILD_REMOTE_LOG=""
@@ -33,7 +39,7 @@ while [[ $# -gt 0 ]]; do
     --build-remote-log) BUILD_REMOTE_LOG="$2"; shift 2;;
     --start-build) START_BUILD="1"; shift 1;;
     -h|--help)
-      sed -n '1,120p' "$0"
+      sed -n '1,160p' "$0"
       exit 0
       ;;
     *)
@@ -58,58 +64,59 @@ fi
 
 export REMOTE_JUPYTER_URL="${KAGGLE_URL}"
 
-echo "[*] remote_url=${REMOTE_JUPYTER_URL}"
+NUM_ROWS="${KEEP24_NUM_ROWS:-2000}"
+MAX_SEQ_LENGTH="${KEEP24_MAX_SEQ_LENGTH:-4096}"
+BATCH_SIZE="${KEEP24_BATCH_SIZE:-1}"
 
 start_build() {
-  local out
-  out="$(
-    bash "${ROOT_DIR}/scripts/versa_run_pruning_track_kaggle.sh" \
-      ${KERNEL_ID:+--kernel-id "${KERNEL_ID}"} \
-      --task build_pruned_20b_eaftreap_keepfrac \
-      --model-id-20b openai/gpt-oss-20b \
-      --num-rows 2000 --max-seq-length 4096 --batch-size 1 \
-      --calib-packs-repo radna0/harmony-qwen3-calib-packs-v2-20260113 \
-      --calib-pack-files "packs/reasoning_style_10k_v2/reasoning_style_10k_v2.parquet,tool_agentic_10k_v6.parquet,packs/calib_prompt_10000_v2/calib_prompt_10000_v2.parquet" \
-      --calib-pack-sample-strategy "per_file" \
-      --keep-fracs-csv "0.75" \
-      --keep-n-round "ceil" --keep-n-multiple-of 4 \
-      --min-keep-per-layer 24 --max-keep-per-layer 24 \
-      --core-pos-top-m 4 --core-count-top-m 0 \
-      || true
-  )"
-  echo "${out}"
-}
-
-extract_remote_log() {
-  local text="$1"
-  echo "${text}" | rg -n "remote_log=" | tail -n 1 | sed -E 's/^.*remote_log=//'
-}
-
-extract_kernel_id() {
-  local text="$1"
-  python - <<PY
-import re, sys
-s=sys.stdin.read()
-m=re.search(r'\"kernel_id\"\\s*:\\s*\"([0-9a-f\\-]+)\"', s)
-if not m:
-    sys.exit(1)
-print(m.group(1))
-PY
+  bash "${ROOT_DIR}/scripts/versa_run_pruning_track_kaggle.sh" \
+    ${KERNEL_ID:+--kernel-id "${KERNEL_ID}"} \
+    --task build_pruned_20b_eaftreap_keepfrac \
+    --model-id-20b openai/gpt-oss-20b \
+    --num-rows "${NUM_ROWS}" --max-seq-length "${MAX_SEQ_LENGTH}" --batch-size "${BATCH_SIZE}" \
+    --calib-packs-repo radna0/harmony-qwen3-calib-packs-v2-20260113 \
+    --calib-pack-files "packs/reasoning_style_10k_v2/reasoning_style_10k_v2.parquet,tool_agentic_10k_v6.parquet,packs/calib_prompt_10000_v2/calib_prompt_10000_v2.parquet" \
+    --calib-pack-sample-strategy per_file \
+    --keep-fracs-csv 0.75 \
+    --keep-n-round ceil --keep-n-multiple-of 4 \
+    --min-keep-per-layer 24 --max-keep-per-layer 24 \
+    --core-pos-top-m 4 --core-count-top-m 0 \
+    || true
 }
 
 if [[ "${START_BUILD}" == "1" || -z "${BUILD_REMOTE_LOG}" ]]; then
   echo "[*] starting prune build (keep_frac=0.75, keep_n=24 uniform)..."
-  BUILD_OUT="$(start_build)"
-  echo "${BUILD_OUT}"
-  if [[ -z "${KERNEL_ID}" ]]; then
-    if KERNEL_ID="$(printf "%s" "${BUILD_OUT}" | extract_kernel_id)"; then
-      :
-    else
-      echo "[err] could not infer kernel_id from build output; pass --kernel-id" >&2
-      exit 2
-    fi
-  fi
-  BUILD_REMOTE_LOG="$(extract_remote_log "${BUILD_OUT}")"
+  tmp="$(mktemp -t keep24_orchestrate_build_launcher_XXXXXX.log)"
+  echo "[*] build launcher output tee=${tmp}"
+  start_build 2>&1 | tee "${tmp}"
+
+  python - <<PY
+import json
+from pathlib import Path
+
+txt = Path("${tmp}").read_text(encoding="utf-8", errors="ignore")
+start = txt.find("{")
+end = txt.rfind("}")
+if start == -1 or end == -1 or end <= start:
+    print("")
+    print("")
+    raise SystemExit(0)
+
+try:
+    obj = json.loads(txt[start : end + 1])
+    details = obj.get("details") or {}
+    print(details.get("kernel_id") or "")
+    print(obj.get("log_path") or "")
+except Exception:
+    print("")
+    print("")
+PY
+  | {
+    read -r parsed_kernel || true
+    read -r parsed_logpath || true
+    if [[ -z "${KERNEL_ID}" ]]; then KERNEL_ID="${parsed_kernel}"; fi
+    if [[ -z "${BUILD_REMOTE_LOG}" ]]; then BUILD_REMOTE_LOG="${parsed_logpath}"; fi
+  }
 fi
 
 if [[ -z "${KERNEL_ID}" ]]; then
@@ -121,190 +128,7 @@ if [[ -z "${BUILD_REMOTE_LOG}" ]]; then
   exit 2
 fi
 
-echo "[*] kernel_id=${KERNEL_ID}"
-echo "[*] build_remote_log=${BUILD_REMOTE_LOG}"
-
-echo "[*] waiting for prune build completion..."
-bash "${ROOT_DIR}/scripts/versa_monitor_kaggle_log.sh" \
+exec bash "${ROOT_DIR}/scripts/kaggle_orchestrate_keep24_bigblocks_curl.sh" \
   --kernel-id "${KERNEL_ID}" \
-  --remote-log "${BUILD_REMOTE_LOG}" \
-  --pattern "\\[\\+\\] Wrote reports/20b_structural_prune_build_eaftreap_keepfrac\\.md" \
-  --interval-s 60 \
-  --tail-n 120
+  --build-remote-log "${BUILD_REMOTE_LOG}"
 
-echo "[+] prune build complete; downloading manifest + build report"
-
-remote_find_one() {
-  local pattern="$1"
-  local out
-  out="$(
-    PYTHONPATH="${REPO_ROOT}/third_party/Versa" python -m versa run \
-      --backend jupyter \
-      --url "${REMOTE_JUPYTER_URL}" \
-      ${REMOTE_JUPYTER_TOKEN:+--token "${REMOTE_JUPYTER_TOKEN}"} \
-      --kernel-id "${KERNEL_ID}" \
-      --cwd "/kaggle/working" \
-      bash -lc "find . -maxdepth 10 -name '${pattern}' -print | head -n 1" \
-      | rg -v '^\\[versa\\]' || true
-  )"
-  out="$(echo "${out}" | tail -n 1 | tr -d '\r' | xargs || true)"
-  if [[ -z "${out}" ]]; then
-    echo "[err] remote_find_one: not found: ${pattern}" >&2
-    return 1
-  fi
-  # Normalize: strip leading ./ and ensure path is relative to /kaggle/working for /files.
-  out="${out#./}"
-  echo "${out}"
-}
-
-# Do not assume a fixed artifacts root: Kaggle/VERSA sync can change layout.
-# Instead, locate the files on the remote filesystem deterministically.
-MANIFEST_REMOTE="$(remote_find_one 'manifest_eaftreap_keepfrac.json')"
-BUILD_REPORT_REMOTE="$(remote_find_one '20b_structural_prune_build_eaftreap_keepfrac.md')"
-
-MANIFEST_LOCAL="harmony/cuda-norm/artifacts/20b_pruned_models_eaftreap_keepfrac/manifest_eaftreap_keepfrac.json"
-BUILD_REPORT_LOCAL="harmony/cuda-norm/reports/20b_structural_prune_build_eaftreap_keepfrac.md"
-
-bash "${ROOT_DIR}/scripts/kaggle_download_file.sh" --remote-path "${MANIFEST_REMOTE}" --out "${REPO_ROOT}/${MANIFEST_LOCAL}"
-bash "${ROOT_DIR}/scripts/kaggle_download_file.sh" --remote-path "${BUILD_REPORT_REMOTE}" --out "${REPO_ROOT}/${BUILD_REPORT_LOCAL}"
-
-python - <<'PY'
-import json
-from pathlib import Path
-
-manifest = json.loads(Path("harmony/cuda-norm/artifacts/20b_pruned_models_eaftreap_keepfrac/manifest_eaftreap_keepfrac.json").read_text())
-variants = manifest.get("variants") or {}
-if not isinstance(variants, dict) or not variants:
-    raise SystemExit("[err] manifest missing variants")
-if len(variants) != 1:
-    raise SystemExit(f"[err] expected 1 variant, got: {list(variants)}")
-name, path = next(iter(variants.items()))
-print(f"[+] pruned_variant_name={name}")
-print(f"[+] pruned_model_path={path}")
-PY
-
-PRUNED_VARIANT_NAME="$(python - <<'PY'
-import json
-from pathlib import Path
-manifest=json.loads(Path("harmony/cuda-norm/artifacts/20b_pruned_models_eaftreap_keepfrac/manifest_eaftreap_keepfrac.json").read_text())
-name,_=next(iter((manifest.get("variants") or {}).items()))
-print(name)
-PY
-)"
-
-PRUNED_MODEL_PATH="$(python - <<'PY'
-import json
-from pathlib import Path
-manifest=json.loads(Path("harmony/cuda-norm/artifacts/20b_pruned_models_eaftreap_keepfrac/manifest_eaftreap_keepfrac.json").read_text())
-_,path=next(iter((manifest.get("variants") or {}).items()))
-print(path)
-PY
-)"
-
-run_eaft() {
-  local model_id="$1"
-  local model_path="$2"
-  local slug
-  slug="$(echo "${model_id}" | tr '/:' '__')"
-  local out
-  if [[ -n "${model_path}" ]]; then
-    out="$(bash "${ROOT_DIR}/scripts/versa_run_eaft_single_kaggle.sh" \
-      --kernel-id "${KERNEL_ID}" \
-      --model-id "${model_id}" \
-      --model-path "${model_path}" \
-      --seq-lens-csv 1024,2048 \
-      --num-blocks 512 --batch-size 1 --sample-points 200000 \
-      --top-k 4 --entropy-topk 20 --cc-quantile 0.15 \
-      --skip-predownload)"
-  else
-    out="$(bash "${ROOT_DIR}/scripts/versa_run_eaft_single_kaggle.sh" \
-      --kernel-id "${KERNEL_ID}" \
-      --model-id "${model_id}" \
-      --seq-lens-csv 1024,2048 \
-      --num-blocks 512 --batch-size 1 --sample-points 200000 \
-      --top-k 4 --entropy-topk 20 --cc-quantile 0.15 \
-      --skip-predownload)"
-  fi
-  echo "${out}"
-}
-
-extract_remote_log() {
-  local text="$1"
-  echo "${text}" | rg -n "remote_log=" | tail -n 1 | sed -E 's/^.*remote_log=//'
-}
-
-extract_json_remote_path_from_remote_log_file() {
-  local remote_log="$1"
-  local tmp="${REPO_ROOT}/harmony/cuda-norm/unsloth_logs/remote_${remote_log//\\//_}"
-  mkdir -p "$(dirname "${tmp}")"
-  bash "${ROOT_DIR}/scripts/kaggle_download_file.sh" --remote-path "${remote_log}" --out "${tmp}"
-  python - <<PY
-import re
-from pathlib import Path
-txt=Path("${tmp}").read_text(encoding="utf-8", errors="ignore")
-m=None
-for line in txt.splitlines()[::-1]:
-    if "Wrote " in line and line.strip().endswith(".json"):
-        m=re.search(r"Wrote\\s+(/kaggle/working/[^\\s]+\\.json)\\s*$", line)
-        if m:
-            break
-if not m:
-    raise SystemExit("[err] could not find JSON path in remote log")
-path=m.group(1)
-print(path.replace("/kaggle/working/","",1))
-PY
-}
-
-download_eaft_json() {
-  local remote_rel="$1"
-  local local_path="${REPO_ROOT}/harmony/cuda-norm/${remote_rel}"
-  mkdir -p "$(dirname "${local_path}")"
-  bash "${ROOT_DIR}/scripts/kaggle_download_file.sh" --remote-path "${remote_rel}" --out "${local_path}"
-  echo "${local_path}"
-}
-
-echo "[*] running EAFT bigblocks: base"
-BASE_OUT="$(run_eaft "openai/gpt-oss-20b" "/kaggle/input/gpt-oss-20b/transformers/default/1")"
-echo "${BASE_OUT}"
-BASE_REMOTE_LOG="$(extract_remote_log "${BASE_OUT}")"
-echo "[*] base_remote_log=${BASE_REMOTE_LOG}"
-
-echo "[*] waiting for base JSON..."
-bash "${ROOT_DIR}/scripts/versa_monitor_kaggle_log.sh" \
-  --kernel-id "${KERNEL_ID}" \
-  --remote-log "${BASE_REMOTE_LOG}" \
-  --pattern "\\[\\+\\] Wrote /kaggle/working/artifacts/eaft_models/" \
-  --interval-s 60 \
-  --tail-n 120
-
-BASE_JSON_REMOTE_REL="$(extract_json_remote_path_from_remote_log_file "${BASE_REMOTE_LOG}")"
-echo "[+] base_json_remote_rel=${BASE_JSON_REMOTE_REL}"
-BASE_JSON_LOCAL="$(download_eaft_json "${BASE_JSON_REMOTE_REL}")"
-echo "[+] base_json_local=${BASE_JSON_LOCAL}"
-
-echo "[*] running EAFT bigblocks: pruned"
-PRUNED_OUT="$(run_eaft "${PRUNED_VARIANT_NAME}" "${PRUNED_MODEL_PATH}")"
-echo "${PRUNED_OUT}"
-PRUNED_REMOTE_LOG="$(extract_remote_log "${PRUNED_OUT}")"
-echo "[*] pruned_remote_log=${PRUNED_REMOTE_LOG}"
-
-echo "[*] waiting for pruned JSON..."
-bash "${ROOT_DIR}/scripts/versa_monitor_kaggle_log.sh" \
-  --kernel-id "${KERNEL_ID}" \
-  --remote-log "${PRUNED_REMOTE_LOG}" \
-  --pattern "\\[\\+\\] Wrote /kaggle/working/artifacts/eaft_models/" \
-  --interval-s 60 \
-  --tail-n 120
-
-PRUNED_JSON_REMOTE_REL="$(extract_json_remote_path_from_remote_log_file "${PRUNED_REMOTE_LOG}")"
-echo "[+] pruned_json_remote_rel=${PRUNED_JSON_REMOTE_REL}"
-PRUNED_JSON_LOCAL="$(download_eaft_json "${PRUNED_JSON_REMOTE_REL}")"
-echo "[+] pruned_json_local=${PRUNED_JSON_LOCAL}"
-
-OUT_MD="${REPO_ROOT}/harmony/cuda-norm/reports/eaftreap75_bigblocks_1024_2048.md"
-python "${REPO_ROOT}/harmony/cuda-norm/scripts/summarize_eaft_pair.py" \
-  --left-json "${BASE_JSON_LOCAL}" \
-  --right-json "${PRUNED_JSON_LOCAL}" \
-  --out-md "${OUT_MD}"
-
-echo "[+] wrote ${OUT_MD}"

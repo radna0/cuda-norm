@@ -193,7 +193,18 @@ def main() -> None:
         default="0",
         help="Comma-separated absolute position offsets added to all position_ids during teacher prefill+verify. "
         "This trains positional parity for long decode without actually decoding to 65k/131k. "
-        "Example: '0,4096,65536,131072'.",
+        "Example: '0,4096,65536,129536'.",
+    )
+    ap.add_argument(
+        "--position-offset-mode",
+        default="per_prompt_rollout",
+        choices=["cycle_samples", "per_prompt_rollout"],
+        help=(
+            "How to assign position offsets when writing cache samples.\n"
+            "- cycle_samples: cycles the provided offsets every sample (old behavior; breaks rollout positional parity).\n"
+            "- per_prompt_rollout: choose a base offset per prompt and keep it for the whole rollout, while advancing "
+            "ctx_pos_start by block_size each rollout step to match real sliding-window decode."
+        ),
     )
     args = ap.parse_args()
 
@@ -358,6 +369,37 @@ def main() -> None:
         pos_offsets = [0]
     pos_offsets = [max(0, int(x)) for x in pos_offsets]
 
+    # Clamp offsets so we never exceed max_position_embeddings during rollout.
+    #
+    # Positions used by verify can reach:
+    #   ctx_pos_start + ctx_len + (block_size - 1)
+    # During our (perfect-accept) rollouts we advance ctx_pos_start by block_size
+    # each step, so the worst-case position occurs at step_idx=rollout_steps-1.
+    max_pos_emb = int(cfg.get("max_position_embeddings", 0) or 0)
+    if max_pos_emb > 0:
+        max_pos_index = int(max_pos_emb - 1)
+        max_ctx_start_one = int(max_pos_index - (int(ctx_len) + int(block_size) - 1))
+        max_ctx_start_rollout = int(max_ctx_start_one - (int(rollout_steps) - 1) * int(block_size))
+        if max_ctx_start_rollout < 0:
+            raise ValueError(
+                "Invalid max_position_embeddings for requested ctx_len/rollout: "
+                f"max_position_embeddings={max_pos_emb} ctx_len={int(ctx_len)} block_size={int(block_size)} "
+                f"rollout_steps={int(rollout_steps)}"
+            )
+        clamped: list[int] = []
+        for x in pos_offsets:
+            x_i = int(x)
+            if x_i > max_ctx_start_rollout:
+                print(
+                    "[cache][warn] clamping position_offset "
+                    f"{x_i} -> {int(max_ctx_start_rollout)} "
+                    f"(max_position_embeddings={max_pos_emb}, ctx_len={int(ctx_len)}, block_size={int(block_size)}, rollout_steps={int(rollout_steps)})",
+                    flush=True,
+                )
+                x_i = int(max_ctx_start_rollout)
+            clamped.append(x_i)
+        pos_offsets = clamped
+
     input_ids = np.asarray(input_ids_np, dtype=np.int32)
 
     # ---- eSurge-parity verify-mode prefill for context features ----
@@ -460,12 +502,19 @@ def main() -> None:
         # Initial state (from packed dataset tokens).
         ctx_ids = input_ids[i, :ctx_len].astype(np.int32)  # [ctx_len]
         anchor_id = int(input_ids[i, ctx_len])
+        pos_base = int(pos_offsets[int(i) % len(pos_offsets)])
 
         block_t0 = time.time()
         for step_idx in range(int(rollout_steps)):
             # Generate one training sample for this (ctx_ids, anchor_id) state.
             tgt = np.empty((int(block_size - 1),), dtype=np.int32)
-            pos_off = int(pos_offsets[int(out_pos) % len(pos_offsets)])
+            if str(args.position_offset_mode) == "cycle_samples":
+                pos_off = int(pos_offsets[int(out_pos) % len(pos_offsets)])
+            else:
+                # Perfect-accept rollout: each step shifts the ctx window forward
+                # by `block_size` tokens. Track absolute RoPE positions by
+                # advancing ctx_pos_start accordingly.
+                pos_off = int(pos_base + int(step_idx) * int(block_size))
             pos_off_cpu = np.asarray([np.int32(pos_off)], dtype=np.int32)
 
             _reset_kv_pages()
@@ -680,6 +729,7 @@ def main() -> None:
         "dtype": "bf16_u16",
         "seed": int(args.seed),
         "position_offsets": pos_offsets,
+        "position_offset_mode": str(args.position_offset_mode),
         "positions_contiguous": True,
         "ctx_pos_start_file": "ctx_pos_start_i32.npy",
         "anchor_pos_file": "anchor_pos_i32.npy",

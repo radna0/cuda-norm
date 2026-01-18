@@ -8,7 +8,8 @@ set -euo pipefail
 #   TEACHER_EASYDEL_DIR=/dev/shm/easydel_teachers/gptoss20b_bf16_cc89b3 \
 #   RUN_NAME=cache_ctx1024_b8_k4_n16_roll64_pos0_65k_131k \
 #   NUM_BLOCKS=16 ROLLOUT_STEPS=64 CTX_LEN=1024 BLOCK_SIZE=8 NUM_CONTEXT_FEATURES=4 \
-#   POSITION_OFFSETS=0,65536,131072 \
+#   POSITION_OFFSETS=0,65536,129536 \
+#   POSITION_OFFSET_MODE=per_prompt_rollout \
 #   ./harmony/cuda-norm/scripts/run_tpu_dflash_build_cache_logged.sh
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../../.." && pwd)"
@@ -20,6 +21,8 @@ BUILD_PY="${ROOT}/harmony/cuda-norm/scripts/tpu_dflash_build_teacher_cache.py"
 
 LOG_DIR="${ROOT}/harmony/cuda-norm/logs/tpu_dflash"
 mkdir -p "${LOG_DIR}"
+
+TPU_LOCK_PATH="${TPU_LOCK_PATH:-/dev/shm/tpu.lock}"
 
 export HF_HOME="${HF_HOME:-/dev/shm/hf}"
 export HF_HUB_CACHE="${HF_HUB_CACHE:-/dev/shm/hf/hub}"
@@ -55,7 +58,13 @@ SHARDING_AXIS_DIMS="${SHARDING_AXIS_DIMS:-1,8,1,1,1}"
 CALIB_REPO_ID="${CALIB_REPO_ID:-radna0/harmony-qwen3-calib-packs-v2-20260113}"
 CALIB_DATA_FILES="${CALIB_DATA_FILES:-packs/reasoning_style_10k_v2/reasoning_style_10k_v2.parquet,tool_agentic_10k_v6.parquet,packs/calib_prompt_10000_v2/calib_prompt_10000_v2.parquet}"
 MAX_ROWS_PER_PACK="${MAX_ROWS_PER_PACK:-2000}"
-POSITION_OFFSETS="${POSITION_OFFSETS:-0,65536,131072}"
+# IMPORTANT:
+# - Do not set pos_off=131072 directly: with ctx_len=1023 and rollouts, that
+#   exceeds max_position_embeddings=131072 and degrades/invalidates the cache.
+# - Use a near-max safe offset (e.g. 129536) so:
+#     pos_off + ctx_len + rollout_steps*block_size <= max_position_embeddings - 1
+POSITION_OFFSETS="${POSITION_OFFSETS:-0,65536,129536}"
+POSITION_OFFSET_MODE="${POSITION_OFFSET_MODE:-per_prompt_rollout}"
 
 EXTRA_ARGS=()
 if [[ -n "${TEACHER_EASYDEL_DIR}" ]]; then
@@ -66,7 +75,8 @@ if [[ -n "${SAVE_TEACHER_EASYDEL_DIR}" ]]; then
 fi
 
 set -x
-nohup "${VENV_PY}" -u "${BUILD_PY}" \
+nohup bash -c 'exec 9>"$1"; flock -x 9; shift; exec "$@"' bash "${TPU_LOCK_PATH}" \
+  "${VENV_PY}" -u "${BUILD_PY}" \
   --model-snapshot-dir "${MODEL_SNAPSHOT_DIR}" \
   "${EXTRA_ARGS[@]}" \
   --ctx-len "${CTX_LEN}" \
@@ -84,11 +94,11 @@ nohup "${VENV_PY}" -u "${BUILD_PY}" \
   --calib-data-files "${CALIB_DATA_FILES}" \
   --max-rows-per-pack "${MAX_ROWS_PER_PACK}" \
   --position-offsets "${POSITION_OFFSETS}" \
+  --position-offset-mode "${POSITION_OFFSET_MODE}" \
   --out-dir "${OUT_DIR}" \
   --write-npz "${WRITE_NPZ}" \
   >"${LOG_PATH}" 2>&1 &
 echo $! > "${PID_PATH}"
 set +x
 
-echo "pid=$(cat "${PID_PATH}") log=${LOG_PATH} out_dir=${OUT_DIR}"
-
+echo "pid=$(cat "${PID_PATH}") log=${LOG_PATH} out_dir=${OUT_DIR} tpu_lock=${TPU_LOCK_PATH}"

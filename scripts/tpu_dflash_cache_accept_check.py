@@ -290,7 +290,13 @@ def main() -> None:
             anchor_emb = teacher.get_embedding()(jnp.asarray([[anchor_id]], dtype=jnp.int32))[:, 0, :]
             if bool(args.use_ctx_kv_forward):
                 ctx_hidden = draft.project_context_features(ctx_feat_dev)
-                ctx_kv = materialize_draft_ctx_kv(draft=draft, rope=rope, ctx_hidden=ctx_hidden, max_len=int(ctx_len + block_size + 8))
+                ctx_kv = materialize_draft_ctx_kv(
+                    draft=draft,
+                    rope=rope,
+                    ctx_hidden=ctx_hidden,
+                    max_len=int(ctx_len + block_size + 8),
+                    pos_start=jnp.asarray(int(pos_off), dtype=jnp.int32),
+                )
                 d_hidden = draft_forward_with_ctx_kv(
                     draft=draft,
                     rope=rope,
@@ -300,7 +306,12 @@ def main() -> None:
                     block_size=int(block_size),
                 )
             else:
-                d_hidden = draft(context_features=ctx_feat_dev, anchor_embedding=anchor_emb.astype(jnp.bfloat16), rope=rope)
+                d_hidden = draft(
+                    context_features=ctx_feat_dev,
+                    anchor_embedding=anchor_emb.astype(jnp.bfloat16),
+                    rope=rope,
+                    ctx_pos_start=jnp.asarray(int(pos_off), dtype=jnp.int32),
+                )
             hs_d = d_hidden[:, 1:, :]
             d_logits = _lm_head_logits(hidden=hs_d.astype(jnp.bfloat16), lm_head=teacher.get_lm_head())
             draft_tokens = jnp.argmax(d_logits, axis=-1).astype(jnp.int32)[0]  # [B-1]

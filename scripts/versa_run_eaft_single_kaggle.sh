@@ -32,6 +32,9 @@ fi
 EAFT_REMOTE_LOG_DIR="${EAFT_REMOTE_LOG_DIR:-logs}"
 EAFT_ENV_FILE="${EAFT_ENV_FILE:-${ROOT_DIR}/.env}"
 GPU_TYPE="${GPU_TYPE:-H100:1}"
+TORCH_INDEX_URL="${TORCH_INDEX_URL:-https://download.pytorch.org/whl/cu121}"
+TRITON_VERSION="${TRITON_VERSION:-3.4.0}"
+KERNELS_VERSION="${KERNELS_VERSION:-0.11.7}"
 
 MODEL_ID=""
 MODEL_PATH=""
@@ -117,13 +120,19 @@ python -m versa run \
   --bootstrap-cmd "mkdir -p /kaggle/working/artifacts" \
   --bootstrap-cmd "python -m pip install -U pip" \
   --bootstrap-cmd "python -m pip install -q modal datasets transformers==4.56.2 tokenizers safetensors pyarrow pandas accelerate huggingface-hub hf_transfer" \
+  --bootstrap-cmd "python -m pip uninstall -y torchvision || true" \
+  --bootstrap-cmd "python -m pip install -q triton==${TRITON_VERSION} kernels==${KERNELS_VERSION}" \
+  --bootstrap-cmd "python -c \"import triton, kernels; ver=tuple(int(x) for x in triton.__version__.split('.')[:2]); assert ver >= (3,4), f'triton too old: {triton.__version__}'; print('[bootstrap] triton', triton.__version__, 'kernels OK')\"" \
   --bootstrap-cmd "python -m pip install -q 'sglang[all]'" \
-  --bootstrap-cmd "python -m pip install -q torch==2.9.1 --index-url https://download.pytorch.org/whl/cu128" \
+  --bootstrap-cmd "python -c 'import torch; print(torch.__version__)' || python -m pip install -q torch --index-url ${TORCH_INDEX_URL}" \
   --env-file "${EAFT_ENV_FILE}" \
   --env "GPU_TYPE=${GPU_TYPE}" \
   --env "EAFT_LOCAL_MODE=1" \
   --env "EAFT_ARTIFACTS_DIR=/kaggle/working/artifacts/eaft_models" \
   --env "SGLANG_ALLOW_OVERWRITE_LONGER_CONTEXT_LEN=1" \
+  --env "PYTHONFAULTHANDLER=1" \
+  --env "TORCH_SHOW_CPP_STACKTRACES=1" \
+  --env "TRANSFORMERS_NO_TORCHVISION=1" \
   "${EXTRA_ENV[@]}" \
   "${ROOT_DIR}/modal/collect_calib_packs_eaft_single.py::main" -- \
     --model-id "${MODEL_ID}" \

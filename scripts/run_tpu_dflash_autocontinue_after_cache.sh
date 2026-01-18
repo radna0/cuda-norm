@@ -22,6 +22,8 @@ VENV_PY="${ROOT}/harmony/cuda-norm/.venv-easydel/bin/python"
 LOG_DIR="${ROOT}/harmony/cuda-norm/logs/tpu_dflash"
 mkdir -p "${LOG_DIR}"
 
+TPU_LOCK_PATH="${TPU_LOCK_PATH:-/dev/shm/tpu.lock}"
+
 TS="$(date -u +%Y%m%d_%H%M%S)"
 PIPE_NAME="${PIPE_NAME:-tpu_dflash_autocontinue_${TS}}"
 PIPE_LOG="${LOG_DIR}/${PIPE_NAME}.log"
@@ -32,6 +34,7 @@ LONG_STEPS="${LONG_STEPS:-2000}"
 SANITY_STEPS="${SANITY_STEPS:-200}"
 SANITY_SAVE_STEPS="${SANITY_SAVE_STEPS:-200}"
 LONG_SAVE_STEPS="${LONG_SAVE_STEPS:-500}"
+BENCH_STEPS="${BENCH_STEPS:-1000,2000}"
 
 # Runtime knobs (keep consistent with cache build).
 BLOCK_SIZE="${BLOCK_SIZE:-}"
@@ -44,10 +47,15 @@ TEACHER_EASYDEL_DIR="${TEACHER_EASYDEL_DIR:-}"
 
 echo "pid=$$" > "${PID_FILE}"
 
+tpu_exec() {
+  bash -c 'exec 9>"$1"; flock -x 9; shift; exec "$@"' bash "${TPU_LOCK_PATH}" "$@"
+}
+
 {
   echo "[*] cache_log=${CACHE_LOG}"
   echo "[*] teacher_snapshot_dir=${TEACHER_SNAPSHOT_DIR}"
   echo "[*] auto_long_run=${AUTO_LONG_RUN} sanity_steps=${SANITY_STEPS} long_steps=${LONG_STEPS}"
+  echo "[*] tpu_lock=${TPU_LOCK_PATH}"
 
   echo "[*] waiting for cache build to finish..."
   cache_dir=""
@@ -78,7 +86,7 @@ echo "pid=$$" > "${PID_FILE}"
   PREFILL_CHUNK="${PREFILL_CHUNK:-256}"
 
   echo "[*] running cache parity check (multitoken verify vs cached targets)..."
-  "${VENV_PY}" -u "${SCRIPTS}/tpu_verify_multitoken_parity.py" \
+  tpu_exec "${VENV_PY}" -u "${SCRIPTS}/tpu_verify_multitoken_parity.py" \
     --cache-dir "${cache_dir}" \
     --teacher-snapshot-dir "${TEACHER_SNAPSHOT_DIR}" \
     --sample-idx 0 \
@@ -125,19 +133,48 @@ echo "pid=$$" > "${PID_FILE}"
 
     # Best-effort: locate most recent run directory.
     ckpt_root="${CKPT_DIR:-/dev/shm/dflash-checkpoints}/${RUN_NAME}"
-    draft_run_dir="$(ls -1dt "${ckpt_root}"/run-* 2>/dev/null | head -n 1 || true)"
-    if [[ -z "${draft_run_dir}" ]]; then
+    latest_run_dir="$(ls -1dt "${ckpt_root}"/run-* 2>/dev/null | head -n 1 || true)"
+    if [[ -z "${latest_run_dir}" ]]; then
       echo "[!] could not find draft run dir under ${ckpt_root}; skipping decode bench" >&2
       exit 0
     fi
 
-    echo "[*] running cached decode benchmark (blockverify spec-v1) ..."
+    echo "[*] running cached decode benchmark(s) (blockverify spec-v1) ..."
     # NOTE: use the eSurge-native benchmark harness (no HF-style use_cache).
-    bench_log="${LOG_DIR}/esurge_bench_${RUN_NAME}_${TS}.log"
-    "${VENV_PY}" -u "${SCRIPTS}/tpu_esurge_dflash_bench.py" \
+    # Run a small set of checkpoints (e.g. 1000,2000) to measure speedup trajectory
+    # without interrupting training.
+    IFS=',' read -r -a bench_steps_arr <<< "${BENCH_STEPS}"
+    for s in "${bench_steps_arr[@]}"; do
+      s_trim="$(echo "${s}" | tr -d '[:space:]')"
+      [[ -z "${s_trim}" ]] && continue
+      step_dir="${ckpt_root}/run-${s_trim}"
+      if [[ ! -d "${step_dir}" ]]; then
+        echo "[*] bench: missing ${step_dir}, skipping"
+        continue
+      fi
+      bench_log="${LOG_DIR}/esurge_bench_${RUN_NAME}_run${s_trim}_${TS}.log"
+      tpu_exec "${VENV_PY}" -u "${SCRIPTS}/tpu_esurge_dflash_bench.py" \
+        --teacher-snapshot-dir "${TEACHER_SNAPSHOT_DIR}" \
+        ${TEACHER_EASYDEL_DIR:+--teacher-easydel-dir "${TEACHER_EASYDEL_DIR}"} \
+        --draft-run-dir "${step_dir}" \
+        --block-size "${BLOCK_SIZE}" \
+        --max-new-tokens 2048 \
+        --max-model-len 4096 \
+        --page-size "${PAGE_SIZE}" \
+        --hbm-utilization "${HBM_UTILIZATION}" \
+        --prompt-from-cache-dir "${cache_dir}" \
+        --cache-sample-idx 0 \
+        --also-run-baseline \
+        2>&1 | tee "${bench_log}"
+      echo "[+] decode bench done (log: ${bench_log})"
+    done
+
+    # Always bench the latest checkpoint too (in case BENCH_STEPS misses it).
+    bench_log="${LOG_DIR}/esurge_bench_${RUN_NAME}_latest_${TS}.log"
+    tpu_exec "${VENV_PY}" -u "${SCRIPTS}/tpu_esurge_dflash_bench.py" \
       --teacher-snapshot-dir "${TEACHER_SNAPSHOT_DIR}" \
       ${TEACHER_EASYDEL_DIR:+--teacher-easydel-dir "${TEACHER_EASYDEL_DIR}"} \
-      --draft-run-dir "${draft_run_dir}" \
+      --draft-run-dir "${latest_run_dir}" \
       --block-size "${BLOCK_SIZE}" \
       --max-new-tokens 2048 \
       --max-model-len 4096 \

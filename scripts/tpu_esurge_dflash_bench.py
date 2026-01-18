@@ -109,19 +109,34 @@ def main() -> None:
         cache_dir = Path(prompt_from_cache_dir).expanduser().resolve()
         ctx_tokens = np.load(cache_dir / "ctx_token_ids.npy", mmap_mode="r")
         anchor_ids = np.load(cache_dir / "anchor_ids.npy", mmap_mode="r")
+        ctx_pos_start_arr = np.load(cache_dir / "ctx_pos_start_i32.npy", mmap_mode="r")
+        anchor_pos_arr = np.load(cache_dir / "anchor_pos_i32.npy", mmap_mode="r")
         i = int(args.cache_sample_idx)
         if i < 0 or i >= int(ctx_tokens.shape[0]):
             raise ValueError(f"--cache-sample-idx={i} out of range (0..{int(ctx_tokens.shape[0]) - 1})")
         ctx = np.asarray(ctx_tokens[i], dtype=np.int32)
-        anchor = int(np.asarray(anchor_ids[i]))
+        anchor = int(np.asarray(anchor_ids[i], dtype=np.int32))
         prompt_ids = np.concatenate([ctx, np.asarray([anchor], dtype=np.int32)], axis=0)
-        pos_path = cache_dir / "ctx_pos_start_i32.npy"
-        if pos_path.exists():
-            try:
-                pos_arr = np.load(pos_path, mmap_mode="r")
-                position_offset = int(np.asarray(pos_arr[i]))
-            except Exception:
-                position_offset = 0
+        ctx_pos_start = int(np.asarray(ctx_pos_start_arr[i], dtype=np.int32))
+        anchor_pos = int(np.asarray(anchor_pos_arr[i], dtype=np.int32))
+        expected_anchor_pos = int(ctx_pos_start + int(ctx.shape[0]))
+        if anchor_pos != expected_anchor_pos:
+            raise ValueError(
+                f"cache position mismatch: anchor_pos={anchor_pos} but ctx_pos_start+ctx_len={expected_anchor_pos} "
+                f"(ctx_len={int(ctx.shape[0])})"
+            )
+        # IMPORTANT: use the cache's absolute offset so RoPE matches the hidden
+        # features the draft was trained on.
+        #
+        # GPT‑OSS has max_position_embeddings=131072; absolute positions must be
+        # in [0, 131071]. If your cache contains 131072, rebuild with a safe
+        # near-max offset (e.g. 129536) so ctx_pos_start+ctx_len stays <=131071.
+        if ctx_pos_start >= 131072:
+            raise ValueError(
+                f"ctx_pos_start={ctx_pos_start} is out of range for GPT‑OSS (max 131071). "
+                "Rebuild the cache with POSITION_OFFSETS=0,65536,129536."
+            )
+        position_offset = int(ctx_pos_start)
     else:
         tok = AutoTokenizer.from_pretrained(str(teacher_snapshot), local_files_only=True, use_fast=True)
         base_prompt = "You are a helpful assistant.\n\nUser: Explain speculative decoding in one paragraph.\nAssistant:"
@@ -224,7 +239,17 @@ def main() -> None:
         also_run_baseline=bool(args.also_run_baseline),
     )
 
-    print(json.dumps({"dflash": dflash_res.__dict__, "baseline": base_res.__dict__ if base_res else None}, indent=2))
+    print(
+        json.dumps(
+            {
+                "cache_sample_idx": int(args.cache_sample_idx) if prompt_from_cache_dir else None,
+                "position_offset": int(position_offset),
+                "dflash": dflash_res.__dict__,
+                "baseline": base_res.__dict__ if base_res else None,
+            },
+            indent=2,
+        )
+    )
 
 
 if __name__ == "__main__":

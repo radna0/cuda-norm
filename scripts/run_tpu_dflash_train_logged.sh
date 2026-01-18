@@ -25,6 +25,8 @@ LOG_DIR="${ROOT}/harmony/cuda-norm/logs/tpu_dflash"
 CKPT_DIR="${CKPT_DIR:-/dev/shm/dflash-checkpoints}"
 mkdir -p "${LOG_DIR}" "${CKPT_DIR}"
 
+TPU_LOCK_PATH="${TPU_LOCK_PATH:-/dev/shm/tpu.lock}"
+
 export HF_HOME="${HF_HOME:-/dev/shm/hf}"
 export HF_HUB_CACHE="${HF_HUB_CACHE:-/dev/shm/hf/hub}"
 export XDG_CACHE_HOME="${XDG_CACHE_HOME:-/dev/shm/xdg}"
@@ -78,7 +80,8 @@ if [[ -n "${RESUME_PATH}" ]]; then
 fi
 
 set -x
-nohup "${VENV_PY}" -u "${TRAIN_PY}" \
+nohup bash -c 'exec 9>"$1"; flock -x 9; shift; exec "$@"' bash "${TPU_LOCK_PATH}" \
+  "${VENV_PY}" -u "${TRAIN_PY}" \
   --cache-dir "${CACHE_DIR}" \
   --teacher-snapshot-dir "${TEACHER_SNAPSHOT}" \
   --save-directory "${CKPT_DIR}" \
@@ -104,4 +107,4 @@ nohup "${VENV_PY}" -u "${TRAIN_PY}" \
 echo $! > "${PID_PATH_REAL}"
 set +x
 
-echo "pid=$(cat "${PID_PATH}") log=${LOG_PATH} (real=${LOG_PATH_REAL}) ckpt_root=${CKPT_DIR}/${RUN_NAME}"
+echo "pid=$(cat "${PID_PATH}") log=${LOG_PATH} (real=${LOG_PATH_REAL}) ckpt_root=${CKPT_DIR}/${RUN_NAME} tpu_lock=${TPU_LOCK_PATH}"

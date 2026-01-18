@@ -14,6 +14,8 @@ VENV_PY="${CUDA_NORM_DIR}/.venv-easydel/bin/python"
 LOG_DIR="${CUDA_NORM_DIR}/logs/tpu_dflash"
 mkdir -p "$LOG_DIR"
 
+TPU_LOCK_PATH="${TPU_LOCK_PATH:-/dev/shm/tpu.lock}"
+
 TS="$(date -u +%Y%m%d_%H%M%S)"
 RUN_NAME="${RUN_NAME:-tpu_dflash_decode_v1_${TS}}"
 LOG_FILE="${LOG_DIR}/${RUN_NAME}.log"
@@ -29,7 +31,8 @@ fi
 export EASYDEL_VERIFY_DISALLOW_ON_DEMAND_COMPILE="${EASYDEL_VERIFY_DISALLOW_ON_DEMAND_COMPILE:-1}"
 
 set -x
-"${VENV_PY}" -u "${CUDA_NORM_DIR}/scripts/tpu_dflash_spec_decode_v1.py" \
+bash -c 'exec 9>"$1"; flock -x 9; shift; exec "$@"' bash "${TPU_LOCK_PATH}" \
+  "${VENV_PY}" -u "${CUDA_NORM_DIR}/scripts/tpu_dflash_spec_decode_v1.py" \
   --teacher-snapshot-dir "${TEACHER_SNAPSHOT_DIR}" \
   --draft-params "${DRAFT_PARAMS}" \
   ${ALSO_RUN_BASELINE:+--also-run-baseline} \

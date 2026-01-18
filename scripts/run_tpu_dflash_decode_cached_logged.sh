@@ -19,6 +19,8 @@ VENV_PY="${SCRIPT_DIR}/../.venv-easydel/bin/python"
 LOG_DIR="${SCRIPT_DIR}/../logs/tpu_dflash"
 mkdir -p "$LOG_DIR"
 
+TPU_LOCK_PATH="${TPU_LOCK_PATH:-/dev/shm/tpu.lock}"
+
 TS="$(date -u +%Y%m%d_%H%M%S)"
 RUN_NAME="${RUN_NAME:-tpu_dflash_decode_cached_v1_${TS}}"
 LOG_FILE="${LOG_DIR}/${RUN_NAME}.log"
@@ -40,7 +42,8 @@ fi
 
 set -x
 DECODE_SCRIPT="${DFLASH_DECODE_SCRIPT:-tpu_dflash_spec_decode_cached_v1.py}"
-"${VENV_PY}" -u "${SCRIPT_DIR}/${DECODE_SCRIPT}" \
+bash -c 'exec 9>"$1"; flock -x 9; shift; exec "$@"' bash "${TPU_LOCK_PATH}" \
+  "${VENV_PY}" -u "${SCRIPT_DIR}/${DECODE_SCRIPT}" \
   --teacher-snapshot-dir "${TEACHER_SNAPSHOT_DIR}" \
   --draft-run-dir "${DRAFT_RUN_DIR}" \
   "${ARGS[@]}" \
