@@ -340,10 +340,11 @@ def main() -> None:
     seqbuf.num_tokens[0] = int(prompt_len)
     seqbuf.num_tokens_no_spec[0] = int(prompt_len)
     tgt = np.empty((int(args.block_size) - 1,), dtype=np.int32)
+    ctx_seq = []
     for j in range(int(args.block_size) - 1):
         base_len = int(seqbuf.num_computed_tokens[0])
         scheduled_full_cpu[0] = 1
-        _ctx_unused, greedy_j, input_ids_buf, position_ids_buf, _m = executor.execute_verify(
+        ctx_j, greedy_j, input_ids_buf, position_ids_buf, _m = executor.execute_verify(
             num_tokens=int(args.block_size),
             scheduled_full_cpu=scheduled_full_cpu,
             active_mask_full_cpu=active_mask_full_cpu,
@@ -360,12 +361,41 @@ def main() -> None:
             page_table_cpu=page_table_cpu,
             page_table_version=page_table_version,
         )
+        try:
+            ctx_seq.append(np.asarray(jax.device_get(jnp.asarray(ctx_j)[0, :]), dtype=np.float32))
+        except Exception:
+            ctx_seq.append(None)
         tok = int(np.asarray(greedy_j)[0])
         tgt[j] = np.int32(tok)
         seqbuf.token_ids[0, base_len + 1] = np.int32(tok)
         seqbuf.num_computed_tokens[0] = int(base_len + 1)
         seqbuf.num_tokens[0] = int(base_len + 2)
         seqbuf.num_tokens_no_spec[0] = int(base_len + 2)
+
+    # Capture the context feature for the last token in the block too, so we
+    # have a full [block_size] sequential reference.
+    scheduled_full_cpu[0] = 1
+    ctx_last, _greedy_unused, input_ids_buf, position_ids_buf, _m = executor.execute_verify(
+        num_tokens=int(args.block_size),
+        scheduled_full_cpu=scheduled_full_cpu,
+        active_mask_full_cpu=active_mask_full_cpu,
+        input_ids_buf=input_ids_buf,
+        position_ids_buf=position_ids_buf,
+        padded_num_reqs=1,
+        token_ids_cpu=seqbuf.token_ids,
+        num_computed_tokens_cpu=seqbuf.num_computed_tokens,
+        position_offset_cpu=pos_off_cpu,
+        temperature_cpu=seqbuf.temperature,
+        top_p_cpu=seqbuf.top_p,
+        top_k_cpu=seqbuf.top_k,
+        min_p_cpu=seqbuf.min_p,
+        page_table_cpu=page_table_cpu,
+        page_table_version=page_table_version,
+    )
+    try:
+        ctx_seq.append(np.asarray(jax.device_get(jnp.asarray(ctx_last)[0, :]), dtype=np.float32))
+    except Exception:
+        ctx_seq.append(None)
 
     cand = np.empty((int(args.block_size),), dtype=np.int32)
     cand[0] = np.int32(anchor_id)
@@ -431,6 +461,24 @@ def main() -> None:
     greedy_block = np.asarray(greedy_block, dtype=np.int32)
     if greedy_block.shape[0] < int(args.block_size):
         raise RuntimeError(f"greedy_block shape {greedy_block.shape} < block_size")
+
+    # Compare per-token context features between sequential 1-token rollout and
+    # the multi-token verify forward on the same candidate block.
+    ctx_vs_seq_mae_by_pos = None
+    ctx_vs_seq_mae_mean = None
+    ctx_vs_seq_mae_max = None
+    try:
+        ctx_blk = np.asarray(jax.device_get(jnp.asarray(ctx_block)[: int(args.block_size), :]), dtype=np.float32)
+        if len(ctx_seq) == int(args.block_size) and all(x is not None for x in ctx_seq):
+            ctx_seq_mat = np.stack([x for x in ctx_seq if x is not None], axis=0).astype(np.float32, copy=False)
+            per = np.mean(np.abs(ctx_blk - ctx_seq_mat), axis=-1)
+            ctx_vs_seq_mae_by_pos = [float(x) for x in per.tolist()]
+            ctx_vs_seq_mae_mean = float(np.mean(per))
+            ctx_vs_seq_mae_max = float(np.max(per))
+    except Exception:
+        ctx_vs_seq_mae_by_pos = None
+        ctx_vs_seq_mae_mean = None
+        ctx_vs_seq_mae_max = None
 
     # Probe: does block0 depend on *future* draft tokens?
     #
@@ -532,6 +580,9 @@ def main() -> None:
                 "verify_ctx_feat_mae_by_pos": ctx_feat_mae_by_pos,
                 "verify_ctx_feat_mae_mean": ctx_feat_mae_mean,
                 "verify_ctx_feat_mae_max": ctx_feat_mae_max,
+                "verify_ctx_feat_vs_sequential_mae_by_pos": ctx_vs_seq_mae_by_pos,
+                "verify_ctx_feat_vs_sequential_mae_mean": ctx_vs_seq_mae_mean,
+                "verify_ctx_feat_vs_sequential_mae_max": ctx_vs_seq_mae_max,
                 "match_1tok_vs_block0": bool(int(next1) == int(greedy_block[0])),
                 "match_cached_targets_vs_verify": bool(
                     cached_targets.shape[0] == (int(args.block_size) - 1)

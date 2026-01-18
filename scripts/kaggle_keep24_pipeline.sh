@@ -34,13 +34,18 @@ MAX_SEQ_LENGTH="${KEEP24_MAX_SEQ_LENGTH:-4096}"
 BATCH_SIZE="${KEEP24_BATCH_SIZE:-1}"
 
 if [[ -n "${REMOTE_JUPYTER_KERNEL_ID:-}" ]]; then
-  echo "[*] preflight: Kaggle GPU cleanup on existing kernel=${REMOTE_JUPYTER_KERNEL_ID}"
-  # Best-effort: kill leaked Versa modal_run processes holding VRAM from
-  # previous runs, then print nvidia-smi.
-  PYTHONPATH="third_party/Versa${PYTHONPATH:+:${PYTHONPATH}}" \
-  python "${ROOT_DIR}/scripts/kaggle_gpu_cleanup.py" \
-    --kernel-id "${REMOTE_JUPYTER_KERNEL_ID}" \
-    --aggressive || true
+  PREFLIGHT_CLEANUP="${KEEP24_PREFLIGHT_CLEANUP:-1}"
+  if [[ "${PREFLIGHT_CLEANUP}" != "0" ]]; then
+    echo "[*] preflight: Kaggle GPU cleanup on existing kernel=${REMOTE_JUPYTER_KERNEL_ID}"
+    # Best-effort: kill leaked Versa modal_run processes holding VRAM from
+    # previous runs, then print nvidia-smi. Hard timeout so we never hang.
+    PYTHONPATH="third_party/Versa${PYTHONPATH:+:${PYTHONPATH}}" \
+    timeout 180s python "${ROOT_DIR}/scripts/kaggle_gpu_cleanup.py" \
+      --kernel-id "${REMOTE_JUPYTER_KERNEL_ID}" \
+      --aggressive || echo "[warn] preflight cleanup failed/timeout; continuing"
+  else
+    echo "[*] preflight: cleanup disabled (KEEP24_PREFLIGHT_CLEANUP=0)"
+  fi
 fi
 
 echo "[*] launching keep24 build on Kaggle..."
