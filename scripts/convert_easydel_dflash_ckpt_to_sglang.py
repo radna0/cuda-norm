@@ -163,6 +163,16 @@ def _target_cfg_from_training_args(run_dir: Path) -> dict[str, Any]:
     return cfg if isinstance(cfg, dict) else {}
 
 
+def _target_cfg_from_snapshot_dir(snapshot_dir: Path) -> dict[str, Any]:
+    cfg_path = snapshot_dir / "config.json"
+    if not cfg_path.exists():
+        raise FileNotFoundError(f"Missing target config.json under snapshot dir: {cfg_path}")
+    cfg = _read_json(cfg_path)
+    if not isinstance(cfg, dict):
+        raise ValueError(f"Invalid JSON in {cfg_path}")
+    return cfg
+
+
 def _get_target_layer_ids(run_dir: Path) -> list[int]:
     args_path = run_dir / "easydel-training-arguments.json"
     if not args_path.exists():
@@ -193,6 +203,55 @@ def _get_target_layer_ids(run_dir: Path) -> list[int]:
             f"Missing/invalid target_layer_ids in {args_path} (and cache_dir/meta.json and run/config.json)."
         )
     return [int(x) for x in tli]
+
+
+def _resolve_target_layer_ids_mode(
+    *,
+    mode: str,
+    target_layer_ids_raw: list[int],
+    target_num_layers: int,
+) -> tuple[str, list[int]]:
+    """Resolve target-layer-id semantics for the exported HF config.
+
+    We want the exported `dflash_config.target_layer_ids` to match SGLang's
+    semantics: layer indices in [0..num_layers-1] referring to the *output of
+    that layer* ("after-layer" ids).
+
+    Some EasyDeL pipelines store indices into `output_hidden_states` instead
+    (embedding output + per-layer outputs), where "after layer i" is stored as
+    (i+1). In that case we must subtract 1.
+    """
+    requested = str(mode).strip().lower()
+    if requested not in ("auto", "prelayer", "afterlayer"):
+        raise ValueError(f"Invalid target-layer-ids mode: {mode!r}")
+
+    raw = [int(x) for x in target_layer_ids_raw]
+    if not raw:
+        raise ValueError("target_layer_ids_raw must be non-empty")
+
+    if requested == "auto":
+        # Heuristic:
+        # - If any id is 0, the list is already in after-layer space.
+        # - If all ids are >= 1, assume output_hidden_states indexing and shift -1.
+        # This matches HF/EasyDeL `output_hidden_states` convention:
+        #   0 = embeddings, 1 = after layer0, ..., L = after layer(L-1)
+        if any(int(x) == 0 for x in raw):
+            requested = "afterlayer"
+        else:
+            requested = "prelayer"
+
+    if requested == "afterlayer":
+        resolved = raw
+    else:
+        resolved = [int(x) - 1 for x in raw]
+
+    bad = [x for x in resolved if not (0 <= int(x) < int(target_num_layers))]
+    if bad:
+        raise ValueError(
+            "Resolved target_layer_ids out of range. "
+            f"mode={mode!r} resolved={resolved} target_num_layers={int(target_num_layers)}"
+        )
+    return requested, resolved
 
 
 def _plan_shards(num_layers: int) -> list[str]:
@@ -274,6 +333,14 @@ def main() -> None:
     ap.add_argument("--run-dir", required=True, help="EasyDeL run directory (contains model/ + tensorstore_index.json).")
     ap.add_argument("--dst", required=True, help="Output directory for SGLang DFlashDraftModel checkpoint.")
     ap.add_argument(
+        "--target-snapshot-dir",
+        default="",
+        help=(
+            "Optional HF snapshot dir for the GPT‑OSS *target* model. When provided, this is the source of truth "
+            "for vocab_size/max_position_embeddings/rope/pad_token_id and avoids exporting an unusable draft config."
+        ),
+    )
+    ap.add_argument(
         "--mask-token",
         default="",
         help="dflash_config.mask_token (defaults to <|MASK|>).",
@@ -287,8 +354,8 @@ def main() -> None:
     ap.add_argument("--keep-fc-bias", action="store_true", help="Keep and export fc.bias (requires patched SGLang).")
     ap.add_argument(
         "--target-layer-ids-mode",
-        default=os.environ.get("DFLASH_TARGET_LAYER_IDS_MODE", "prelayer"),
-        choices=["prelayer", "afterlayer"],
+        default=os.environ.get("DFLASH_TARGET_LAYER_IDS_MODE", "auto"),
+        choices=["auto", "prelayer", "afterlayer"],
         help=(
             "How to interpret `target_layer_ids` stored in the EasyDeL run metadata. "
             "`prelayer` means they index EasyDeL's output_hidden_states entries directly "
@@ -322,14 +389,21 @@ def main() -> None:
     if not isinstance(draft_cfg, dict):
         raise ValueError(f"Invalid draft config JSON: {draft_cfg_path}")
 
-    target_cfg = _target_cfg_from_training_args(run_dir)
-    target_layer_ids_raw = _get_target_layer_ids(run_dir)
-    if str(args.target_layer_ids_mode).lower() == "afterlayer":
-        # If the run stored pre-layer capture indices (EasyDeL hidden_states indices),
-        # convert them back to HF-style "after layer" ids expected by SGLang PR #16818.
-        target_layer_ids = [int(x) - 1 for x in target_layer_ids_raw]
+    target_cfg: dict[str, Any] = {}
+    if str(args.target_snapshot_dir).strip():
+        target_cfg = _target_cfg_from_snapshot_dir(Path(str(args.target_snapshot_dir)).expanduser().resolve())
     else:
-        target_layer_ids = [int(x) for x in target_layer_ids_raw]
+        target_cfg = _target_cfg_from_training_args(run_dir)
+    target_layer_ids_raw = _get_target_layer_ids(run_dir)
+    target_num_layers = int(target_cfg.get("num_hidden_layers", 0) or 0)
+    if target_num_layers <= 0:
+        # Fallback: trust the run metadata (best-effort).
+        target_num_layers = max(int(x) for x in target_layer_ids_raw) + 1
+    resolved_mode, target_layer_ids = _resolve_target_layer_ids_mode(
+        mode=str(args.target_layer_ids_mode),
+        target_layer_ids_raw=target_layer_ids_raw,
+        target_num_layers=target_num_layers,
+    )
 
     hidden_size = int(draft_cfg["hidden_size"])
     num_layers = int(draft_cfg["num_layers"])
@@ -351,8 +425,11 @@ def main() -> None:
 
     vocab_size = int(target_cfg.get("vocab_size", 0) or target_cfg.get("padded_vocab_size", 0) or 0)
     if vocab_size <= 0:
-        # Keep config loadable; the draft itself never uses embeddings/lm_head.
-        vocab_size = 32000
+        raise ValueError(
+            "Unable to resolve target vocab_size for the exported draft config. "
+            "Provide --target-snapshot-dir (recommended) or ensure the EasyDeL run directory "
+            "contains easydel-training-arguments.json with teacher_snapshot_dir/model_snapshot_dir."
+        )
     max_position_embeddings = int(target_cfg.get("max_position_embeddings", 131072))
     rope_theta = float(target_cfg.get("rope_theta", 150000.0))
     rope_scaling = target_cfg.get("rope_scaling", None)
@@ -371,6 +448,12 @@ def main() -> None:
         # Match upstream DFLASH defaults (mask token id 200000) when we can't
         # resolve an explicit id from the target config.
         mask_token_id = 200000
+    if mask_token_id is None:
+        raise ValueError(
+            "Unable to resolve DFLASH mask_token_id for the exported draft config. "
+            f"mask_token={mask_token!r} target_vocab_size={int(vocab_size)} "
+            "(provide --target-snapshot-dir; or use a mask token that exists in the target tokenizer and has an id)."
+        )
 
     out_cfg = {
         "architectures": ["DFlashDraftModel"],
@@ -403,6 +486,11 @@ def main() -> None:
             "fc_bias": bool(args.keep_fc_bias),
         },
         "source_checkpoint": str(run_dir),
+        "export_notes": {
+            "target_layer_ids_raw": [int(x) for x in target_layer_ids_raw],
+            "target_layer_ids_mode": str(args.target_layer_ids_mode),
+            "target_layer_ids_mode_resolved": str(resolved_mode),
+        },
     }
     (dst / "config.json").write_text(json.dumps(out_cfg, indent=2), encoding="utf-8")
 

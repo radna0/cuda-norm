@@ -42,6 +42,8 @@ MAX_TOTAL_TOKENS="${MAX_TOTAL_TOKENS:-}"
 MAX_RUNNING_REQUESTS="${MAX_RUNNING_REQUESTS:-}"
 MAX_SEQ_LEN="${MAX_SEQ_LEN:-}"
 CHUNKED_PREFILL_SIZE="${CHUNKED_PREFILL_SIZE:-}"
+WATCHDOG_TIMEOUT="${WATCHDOG_TIMEOUT:-}"
+MONITOR_INTERVAL_S="${MONITOR_INTERVAL_S:-}"
 
 # Optional: override JAX precompile buckets to avoid huge compile/OOM during
 # speculative decoding. Space- or comma-separated lists.
@@ -50,6 +52,15 @@ PRECOMPILE_TOKEN_PADDINGS="${PRECOMPILE_TOKEN_PADDINGS:-}"
 
 # TPU-first default (override if needed).
 export JAX_PLATFORMS="${JAX_PLATFORMS:-tpu}"
+
+if [[ -z "${WATCHDOG_TIMEOUT}" ]] && [[ "${MAX_NEW_TOKENS}" -ge 1024 ]]; then
+  # Long-decode benchmarks can hit multi-minute JAX compilation (first-run) on TPU.
+  # Use a large watchdog by default so the run doesn't get killed mid-compile.
+  WATCHDOG_TIMEOUT="7200"
+fi
+if [[ -z "${MONITOR_INTERVAL_S}" ]] && [[ "${MAX_NEW_TOKENS}" -ge 1024 ]]; then
+  MONITOR_INTERVAL_S="15"
+fi
 
 if [[ -z "${HF_TOKEN:-}" ]] && [[ -f "${REPO_ROOT}/harmony/cuda-norm/.env" ]]; then
   set -a
@@ -74,6 +85,8 @@ mkdir -p "${LOG_DIR}"
 
 BASE_LOG="${LOG_DIR}/${RUN_NAME}.baseline.log"
 DFLASH_LOG="${LOG_DIR}/${RUN_NAME}.dflash.log"
+BASE_RES="${LOG_DIR}/${RUN_NAME}.baseline.jsonl"
+DFLASH_RES="${LOG_DIR}/${RUN_NAME}.dflash.jsonl"
 
 if [[ -z "${SGLJAX_PY}" ]] && [[ -x "${SGLJAX_ROOT}/.venv/bin/python" ]]; then
   SGLJAX_PY="${SGLJAX_ROOT}/.venv/bin/python"
@@ -98,13 +111,16 @@ COMMON_ARGS=(
   --context-length "${CONTEXT_LENGTH}"
   ${MAX_SEQ_LEN:+--max-seq-len} ${MAX_SEQ_LEN:+"${MAX_SEQ_LEN}"}
   ${CHUNKED_PREFILL_SIZE:+--chunked-prefill-size} ${CHUNKED_PREFILL_SIZE:+"${CHUNKED_PREFILL_SIZE}"}
+  ${WATCHDOG_TIMEOUT:+--watchdog-timeout} ${WATCHDOG_TIMEOUT:+"${WATCHDOG_TIMEOUT}"}
   --disable-overlap-schedule
   --skip-server-warmup
   --dataset-name random
-  --random-input "${PROMPT_LEN}"
-  --random-output "${MAX_NEW_TOKENS}"
+  --random-input-len "${PROMPT_LEN}"
+  --random-output-len "${MAX_NEW_TOKENS}"
+  --random-range-ratio 0.0
   --num-prompts "${NUM_PROMPTS}"
   --seed "${SEED}"
+  ${MONITOR_INTERVAL_S:+--monitor-interval-s} ${MONITOR_INTERVAL_S:+"${MONITOR_INTERVAL_S}"}
 )
 if [[ -n "${MAX_TOTAL_TOKENS}" ]]; then
   COMMON_ARGS+=(--max-total-tokens "${MAX_TOTAL_TOKENS}")
@@ -119,6 +135,13 @@ _split_list() {
   # shellcheck disable=SC2206
   echo ${s}
 }
+
+# If the caller configured MAX_RUNNING_REQUESTS but did not provide explicit
+# precompile buckets, default to compiling *all* batch sizes up to the max.
+# This avoids costly JAX recompiles as the number of active requests drops.
+if [[ -z "${PRECOMPILE_BS_PADDINGS}" ]] && [[ -n "${MAX_RUNNING_REQUESTS}" ]]; then
+  PRECOMPILE_BS_PADDINGS="$(seq 1 "${MAX_RUNNING_REQUESTS}" | tr '\n' ' ')"
+fi
 if [[ -n "${PRECOMPILE_BS_PADDINGS}" ]]; then
   # shellcheck disable=SC2207
   BS_LIST=($(_split_list "${PRECOMPILE_BS_PADDINGS}"))
@@ -132,18 +155,23 @@ fi
 
 if [[ "${SKIP_BASELINE}" != "1" ]]; then
   echo "[+] Baseline log: ${BASE_LOG}"
+  echo "[+] Baseline result: ${BASE_RES}"
   (
     cd -- "${SGLJAX_ROOT}"
-    "${SGLJAX_PY}" -m sgl_jax.bench_offline_throughput "${COMMON_ARGS[@]}"
+    "${SGLJAX_PY}" -m sgl_jax.bench_offline_throughput \
+      "${COMMON_ARGS[@]}" \
+      --result-filename "${BASE_RES}"
   ) 2>&1 | tee "${BASE_LOG}"
 fi
 
 if [[ "${SKIP_DFLASH}" != "1" ]]; then
   echo "[+] DFLASH log: ${DFLASH_LOG}"
+  echo "[+] DFLASH result: ${DFLASH_RES}"
   (
     cd -- "${SGLJAX_ROOT}"
     "${SGLJAX_PY}" -m sgl_jax.bench_offline_throughput \
       "${COMMON_ARGS[@]}" \
+      --result-filename "${DFLASH_RES}" \
       --speculative-algorithm DFLASH \
       --speculative-draft-model-path "${DRAFT_PATH}" \
       --speculative-num-draft-tokens "${BLOCK_SIZE}" \

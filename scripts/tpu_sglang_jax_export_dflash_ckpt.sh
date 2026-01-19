@@ -16,6 +16,7 @@ RUN_DIR="${RUN_DIR:-}"
 DST="${DST:-}"
 OUT_DTYPE="${OUT_DTYPE:-float16}" # float16 recommended; draft is small.
 MASK_TOKEN="${MASK_TOKEN:-<|MASK|>}"
+TARGET_SNAPSHOT_DIR="${TARGET_SNAPSHOT_DIR:-}"
 
 if [[ -z "${HF_TOKEN:-}" ]] && [[ -f "${REPO_ROOT}/harmony/cuda-norm/.env" ]]; then
   set -a
@@ -38,6 +39,7 @@ mkdir -p "$(dirname -- "${DST}")"
 python "${REPO_ROOT}/harmony/cuda-norm/scripts/convert_easydel_dflash_ckpt_to_sglang.py" \
   --run-dir "${RUN_DIR}" \
   --dst "${DST}" \
+  ${TARGET_SNAPSHOT_DIR:+--target-snapshot-dir} ${TARGET_SNAPSHOT_DIR:+"${TARGET_SNAPSHOT_DIR}"} \
   --mask-token "${MASK_TOKEN}" \
   --dtype "${OUT_DTYPE}" \
   --keep-fc-bias \
