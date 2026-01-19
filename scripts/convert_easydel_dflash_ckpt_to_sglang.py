@@ -142,7 +142,9 @@ def _target_cfg_from_training_args(run_dir: Path) -> dict[str, Any]:
     train_args = _read_json(args_path)
     if not isinstance(train_args, dict):
         return {}
-    snap = train_args.get("model_snapshot_dir", "")
+    # Our EasyDeL trainer uses `teacher_snapshot_dir`. Older experiments used
+    # `model_snapshot_dir`.
+    snap = train_args.get("teacher_snapshot_dir", "") or train_args.get("model_snapshot_dir", "")
     if not snap:
         # Our trainer may store target snapshot info in cache_dir/meta.json.
         cache_dir = train_args.get("cache_dir", "")
@@ -178,8 +180,17 @@ def _get_target_layer_ids(run_dir: Path) -> list[int]:
                 if isinstance(meta, dict):
                     tli = meta.get("target_layer_ids", None)
     if not isinstance(tli, list) or not tli:
+        # Cache dirs are often ephemeral on TPU boxes (/dev/shm). Our EasyDeL
+        # run directory always includes `config.json` with the resolved
+        # `target_layer_ids`, so fall back to that to make export reproducible.
+        cfg_path = run_dir / "config.json"
+        if cfg_path.exists():
+            cfg = _read_json(cfg_path)
+            if isinstance(cfg, dict):
+                tli = cfg.get("target_layer_ids", None)
+    if not isinstance(tli, list) or not tli:
         raise ValueError(
-            f"Missing/invalid target_layer_ids in {args_path} (and cache_dir/meta.json)."
+            f"Missing/invalid target_layer_ids in {args_path} (and cache_dir/meta.json and run/config.json)."
         )
     return [int(x) for x in tli]
 
@@ -265,7 +276,7 @@ def main() -> None:
     ap.add_argument(
         "--mask-token",
         default="",
-        help="dflash_config.mask_token (defaults to <|pad|>).",
+        help="dflash_config.mask_token (defaults to <|MASK|>).",
     )
     ap.add_argument(
         "--dtype",
@@ -347,7 +358,19 @@ def main() -> None:
     rope_scaling = target_cfg.get("rope_scaling", None)
     attention_bias = bool(target_cfg.get("attention_bias", True))
 
-    mask_token = str(args.mask_token).strip() or "<|pad|>"
+    mask_token = str(args.mask_token).strip() or "<|MASK|>"
+    mask_token_id = None
+    if isinstance(target_cfg, dict):
+        # Prefer using the target model's tokenizer-resolved pad id for `<|pad|>`.
+        if mask_token == "<|pad|>" and target_cfg.get("pad_token_id", None) is not None:
+            try:
+                mask_token_id = int(target_cfg["pad_token_id"])
+            except Exception:
+                mask_token_id = None
+    if mask_token_id is None and int(vocab_size) > 200000:
+        # Match upstream DFLASH defaults (mask token id 200000) when we can't
+        # resolve an explicit id from the target config.
+        mask_token_id = 200000
 
     out_cfg = {
         "architectures": ["DFlashDraftModel"],
@@ -370,7 +393,11 @@ def main() -> None:
             "block_size": int(block_size),
             "target_layer_ids": [int(x) for x in target_layer_ids],
             "mask_token": str(mask_token),
+            # SGLang-JAX resolves the mask token id without access to the tokenizer
+            # inside the model worker. Provide an explicit id when we can.
+            "mask_token_id": mask_token_id,
             "use_qk_norm": bool(use_qk_norm),
+            "use_mask_embedding": True,
             # Our EasyDeL draft uses biases in MLP and (often) in fc.
             "mlp_bias": True,
             "fc_bias": bool(args.keep_fc_bias),
@@ -432,6 +459,49 @@ def main() -> None:
             arr = arr.astype(out_dtype, copy=False)
 
         put_tensor(out_name, arr)
+
+    # ---- Fuse EasyDeL MLP gate/up into SGLang DFLASH `gate_up_proj`.
+    #
+    # EasyDeL draft MLP uses (gate_proj, up_proj, down_proj) like LLaMA, while
+    # the upstream SGLang DFLASH draft model uses a single `gate_up_proj`
+    # projection (concatenated on the output dimension). Produce the expected
+    # HF tensor names so SGLang can load the trained weights without leaving
+    # random-initialized parameters.
+    def drop_tensor(name: str) -> None:
+        shard = weight_map.pop(name, None)
+        if shard is None:
+            return
+        try:
+            shard_idx = shard_names.index(shard)
+        except ValueError:
+            return
+        shard_tensors[shard_idx].pop(name, None)
+
+    for layer_id in range(num_layers):
+        gate_w = f"model.layers.{layer_id}.mlp.gate_proj.weight"
+        up_w = f"model.layers.{layer_id}.mlp.up_proj.weight"
+        gate_b = f"model.layers.{layer_id}.mlp.gate_proj.bias"
+        up_b = f"model.layers.{layer_id}.mlp.up_proj.bias"
+        if gate_w not in weight_map or up_w not in weight_map:
+            continue
+
+        # Both tensors should live in the same layer shard.
+        shard_name = weight_map[gate_w]
+        shard_idx = shard_names.index(shard_name)
+        gw = shard_tensors[shard_idx][gate_w]
+        uw = shard_tensors[shard_idx][up_w]
+        fused_w = np.concatenate([gw, uw], axis=0)
+        put_tensor(f"model.layers.{layer_id}.mlp.gate_up_proj.weight", fused_w)
+        drop_tensor(gate_w)
+        drop_tensor(up_w)
+
+        if gate_b in weight_map and up_b in weight_map:
+            gb = shard_tensors[shard_idx][gate_b]
+            ub = shard_tensors[shard_idx][up_b]
+            fused_b = np.concatenate([gb, ub], axis=0)
+            put_tensor(f"model.layers.{layer_id}.mlp.gate_up_proj.bias", fused_b)
+            drop_tensor(gate_b)
+            drop_tensor(up_b)
 
     # Write shards + index
     total_size = 0

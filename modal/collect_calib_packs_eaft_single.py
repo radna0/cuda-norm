@@ -257,57 +257,64 @@ BASE_IMAGE = "nvidia/cuda:12.8.0-devel-ubuntu24.04"
 _repo_root = Path(__file__).resolve().parents[1]
 _sglang_src_dir = _repo_root / "sglang-flashinfer" / "python" / "sglang"
 _sgl_kernel_src_dir = _repo_root / "sglang-flashinfer" / "sgl-kernel" / "python" / "sgl_kernel"
-image = (
-    modal.Image.from_registry(BASE_IMAGE, add_python="3.11")
-    .apt_install(
-        "git",
-        "python3-dev",
-        "build-essential",
-        "curl",
-        # SGLang / sgl-kernel runtime deps
-        "libnuma-dev",
-        "numactl",
+if _EAFT_LOCAL_MODE:
+    # Kaggle/VERSA local-mode: never build a Modal image (it can reference local
+    # source dirs which are not present in the minimal Versa bundle).
+    #
+    # We still define an `image` placeholder so Modal decorators remain valid.
+    image = modal.Image.from_registry(BASE_IMAGE, add_python="3.11")
+else:
+    image = (
+        modal.Image.from_registry(BASE_IMAGE, add_python="3.11")
+        .apt_install(
+            "git",
+            "python3-dev",
+            "build-essential",
+            "curl",
+            # SGLang / sgl-kernel runtime deps
+            "libnuma-dev",
+            "numactl",
+        )
+        .run_commands("python -m pip install -U pip setuptools wheel")
+        .run_commands(
+            "python -m pip install "
+            "numpy==2.2.0 pyarrow==22.0.0 "
+            "transformers==4.56.2 tokenizers safetensors "
+            "hf_transfer huggingface-hub==0.34.0"
+        )
+        .run_commands(
+            # SGLang runtime for teacher-forcing logprobs (no massive logits materialization).
+            "python -m pip install 'sglang[all]'",
+            # Keep torch consistent with CUDA 12.8 wheels.
+            "python -m pip install torch==2.9.1 --index-url https://download.pytorch.org/whl/cu128",
+        )
+        # Install SGLang from source (overlay python packages) like modal/verify_sglang_gptoss_transmla.py.
+        .add_local_dir(
+            str(_sglang_src_dir),
+            remote_path="/root/sglang-src",
+            copy=True,
+            ignore=[
+                "**/__pycache__",
+                "**/__pycache__/**",
+            ],
+        )
+        .add_local_dir(
+            str(_sgl_kernel_src_dir),
+            remote_path="/root/sgl-kernel-src",
+            copy=True,
+            ignore=[
+                "**/__pycache__",
+                "**/__pycache__/**",
+            ],
+        )
+        .run_commands(
+            "cp -rfv /root/sglang-src/* /usr/local/lib/python3.11/site-packages/sglang/",
+            "find /usr/local/lib/python3.11/site-packages/sglang -name '__pycache__' -type d -exec rm -rf {} +",
+            "cp -rfv /root/sgl-kernel-src/* /usr/local/lib/python3.11/site-packages/sgl_kernel/",
+            "find /usr/local/lib/python3.11/site-packages/sgl_kernel -name '__pycache__' -type d -exec rm -rf {} +",
+        )
+        .env({"SGLANG_SKIP_SGL_KERNEL_VERSION_CHECK": "1"})
     )
-    .run_commands("python -m pip install -U pip setuptools wheel")
-    .run_commands(
-        "python -m pip install "
-        "numpy==2.2.0 pyarrow==22.0.0 "
-        "transformers==4.56.2 tokenizers safetensors "
-        "hf_transfer huggingface-hub==0.34.0"
-    )
-    .run_commands(
-        # SGLang runtime for teacher-forcing logprobs (no massive logits materialization).
-        "python -m pip install 'sglang[all]'",
-        # Keep torch consistent with CUDA 12.8 wheels.
-        "python -m pip install torch==2.9.1 --index-url https://download.pytorch.org/whl/cu128",
-    )
-    # Install SGLang from source (overlay python packages) like modal/verify_sglang_gptoss_transmla.py.
-    .add_local_dir(
-        str(_sglang_src_dir),
-        remote_path="/root/sglang-src",
-        copy=True,
-        ignore=[
-            "**/__pycache__",
-            "**/__pycache__/**",
-        ],
-    )
-    .add_local_dir(
-        str(_sgl_kernel_src_dir),
-        remote_path="/root/sgl-kernel-src",
-        copy=True,
-        ignore=[
-            "**/__pycache__",
-            "**/__pycache__/**",
-        ],
-    )
-    .run_commands(
-        "cp -rfv /root/sglang-src/* /usr/local/lib/python3.11/site-packages/sglang/",
-        "find /usr/local/lib/python3.11/site-packages/sglang -name '__pycache__' -type d -exec rm -rf {} +",
-        "cp -rfv /root/sgl-kernel-src/* /usr/local/lib/python3.11/site-packages/sgl_kernel/",
-        "find /usr/local/lib/python3.11/site-packages/sgl_kernel -name '__pycache__' -type d -exec rm -rf {} +",
-    )
-    .env({"SGLANG_SKIP_SGL_KERNEL_VERSION_CHECK": "1"})
-)
 
 app = modal.App(APP_NAME)
 
@@ -1192,11 +1199,43 @@ def collect_calib_packs_eaft_single(
     if not seq_lens:
         raise RuntimeError("seq_lens must be non-empty")
 
+    def _kagglehub_download_dataset(dataset_ref: str) -> Path:
+        dataset_ref = str(dataset_ref or "").strip()
+        if not dataset_ref:
+            raise RuntimeError("kagglehub dataset ref is empty")
+        try:
+            import kagglehub  # type: ignore
+        except Exception as e:
+            raise RuntimeError(
+                f"EAFT_KAGGLEHUB_DATASET={dataset_ref} was set, but kagglehub import failed: {e}"
+            ) from e
+        try:
+            p = kagglehub.dataset_download(dataset_ref)
+        except Exception as e:
+            raise RuntimeError(f"kagglehub.dataset_download({dataset_ref}) failed: {e}") from e
+        out = Path(str(p))
+        if not out.exists():
+            raise RuntimeError(f"kagglehub returned a non-existent path: {out}")
+        return out
+
     model_path = str(model_path or "").strip()
+    kagglehub_dataset = (os.environ.get("EAFT_KAGGLEHUB_DATASET") or "").strip()
     if model_path:
         model_dir = Path(model_path)
         if not model_dir.exists():
-            raise RuntimeError(f"--model-path does not exist: {model_dir}")
+            if kagglehub_dataset:
+                if Path("/kaggle/working").exists():
+                    print(
+                        f"[*] --model-path missing ({model_dir}); downloading via kagglehub dataset={kagglehub_dataset}",
+                        flush=True,
+                    )
+                model_dir = _kagglehub_download_dataset(kagglehub_dataset)
+            else:
+                raise RuntimeError(f"--model-path does not exist: {model_dir}")
+    elif kagglehub_dataset:
+        if Path("/kaggle/working").exists():
+            print(f"[*] downloading model via kagglehub dataset={kagglehub_dataset}", flush=True)
+        model_dir = _kagglehub_download_dataset(kagglehub_dataset)
     else:
         model_dir = _snapshot_download_model(str(model_id))
     tok = AutoTokenizer.from_pretrained(str(model_dir), trust_remote_code=bool(trust_remote_code))

@@ -117,7 +117,7 @@ def main() -> None:
     from easydel.inference.speculative import DFlashDraftModelConfig, load_dflash_draft_from_run_dir
     from easydel.inference.speculative.dflash import dflash_accept_len_and_bonus
     from easydel.inference.speculative.dflash_kv_cache import (
-        append_draft_ctx_kv,
+        append_draft_ctx_kv_windowed_committed,
         draft_forward_with_ctx_kv,
         materialize_draft_ctx_kv,
     )
@@ -188,10 +188,16 @@ def main() -> None:
     empty_sharding = jax.NamedSharding(mesh, jax.sharding.PartitionSpec())
     max_model_len = int(args.max_model_len)
     if max_model_len <= 0:
-        # Match the cache builder's SequenceBuffer sizing:
-        # max_model_len = ctx_len_full + (block_size-1).
         ctx_len_full = int(meta.get("ctx_len_full", int(ctx_len) + 1))
-        max_model_len = int(ctx_len_full + max(1, int(block_size) - 1))
+        # This benchmark advances the synthetic request for `--blocks` verify
+        # iterations, committing up to `block_size` tokens each iteration
+        # (anchor + accepted drafts) and then appending one bonus token.
+        # Allocate enough sequence capacity to avoid bounds errors.
+        #
+        # Upper bound after `blocks` iterations:
+        #   ctx_len_full + blocks * block_size + 1 (bonus slot)
+        blocks = max(1, int(args.blocks))
+        max_model_len = int(ctx_len_full + blocks * int(block_size) + 2)
 
     text_cfg = teacher.config.get_text_config()
     vocab_size = int(text_cfg.vocab_size)
@@ -300,14 +306,16 @@ def main() -> None:
         ctx_kv = None
         if str(args.draft_mode) == "ctx_kv":
             ctx_hidden = draft.project_context_features(ctx_feat_dev_full)
-            # IMPORTANT: draft attention currently operates over the full allocated
-            # ctx-KV buffer length. Keep this buffer as small as possible for the
-            # benchmark (enough for ctx + a few blocks), otherwise we pay O(max_len)
-            # attention cost even when ctx_len is small.
-            draft_need = int(ctx_len + int(block_size) * (int(args.blocks) + int(args.warmup_blocks) + 8))
-            draft_max_len = int(min(int(max_model_len + int(block_size)), max(int(ctx_len), draft_need)))
             ctx_kv = materialize_draft_ctx_kv(
-                draft=draft, rope=rope, ctx_hidden=ctx_hidden, max_len=int(draft_max_len)
+                # Windowed KV mode: keep the draft ctx KV buffer length fixed to
+                # `ctx_len` so attention cost is stable and matches the cache
+                # training distribution (sliding window).
+                draft=draft,
+                rope=rope,
+                ctx_hidden=ctx_hidden,
+                # append_draft_ctx_kv_windowed_committed writes a fixed-size
+                # `block_size` buffer into the KV cache, so we need headroom.
+                max_len=int(ctx_len + int(block_size)),
             )
             jax.block_until_ready(ctx_kv.k_full[0])
 
@@ -379,26 +387,39 @@ def main() -> None:
                 flush=True,
             )
 
-        ctx_commit_feat = jnp.asarray(ctx_part)[:keep, :].reshape((1, keep, -1)).astype(jnp.bfloat16)
+        # Build a fixed-shape `[1, block_size, K*H]` commit feature tensor so
+        # TPU JIT shapes stay stable across varying `keep` (accept_len).
+        ctx_commit_feat_full = jnp.zeros((1, int(block_size), int(ctx_part.shape[-1])), dtype=jnp.bfloat16)
+        ctx_commit_feat_full = ctx_commit_feat_full.at[:, :keep, :].set(
+            jnp.asarray(ctx_part)[:keep, :].reshape((1, keep, -1)).astype(jnp.bfloat16)
+        )
         if bool(args.debug) and int(base_len) == int(ctx_len):
             # Diagnose whether the problem is in ctx_part->features or in KV append:
             # compute the next-block draft tokens using the *direct* draft(...) path
             # with context_features := [ctx_feat_dev_full + commit_features].
             with mesh:
-                ctx2 = jnp.concatenate([ctx_feat_dev_full, ctx_commit_feat], axis=1)
+                ctx2 = jnp.concatenate([ctx_feat_dev_full, ctx_commit_feat_full[:, :keep, :]], axis=1)
                 bonus_id2 = jnp.asarray(bonus[0], dtype=jnp.int32)
                 anchor2 = teacher.get_embedding()(bonus_id2.reshape((1, 1)))[:, 0, :]
                 d2 = draft(context_features=ctx2, anchor_embedding=anchor2.astype(jnp.bfloat16), rope=rope)
                 d2_logits = _lm_head_logits(hidden=d2[:, 1:, :].astype(jnp.bfloat16), lm_head=teacher.get_lm_head())
                 d2_tok = jnp.argmax(d2_logits, axis=-1).astype(jnp.int32)[0]
                 print(f"[debug] direct-next cand1..3={np.asarray(jax.device_get(d2_tok))[:3].tolist()}", flush=True)
+
         with mesh:
             if str(args.draft_mode) == "ctx_kv":
-                new_ctx_hidden = draft.project_context_features(ctx_commit_feat)
-                ctx_kv = append_draft_ctx_kv(draft=draft, rope=rope, cache=ctx_kv, new_ctx_hidden=new_ctx_hidden)
+                new_ctx_hidden_full = draft.project_context_features(ctx_commit_feat_full)
+                ctx_kv = append_draft_ctx_kv_windowed_committed(
+                    draft=draft,
+                    rope=rope,
+                    cache=ctx_kv,
+                    new_ctx_hidden_full=new_ctx_hidden_full,
+                    commit_len=jnp.asarray(int(keep), dtype=jnp.int32),
+                    ctx_window=int(ctx_len),
+                )
                 jax.block_until_ready(ctx_kv.k_full[0])
             else:
-                ctx_feat_win = jnp.concatenate([ctx_feat_win, ctx_commit_feat], axis=1)
+                ctx_feat_win = jnp.concatenate([ctx_feat_win, ctx_commit_feat_full[:, :keep, :]], axis=1)
                 ctx_feat_win = ctx_feat_win[:, -int(ctx_len) :, :]
                 jax.block_until_ready(ctx_feat_win)
 
@@ -432,9 +453,12 @@ def main() -> None:
         ctx_kv = None
         if str(args.draft_mode) == "ctx_kv":
             ctx_hidden = draft.project_context_features(ctx_feat_dev_full)
-            draft_need = int(ctx_len + int(block_size) * (int(args.blocks) + 8))
-            draft_max_len = int(min(int(max_model_len + int(block_size)), max(int(ctx_len), draft_need)))
-            ctx_kv = materialize_draft_ctx_kv(draft=draft, rope=rope, ctx_hidden=ctx_hidden, max_len=int(draft_max_len))
+            ctx_kv = materialize_draft_ctx_kv(
+                draft=draft,
+                rope=rope,
+                ctx_hidden=ctx_hidden,
+                max_len=int(ctx_len + int(block_size)),
+            )
             jax.block_until_ready(ctx_kv.k_full[0])
 
     dflash_tokens = 0

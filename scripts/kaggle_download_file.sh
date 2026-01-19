@@ -59,6 +59,11 @@ URL="${BASE}/files/${REMOTE_PATH}"
 
 tmp="${OUT}.part"
 
+# Large files (multi-GB safetensors) can take longer than 60s on Kaggle's /files
+# endpoint. Make timeouts configurable and default to a long, safe window.
+KAGGLE_DOWNLOAD_MAX_TIME_S="${KAGGLE_DOWNLOAD_MAX_TIME_S:-3600}"
+KAGGLE_DOWNLOAD_CONNECT_TIMEOUT_S="${KAGGLE_DOWNLOAD_CONNECT_TIMEOUT_S:-10}"
+
 # Do not print the full URL (it includes an auth token in KAGGLE_URL).
 echo "[*] download remote_path=${REMOTE_PATH}" >&2
 
@@ -70,7 +75,7 @@ download_via_contents_api() {
   local api_url="${BASE}/api/contents/${REMOTE_PATH}?content=1"
   local json_tmp="${tmp}.json"
   curl -fsSL --retry 8 --retry-all-errors --retry-delay 2 \
-    --connect-timeout 10 --max-time 60 \
+    --connect-timeout "${KAGGLE_DOWNLOAD_CONNECT_TIMEOUT_S}" --max-time "${KAGGLE_DOWNLOAD_MAX_TIME_S}" \
     -o "${json_tmp}" "${api_url}"
   python - <<'PY' "${json_tmp}" "${tmp}"
 import base64
@@ -97,7 +102,8 @@ PY
 # Try /files once-ish (fast path). Avoid `--retry-all-errors` here so a 404
 # doesn't burn time retrying; we fall back to /api/contents in that case.
 if curl -fL --retry 2 --retry-delay 2 \
-  --connect-timeout 10 --max-time 60 \
+  --connect-timeout "${KAGGLE_DOWNLOAD_CONNECT_TIMEOUT_S}" --max-time "${KAGGLE_DOWNLOAD_MAX_TIME_S}" \
+  --speed-limit 1024 --speed-time 60 \
   -C - -o "${tmp}" "${URL}"; then
   :
 else

@@ -37,6 +37,7 @@ KERNELS_VERSION="${KERNELS_VERSION:-0.11.7}"
 
 MODEL_ID=""
 MODEL_PATH=""
+KAGGLEHUB_DATASET=""
 SEQ_LENS_CSV="65536,131072"
 NUM_BLOCKS="8"
 BATCH_SIZE="1"
@@ -55,6 +56,7 @@ while [[ $# -gt 0 ]]; do
     --kernel-id) KERNEL_ID="$2"; shift 2;;
     --model-id) MODEL_ID="$2"; shift 2;;
     --model-path) MODEL_PATH="$2"; shift 2;;
+    --kagglehub-dataset) KAGGLEHUB_DATASET="$2"; shift 2;;
     --seq-lens-csv) SEQ_LENS_CSV="$2"; shift 2;;
     --num-blocks) NUM_BLOCKS="$2"; shift 2;;
     --batch-size) BATCH_SIZE="$2"; shift 2;;
@@ -98,6 +100,9 @@ fi
 if [[ -n "${MAX_NEW_TOKENS}" ]]; then
   EXTRA_ENV+=(--env "EAFT_MAX_NEW_TOKENS=${MAX_NEW_TOKENS}")
 fi
+if [[ -n "${KAGGLEHUB_DATASET}" ]]; then
+  EXTRA_ENV+=(--env "EAFT_KAGGLEHUB_DATASET=${KAGGLEHUB_DATASET}")
+fi
 
 # Do not leak KAGGLE_URL (auth token) into the remote environment or Versa logs.
 # The remote kernel does not need KAGGLE_URL; it's only used locally for /files downloads.
@@ -114,6 +119,7 @@ trap cleanup_tmp EXIT
 
 mkdir -p "${BUNDLE_DIR}/modal"
 cp -f "${ROOT_DIR}/modal/collect_calib_packs_eaft_single.py" "${BUNDLE_DIR}/modal/collect_calib_packs_eaft_single.py"
+cp -f "${ROOT_DIR}/modal/eaft_bootstrap_kaggle.sh" "${BUNDLE_DIR}/modal/eaft_bootstrap_kaggle.sh"
 if [[ -f "${EAFT_ENV_FILE}" ]]; then
   rg -v '^KAGGLE_URL=' "${EAFT_ENV_FILE}" > "${ENV_TMP}" || true
 else
@@ -135,13 +141,7 @@ bash -lc "
     --bootstrap-cmd \"mkdir -p ${EAFT_REMOTE_LOG_DIR}\" \
     --bootstrap-cmd \"mkdir -p eaft_cache\" \
     --bootstrap-cmd \"mkdir -p artifacts\" \
-    --bootstrap-cmd \"python -m pip install -U pip\" \
-    --bootstrap-cmd \"python -m pip install -q modal datasets transformers==4.56.2 tokenizers safetensors pyarrow pandas accelerate huggingface-hub hf_transfer\" \
-    --bootstrap-cmd \"python -m pip uninstall -y torchvision || true\" \
-    --bootstrap-cmd \"python -m pip install -q triton==${TRITON_VERSION} kernels==${KERNELS_VERSION}\" \
-    --bootstrap-cmd \"python -c \\\"import triton, kernels; ver=tuple(int(x) for x in triton.__version__.split('.')[:2]); assert ver >= (3,4), f'triton too old: {triton.__version__}'; print('[bootstrap] triton', triton.__version__, 'kernels OK')\\\"\" \
-    --bootstrap-cmd \"python -m pip install -q 'sglang[all]'\" \
-    --bootstrap-cmd \"python -c 'import torch; print(torch.__version__)' || python -m pip install -q torch --index-url ${TORCH_INDEX_URL}\" \
+    --bootstrap-cmd \"TRITON_VERSION=${TRITON_VERSION} KERNELS_VERSION=${KERNELS_VERSION} TORCH_INDEX_URL=${TORCH_INDEX_URL} EAFT_BOOTSTRAP_SENTINEL=eaft_cache/.eaft_bootstrap_v4 bash modal/eaft_bootstrap_kaggle.sh\" \
     --env-file \"${ENV_TMP}\" \
     --env \"GPU_TYPE=${GPU_TYPE}\" \
     --env \"EAFT_LOCAL_MODE=1\" \
