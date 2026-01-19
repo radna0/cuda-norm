@@ -19,11 +19,13 @@ REPO_ROOT="$(cd "${ROOT_DIR}/../.." && pwd)"
 KERNEL_ID=""
 PRUNED_MODEL_PATH_OVERRIDE=""
 PRUNED_KAGGLEHUB_DATASET=""
+PRUNED_HF_MODEL_ID=""
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --kernel-id) KERNEL_ID="$2"; shift 2;;
     --pruned-model-path) PRUNED_MODEL_PATH_OVERRIDE="$2"; shift 2;;
     --pruned-kagglehub-dataset) PRUNED_KAGGLEHUB_DATASET="$2"; shift 2;;
+    --pruned-hf-model-id) PRUNED_HF_MODEL_ID="$2"; shift 2;;
     -h|--help)
       sed -n '1,200p' "$0"
       exit 0
@@ -56,20 +58,26 @@ TMP_DIR="${REPO_ROOT}/harmony/cuda-norm/reports/_tmp_runs/eaftreap75_ctx65k_131k
 mkdir -p "${TMP_DIR}"
 
 MANIFEST_LOCAL="${REPO_ROOT}/harmony/cuda-norm/artifacts/20b_pruned_models_eaftreap_keepfrac/manifest_eaftreap_keepfrac.json"
-if [[ ! -f "${MANIFEST_LOCAL}" ]]; then
-  echo "[err] missing manifest: ${MANIFEST_LOCAL}" >&2
-  exit 2
-fi
-
 PRUNED_VARIANT_NAME="calib_union_keep24of32_k75_eaftreap"
-PRUNED_MODEL_PATH="$(
-  python - <<PY
+PRUNED_MODEL_PATH=""
+if [[ -n "${PRUNED_HF_MODEL_ID}" ]]; then
+  # Run against a private HF repo (recommended when Kaggle accounts are unstable).
+  PRUNED_VARIANT_NAME="${PRUNED_HF_MODEL_ID}"
+else
+  if [[ ! -f "${MANIFEST_LOCAL}" ]]; then
+    echo "[err] missing manifest: ${MANIFEST_LOCAL}" >&2
+    echo "[err] Provide --pruned-hf-model-id <org/repo> to avoid needing the manifest." >&2
+    exit 2
+  fi
+  PRUNED_MODEL_PATH="$(
+    python - <<PY
 import json
 from pathlib import Path
 m=json.loads(Path("${MANIFEST_LOCAL}").read_text())
 print(m["variants"]["calib_union_keep24of32_k75_eaftreap"])
 PY
-)"
+  )"
+fi
 
 if [[ -n "${PRUNED_MODEL_PATH_OVERRIDE}" ]]; then
   PRUNED_MODEL_PATH="${PRUNED_MODEL_PATH_OVERRIDE}"
@@ -104,7 +112,7 @@ remote_path_exists() {
   return 1
 }
 
-if [[ -z "${PRUNED_MODEL_PATH_OVERRIDE}" ]] && ! remote_path_exists "${PRUNED_MODEL_PATH}"; then
+if [[ -z "${PRUNED_HF_MODEL_ID}" ]] && [[ -z "${PRUNED_MODEL_PATH_OVERRIDE}" ]] && ! remote_path_exists "${PRUNED_MODEL_PATH}"; then
   echo "[warn] pruned checkpoint missing on this kernel; rebuilding keep24 first..." >&2
   bash "${ROOT_DIR}/scripts/kaggle_build_keep24_only.sh"
   if ! remote_path_exists "${PRUNED_MODEL_PATH}"; then
@@ -113,7 +121,7 @@ if [[ -z "${PRUNED_MODEL_PATH_OVERRIDE}" ]] && ! remote_path_exists "${PRUNED_MO
   fi
 fi
 
-if [[ -n "${PRUNED_MODEL_PATH_OVERRIDE}" ]] && ! remote_path_exists "${PRUNED_MODEL_PATH}"; then
+if [[ -z "${PRUNED_HF_MODEL_ID}" ]] && [[ -n "${PRUNED_MODEL_PATH_OVERRIDE}" ]] && ! remote_path_exists "${PRUNED_MODEL_PATH}"; then
   if [[ -n "${PRUNED_KAGGLEHUB_DATASET}" ]]; then
     echo "[warn] pruned model path missing on kernel; will download via kagglehub dataset=${PRUNED_KAGGLEHUB_DATASET}" >&2
     PRUNED_MODEL_PATH=""
