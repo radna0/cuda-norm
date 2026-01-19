@@ -1,0 +1,89 @@
+{
+  "download_gib": 12.024781607091427,
+  "download_s": 61.39824295043945,
+  "groups": [
+    {
+      "layers": [
+        18
+      ],
+      "shards": [
+        "model-00008-of-00014.safetensors",
+        "model-00009-of-00014.safetensors"
+      ]
+    },
+    {
+      "layers": [
+        0
+      ],
+      "shards": [
+        "model-00009-of-00014.safetensors"
+      ]
+    },
+    {
+      "layers": [
+        35
+      ],
+      "shards": [
+        "model-00014-of-00014.safetensors"
+      ]
+    }
+  ],
+  "keep_frac": 0.5,
+  "keep_n": 64,
+  "layers": [
+    0,
+    18,
+    35
+  ],
+  "model_id": "openai/gpt-oss-120b",
+  "num_experts": 128,
+  "num_layers": 36,
+  "out_dir": "/root/data/artifacts/120b_partial_prune_sweep/20260113_135731",
+  "peak_rss_gib": 14.598278045654297,
+  "per_layer": [
+    {
+      "layer": 0,
+      "output_file": "/root/data/artifacts/120b_partial_prune_sweep/20260113_135731/layer0_keep64.safetensors",
+      "output_gib": 0.7893000394105911,
+      "shards": [
+        "model-00009-of-00014.safetensors"
+      ],
+      "timings_s": {
+        "layer_total": 1.5785937309265137,
+        "load_slice": 0.18507170677185059,
+        "write": 1.393522024154663
+      }
+    },
+    {
+      "layer": 18,
+      "output_file": "/root/data/artifacts/120b_partial_prune_sweep/20260113_135731/layer18_keep64.safetensors",
+      "output_gib": 0.7893000468611717,
+      "shards": [
+        "model-00008-of-00014.safetensors",
+        "model-00009-of-00014.safetensors"
+      ],
+      "timings_s": {
+        "layer_total": 1.5670771598815918,
+        "load_slice": 0.22581243515014648,
+        "write": 1.3412647247314453
+      }
+    },
+    {
+      "layer": 35,
+      "output_file": "/root/data/artifacts/120b_partial_prune_sweep/20260113_135731/layer35_keep64.safetensors",
+      "output_gib": 0.7893000468611717,
+      "shards": [
+        "model-00014-of-00014.safetensors"
+      ],
+      "timings_s": {
+        "layer_total": 1.5672309398651123,
+        "load_slice": 0.1639854907989502,
+        "write": 1.403245449066162
+      }
+    }
+  ],
+  "timings_s": {
+    "total": 80.25620460510254
+  },
+  "unique_shards_downloaded": 3
+}

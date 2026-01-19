@@ -1,0 +1,62 @@
+{
+  "assumed_param_bytes": 2,
+  "experts_per_token": 4,
+  "hidden_size": 2880,
+  "intermediate_size": 2880,
+  "model_id": "openai/gpt-oss-120b",
+  "num_experts": 128,
+  "num_layers": 36,
+  "per_layer": {
+    "experts.down_proj": {
+      "name": "experts.down_proj",
+      "params": 1061683200,
+      "shape": [
+        128,
+        2880,
+        2880
+      ]
+    },
+    "experts.down_proj_bias": {
+      "name": "experts.down_proj_bias",
+      "params": 368640,
+      "shape": [
+        128,
+        2880
+      ]
+    },
+    "experts.gate_up_proj": {
+      "name": "experts.gate_up_proj",
+      "params": 2123366400,
+      "shape": [
+        128,
+        2880,
+        5760
+      ]
+    },
+    "experts.gate_up_proj_bias": {
+      "name": "experts.gate_up_proj_bias",
+      "params": 737280,
+      "shape": [
+        128,
+        5760
+      ]
+    },
+    "router.bias": {
+      "name": "router.bias",
+      "params": 128,
+      "shape": [
+        128
+      ]
+    },
+    "router.weight": {
+      "name": "router.weight",
+      "params": 368640,
+      "shape": [
+        128,
+        2880
+      ]
+    }
+  },
+  "total_expert_bytes": 229429748736,
+  "total_expert_params": 114714874368
+}

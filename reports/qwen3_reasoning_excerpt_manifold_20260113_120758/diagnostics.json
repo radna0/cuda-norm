@@ -1,0 +1,847 @@
+{
+  "generated_at": "2026-01-13 12:08:02 +0000",
+  "title": "qwen3 reasoning_excerpt (n=154868, max_tokens=2048)",
+  "embedding_dir": "/dev/shm/qwen3_reasoning_excerpt_v1_20260113_112510_hf/qwen3_reasoning_excerpt_v1_20260113_112510",
+  "pca": {
+    "rows": 154868,
+    "embedding_dim": 256,
+    "eigenvalues_sum": 112530.71900177002,
+    "explained_var_pc1": 0.12027633295713332,
+    "explained_var_pc1_3": 0.19720839680405677
+  },
+  "density_xyz": {
+    "group_cols": [
+      "dataset",
+      "meta_domain",
+      "meta_difficulty_bin",
+      "len_bucket"
+    ],
+    "groups": [
+      {
+        "dataset": "nvidia/Nemotron-Math-v2",
+        "meta_domain": "math",
+        "meta_difficulty_bin": "high",
+        "len_bucket": "1792_2048",
+        "points": 150320,
+        "voxels": 122995,
+        "avg_pts_per_voxel": 1.2221635025814057,
+        "occupancy": 0.13901887116608797
+      },
+      {
+        "dataset": "nvidia/Nemotron-Math-v2",
+        "meta_domain": "math",
+        "meta_difficulty_bin": "high",
+        "len_bucket": "1536_1792",
+        "points": 1846,
+        "voxels": 1721,
+        "avg_pts_per_voxel": 1.072632190586868,
+        "occupancy": 0.001945213035300926
+      },
+      {
+        "dataset": "nvidia/Nemotron-Math-v2",
+        "meta_domain": "math",
+        "meta_difficulty_bin": "high",
+        "len_bucket": "1280_1536",
+        "points": 1459,
+        "voxels": 1400,
+        "avg_pts_per_voxel": 1.042142857142857,
+        "occupancy": 0.001582392939814815
+      },
+      {
+        "dataset": "nvidia/Nemotron-Math-v2",
+        "meta_domain": "math",
+        "meta_difficulty_bin": "high",
+        "len_bucket": "1024_1280",
+        "points": 1171,
+        "voxels": 1124,
+        "avg_pts_per_voxel": 1.041814946619217,
+        "occupancy": 0.001270435474537037
+      },
+      {
+        "dataset": "nvidia/Nemotron-Math-Proofs-v1",
+        "meta_domain": "proof",
+        "meta_difficulty_bin": "unknown",
+        "len_bucket": "1024_1280",
+        "points": 54,
+        "voxels": 54,
+        "avg_pts_per_voxel": 1.0,
+        "occupancy": 6.103515625e-05
+      },
+      {
+        "dataset": "nvidia/Nemotron-Math-Proofs-v1",
+        "meta_domain": "proof",
+        "meta_difficulty_bin": "unknown",
+        "len_bucket": "1280_1536",
+        "points": 12,
+        "voxels": 12,
+        "avg_pts_per_voxel": 1.0,
+        "occupancy": 1.3563368055555555e-05
+      },
+      {
+        "dataset": "nvidia/Nemotron-Math-Proofs-v1",
+        "meta_domain": "proof",
+        "meta_difficulty_bin": "unknown",
+        "len_bucket": "1536_1792",
+        "points": 3,
+        "voxels": 3,
+        "avg_pts_per_voxel": 1.0,
+        "occupancy": 3.3908420138888887e-06
+      },
+      {
+        "dataset": "nvidia/Nemotron-Math-Proofs-v1",
+        "meta_domain": "proof",
+        "meta_difficulty_bin": "unknown",
+        "len_bucket": "1792_2048",
+        "points": 3,
+        "voxels": 3,
+        "avg_pts_per_voxel": 1.0,
+        "occupancy": 3.3908420138888887e-06
+      }
+    ],
+    "totals": {
+      "grid3": 96,
+      "max_voxels": 884736,
+      "points_sum": 154868,
+      "voxels_sum": 127312,
+      "mean_occupancy": 0.01798728660300926
+    }
+  },
+  "umap": {
+    "10": {
+      "overlap": 0.0856,
+      "purity_dataset": 1.0,
+      "purity_domain": 1.0,
+      "purity_mix_group": 1.0,
+      "purity_difficulty": 1.0,
+      "purity_len_bucket": 1.0
+    },
+    "30": {
+      "overlap": 0.1256,
+      "purity_dataset": 0.9998,
+      "purity_domain": 0.9998,
+      "purity_mix_group": 1.0,
+      "purity_difficulty": 0.9998,
+      "purity_len_bucket": 1.0
+    },
+    "50": {
+      "overlap": 0.1463,
+      "purity_dataset": 0.9997,
+      "purity_domain": 0.9997,
+      "purity_mix_group": 1.0,
+      "purity_difficulty": 0.9997,
+      "purity_len_bucket": 1.0
+    }
+  },
+  "knn": {
+    "n": 154868,
+    "k": 10,
+    "norms": {
+      "mean": 1.000110387802124,
+      "std": 0.0016765703912824392,
+      "quantiles": {
+        "0.0": 0.9950801730155945,
+        "0.01": 0.996510984301567,
+        "0.5": 1.0001178979873657,
+        "0.9": 1.0022558331489564,
+        "0.99": 1.0037078058719635,
+        "1.0": 1.0048919916152954
+      }
+    },
+    "nn1_cos": {
+      "quantiles": {
+        "0.0": 0.2841179370880127,
+        "0.01": 0.5031711351871491,
+        "0.1": 0.6254967093467713,
+        "0.5": 0.7478551268577576,
+        "0.9": 0.8516473591327667,
+        "0.99": 0.9109769231081009,
+        "1.0": 0.9714435338973999
+      },
+      "dup_rates": {
+        "0.99": 0.0,
+        "0.995": 0.0,
+        "0.999": 0.0,
+        "0.9995": 0.0
+      }
+    },
+    "nnk_cos": {
+      "quantiles": {
+        "0.0": 0.25368988513946533,
+        "0.5": 0.6816563606262207,
+        "0.9": 0.7929735600948334,
+        "0.99": 0.8580166691541672,
+        "1.0": 0.946813702583313
+      }
+    },
+    "nn_mean_cos": {
+      "quantiles": {
+        "0.0": 0.2708068788051605,
+        "0.5": 0.7034658193588257,
+        "0.9": 0.8107994914054871,
+        "0.99": 0.8712592673301693,
+        "1.0": 0.9533575177192688
+      }
+    },
+    "label_purity_mean": {
+      "dataset": 0.9999612573288218,
+      "mix_group": 1.0,
+      "meta_domain": 0.9999612573288218,
+      "meta_difficulty_bin": 0.9999612573288218
+    },
+    "outliers": [
+      {
+        "id": "351149169f9c1f5f3d3bed4bad8c5c2539dfd26c",
+        "nn1_cos": 0.2841179370880127
+      },
+      {
+        "id": "01c46cb244b1bde464df0039e82f83f3c00f0ae8",
+        "nn1_cos": 0.28491508960723877
+      },
+      {
+        "id": "16e4551bd59236a97116a625bc51be54dd3f3bb8",
+        "nn1_cos": 0.3073800802230835
+      },
+      {
+        "id": "5c905f1cfcf0f52d93d7f15aec5fcdc3e0fc976d",
+        "nn1_cos": 0.30887317657470703
+      },
+      {
+        "id": "86285fac0ff1f135966025cdce14a93439ddcdc3",
+        "nn1_cos": 0.31078946590423584
+      },
+      {
+        "id": "620a374b01a6284751ad47e02167ff36ca052951",
+        "nn1_cos": 0.3116341829299927
+      },
+      {
+        "id": "45367cb7ef4779de767766bf17e7a635327bf077",
+        "nn1_cos": 0.3248499631881714
+      },
+      {
+        "id": "aadc32cdc49f766a57160079a7dfbb0f0517e8fb",
+        "nn1_cos": 0.32621634006500244
+      },
+      {
+        "id": "501b1617cac1ac423d1bb56e4b357b9e3f54398a",
+        "nn1_cos": 0.3274749517440796
+      },
+      {
+        "id": "08a0247a161153438bcb691127f5ce1e623faa2f",
+        "nn1_cos": 0.3276698589324951
+      },
+      {
+        "id": "3e45bf960882c95aa68cda4a06c0e632b33af762",
+        "nn1_cos": 0.3292123079299927
+      },
+      {
+        "id": "5578e71ebf6ee92b71ffab8052f283120f2f0d61",
+        "nn1_cos": 0.32980459928512573
+      },
+      {
+        "id": "aafaa31e6e89c3ce9831674bd2b44e4deb20588e",
+        "nn1_cos": 0.33374059200286865
+      },
+      {
+        "id": "a4ab4322ceae140cc98b4b41ebfedd1e0a8604bc",
+        "nn1_cos": 0.33430159091949463
+      },
+      {
+        "id": "ada8a91c11be0fa06cb207137db7cb5cbef846aa",
+        "nn1_cos": 0.33536696434020996
+      },
+      {
+        "id": "33cfe5f2135500f36ef25430e6c756d541e3878f",
+        "nn1_cos": 0.3359344005584717
+      },
+      {
+        "id": "611a8d40a49352307d5c0bf68719d6688aaaa08d",
+        "nn1_cos": 0.3373194932937622
+      },
+      {
+        "id": "882f2e7ed0daeb6017196462c352500f469094fb",
+        "nn1_cos": 0.33865368366241455
+      },
+      {
+        "id": "4bbdeb3790eabb6556bd20ea4311725db257c17f",
+        "nn1_cos": 0.33907562494277954
+      },
+      {
+        "id": "0b7cb2cd2bf5a8c8c850897e0dbf4b28bdca9627",
+        "nn1_cos": 0.34223365783691406
+      },
+      {
+        "id": "5c348ff7da7bcd89a11c2a60ba0107b83cec19d7",
+        "nn1_cos": 0.3434486389160156
+      },
+      {
+        "id": "94cdbc4480a4bd2da448814656218de73ea10f33",
+        "nn1_cos": 0.34466028213500977
+      },
+      {
+        "id": "a3782fcf2ec51fe97e58ea42dc9fd14f08a0f46f",
+        "nn1_cos": 0.3461066484451294
+      },
+      {
+        "id": "094fd60311de1972c5e3d27c796aebb82436e792",
+        "nn1_cos": 0.34614098072052
+      },
+      {
+        "id": "00f038a57c1c449d1d1bcb1344cb04726e24ae3f",
+        "nn1_cos": 0.3462978005409241
+      },
+      {
+        "id": "5854b4978fc1b443831f358a85abdb59e14c5618",
+        "nn1_cos": 0.34710872173309326
+      },
+      {
+        "id": "6016f9961a8acb331c094447c5e42bca3a48a681",
+        "nn1_cos": 0.34913063049316406
+      },
+      {
+        "id": "8c550bba0ee71fb83e9bc15b823bd268c8311473",
+        "nn1_cos": 0.349378764629364
+      },
+      {
+        "id": "8e35a74cc231d016595eb6580f561cd2e85ff571",
+        "nn1_cos": 0.3506354093551636
+      },
+      {
+        "id": "7a16162f28005299455b4edb179f601f0650a627",
+        "nn1_cos": 0.3517923355102539
+      },
+      {
+        "id": "368021bd4817efc9703d4b5b5727d927853edf53",
+        "nn1_cos": 0.35202980041503906
+      },
+      {
+        "id": "7d59c11242d9baec4de64c12b94b10203eed0ea2",
+        "nn1_cos": 0.35305649042129517
+      },
+      {
+        "id": "5c0ff67ae1c76deeff34ca28a0d22cadb9db4036",
+        "nn1_cos": 0.35376858711242676
+      },
+      {
+        "id": "a20f85a872dc6d6dd4d5900d3cb4a5e106398810",
+        "nn1_cos": 0.3544907569885254
+      },
+      {
+        "id": "af5712a494dec1af6d6335888cd8a144eaa080c1",
+        "nn1_cos": 0.355025053024292
+      },
+      {
+        "id": "2acf69d431debeddbef92c75e16e78d362cdc793",
+        "nn1_cos": 0.35503774881362915
+      },
+      {
+        "id": "8935bb6685486069e6eeec2ffb7189e7e671a0a5",
+        "nn1_cos": 0.3559762239456177
+      },
+      {
+        "id": "202daad71c6d5922d1862679f3474444a65dd242",
+        "nn1_cos": 0.35809212923049927
+      },
+      {
+        "id": "97c24bce85e8e502c2d78464b3707a1896afacd0",
+        "nn1_cos": 0.3587455749511719
+      },
+      {
+        "id": "4f096a0f58f87a36ab1f7caf999527230b97bc10",
+        "nn1_cos": 0.3591976761817932
+      },
+      {
+        "id": "340a28be9cf5545bf58adb6bcb66634f4836e407",
+        "nn1_cos": 0.359427809715271
+      },
+      {
+        "id": "7d2942d48af5393d7bc383562ff1f0b40247ef74",
+        "nn1_cos": 0.35948729515075684
+      },
+      {
+        "id": "9de8ed586b50f7a7e24dc3d0955e1db866e47d8a",
+        "nn1_cos": 0.3596233129501343
+      },
+      {
+        "id": "1c64d3c03aa5010aaa18f2ef64adf7a4c77d7137",
+        "nn1_cos": 0.3596523404121399
+      },
+      {
+        "id": "0d63fbbe4c54a8c28188b73550e8224785f6f9be",
+        "nn1_cos": 0.35996705293655396
+      },
+      {
+        "id": "6c2d14f635108d24a686c07983253300809cd260",
+        "nn1_cos": 0.360113263130188
+      },
+      {
+        "id": "6f2c92485b75f29053ddb73b68e19d5c06f4b69e",
+        "nn1_cos": 0.36026525497436523
+      },
+      {
+        "id": "4f0346fdba85c4be1019e9cdf6d7aabf5d40003f",
+        "nn1_cos": 0.3610938787460327
+      },
+      {
+        "id": "aa89074047ac06f5fbb78122dad10cd7db41e66b",
+        "nn1_cos": 0.36112546920776367
+      },
+      {
+        "id": "8375c06740a1f115065a942fc03100fb7abbf398",
+        "nn1_cos": 0.36128222942352295
+      },
+      {
+        "id": "893d2ab4b07fe2faff2f65aae44d66a6acbc84f5",
+        "nn1_cos": 0.3618873357772827
+      },
+      {
+        "id": "1e3451e2b6a1934d6f904de5ce912550165886e8",
+        "nn1_cos": 0.36334264278411865
+      },
+      {
+        "id": "4f82d0807c55f8c290c4944ecfa35c3f064acd50",
+        "nn1_cos": 0.36376792192459106
+      },
+      {
+        "id": "9cfc57856162b953e019d41bff9b812cb14a31fd",
+        "nn1_cos": 0.3638228178024292
+      },
+      {
+        "id": "9075a6abdc2fe1852b85d62c0e80f4728d323593",
+        "nn1_cos": 0.36389976739883423
+      },
+      {
+        "id": "71c36a28732de80d1562281926d1e1fdbb7952af",
+        "nn1_cos": 0.3645747900009155
+      },
+      {
+        "id": "a2ed4068cf923ca7b8192d26f8eff4d26c9f2226",
+        "nn1_cos": 0.36457908153533936
+      },
+      {
+        "id": "a806e06fd62f2ab5218c2e5e3f37a7d729581e29",
+        "nn1_cos": 0.36555051803588867
+      },
+      {
+        "id": "135b7b1c80cdca0db0eaede81bb8b8c0a47ad363",
+        "nn1_cos": 0.36560678482055664
+      },
+      {
+        "id": "46bb2ca3bc08d57f30e9739b81debe76e9b390c8",
+        "nn1_cos": 0.366851806640625
+      },
+      {
+        "id": "27bb76955df53467dde92a37eadd808f776c6161",
+        "nn1_cos": 0.3673402667045593
+      },
+      {
+        "id": "883f31930aad695836f62f588541589079f536be",
+        "nn1_cos": 0.3674224615097046
+      },
+      {
+        "id": "a01097302b9b6fab9c00befc625f1cb6ba1a59de",
+        "nn1_cos": 0.3680931329727173
+      },
+      {
+        "id": "a6f92d6f4f4a622647eb1ec897a625da5ab9110c",
+        "nn1_cos": 0.36849939823150635
+      },
+      {
+        "id": "75555059c9c4c833df1bf3da517373f359414b46",
+        "nn1_cos": 0.3687640428543091
+      },
+      {
+        "id": "92ad9804756059ed9bc60062b9bebb859c7ab925",
+        "nn1_cos": 0.3690935969352722
+      },
+      {
+        "id": "ae8e6b4bac15db9fe01de5064063db8a2b380bf1",
+        "nn1_cos": 0.36942118406295776
+      },
+      {
+        "id": "82078a07ec682021cb6510b938305abd9d52fd28",
+        "nn1_cos": 0.3704336881637573
+      },
+      {
+        "id": "2912202a3d258b75339ca89a41e26b5874f6b509",
+        "nn1_cos": 0.37074393033981323
+      },
+      {
+        "id": "4a9a354d3316e57751442c1b96bddf7ed1a838d4",
+        "nn1_cos": 0.3712776303291321
+      },
+      {
+        "id": "215ae98b6a6451de50991f1afa0b41c4997ea293",
+        "nn1_cos": 0.37317514419555664
+      },
+      {
+        "id": "3ec5ffce17f3e5bc91f7a9988d4469fead6ac4f9",
+        "nn1_cos": 0.37461066246032715
+      },
+      {
+        "id": "91c6c24a987125003aed2b0f0169068f9a0ebbe6",
+        "nn1_cos": 0.37526965141296387
+      },
+      {
+        "id": "a9303d071df008d42def7865f90ff97da87e86f5",
+        "nn1_cos": 0.3755262494087219
+      },
+      {
+        "id": "17d0948535ae1b13b63d87eea188a9f619bb768e",
+        "nn1_cos": 0.3763342499732971
+      },
+      {
+        "id": "30f022b4afb65ea329c2d0f709d1a7af31da551d",
+        "nn1_cos": 0.3766271471977234
+      },
+      {
+        "id": "27695a08d12ceff7ce6f5fd55382a18711ad5fb3",
+        "nn1_cos": 0.37666672468185425
+      },
+      {
+        "id": "36de641ff0395ea98f627421cf6e303b3806a652",
+        "nn1_cos": 0.37675023078918457
+      },
+      {
+        "id": "4211db178757bcf0e97df18fc9791517f98e5a31",
+        "nn1_cos": 0.3768017888069153
+      },
+      {
+        "id": "85e9e33550edb50e040e2093ae7e2b6a3b218605",
+        "nn1_cos": 0.37699586153030396
+      },
+      {
+        "id": "06702db897ec9b9cc69c0d5a029d63f10191a7b7",
+        "nn1_cos": 0.377041220664978
+      },
+      {
+        "id": "5dfb3e4688525b69678c898f9fa6ec2c0c5f4836",
+        "nn1_cos": 0.3777064085006714
+      },
+      {
+        "id": "4169334bbc18d34334f71d0462c5ca8c7d4226fa",
+        "nn1_cos": 0.3778620958328247
+      },
+      {
+        "id": "7e1862f2f7a2f2b9ca4fbc4a6a0434e98e6c8522",
+        "nn1_cos": 0.3787268400192261
+      },
+      {
+        "id": "a1379c416406b9e5b81fcf93de0339a16faf79b3",
+        "nn1_cos": 0.37877023220062256
+      },
+      {
+        "id": "814581875d97c61ff0cd5833b95680b5e9016af3",
+        "nn1_cos": 0.37947261333465576
+      },
+      {
+        "id": "92a2b80cc214feb1aa3b4f80ffbf7a4024646853",
+        "nn1_cos": 0.37975823879241943
+      },
+      {
+        "id": "9961dfa01b6b14eba1d5a7df1b26b0dd706b53f7",
+        "nn1_cos": 0.37978458404541016
+      },
+      {
+        "id": "3c49cfdb03e8e46d10790b99be779a912f647b99",
+        "nn1_cos": 0.3798719644546509
+      },
+      {
+        "id": "6401e08d9700d6b393deaf9cf48752a010648da1",
+        "nn1_cos": 0.38078951835632324
+      },
+      {
+        "id": "20cd862d93319675d89f29784eaff9cd2841cf12",
+        "nn1_cos": 0.38138699531555176
+      },
+      {
+        "id": "590db24dcd85c47580a0c3d8fc7af8f3d85a45c1",
+        "nn1_cos": 0.3819749355316162
+      },
+      {
+        "id": "0efe58e09bfce740d7e7276e31503be9563dfa8d",
+        "nn1_cos": 0.3828798532485962
+      },
+      {
+        "id": "37129cf4a26d038e72bc0246a35695a478f2127e",
+        "nn1_cos": 0.3839457631111145
+      },
+      {
+        "id": "068ead088e5c69866a34e56b3a0c7aa5ff56e51e",
+        "nn1_cos": 0.3848450779914856
+      },
+      {
+        "id": "9a9b000dfe5351cf643dddf4998f4927d3c2aab1",
+        "nn1_cos": 0.3852083683013916
+      },
+      {
+        "id": "81d46ed7caf5fae3d652e4c637627ab44350eebf",
+        "nn1_cos": 0.38616514205932617
+      },
+      {
+        "id": "146d22e174646dbe714f16acaf4cc96c6fe84c04",
+        "nn1_cos": 0.38665080070495605
+      },
+      {
+        "id": "932be30bff1c8caac44302ffc3f6cc4a5d7186a0",
+        "nn1_cos": 0.38705170154571533
+      },
+      {
+        "id": "517faaf434d4da69a2ec0074712a61dda5e00506",
+        "nn1_cos": 0.38746559619903564
+      },
+      {
+        "id": "15df94458c6988eb8f8c48ad47fee627ecc55284",
+        "nn1_cos": 0.38826680183410645
+      },
+      {
+        "id": "aa10efb8eda7294d52f9c96fd3eb3cb468052d6c",
+        "nn1_cos": 0.3883216381072998
+      },
+      {
+        "id": "1f5aeb38ce9d6fc779a211c7c2509b346a111479",
+        "nn1_cos": 0.3883293867111206
+      },
+      {
+        "id": "aefeff6eec168a6caaca027a3ef5eba09696fb7b",
+        "nn1_cos": 0.3888198733329773
+      },
+      {
+        "id": "90693b7f6eb35bd11f57af3cf36b0a2bca50e6c7",
+        "nn1_cos": 0.38892602920532227
+      },
+      {
+        "id": "0fe542ca2b3d754c7b3ef64bfe0385d289d92d4a",
+        "nn1_cos": 0.3890111446380615
+      },
+      {
+        "id": "a04cd110f3552ad12d8af860bec395c82568e331",
+        "nn1_cos": 0.38919615745544434
+      },
+      {
+        "id": "622a20eb837bbd83b3316798a3b86403bab10e99",
+        "nn1_cos": 0.38983631134033203
+      },
+      {
+        "id": "86a04248ec647dad1f67d2de96f42c320b2fe564",
+        "nn1_cos": 0.3898671865463257
+      },
+      {
+        "id": "7aa6b9f06f2af135f80993440d948eec7bbecb44",
+        "nn1_cos": 0.3903888463973999
+      },
+      {
+        "id": "7ce026e04a1d354d3b1b4816e9e6f4a1882542d8",
+        "nn1_cos": 0.39079058170318604
+      },
+      {
+        "id": "aa056cd056adf1af5a48be75a1cbd99ba7579a4a",
+        "nn1_cos": 0.39135444164276123
+      },
+      {
+        "id": "454b90c9617d039c0ac81f2164bba1392d4756d2",
+        "nn1_cos": 0.3915119171142578
+      },
+      {
+        "id": "2de31a9f209533ef5474a94e95ca4a482601e414",
+        "nn1_cos": 0.39162302017211914
+      },
+      {
+        "id": "2debf9fea34d019a06293801aef785c756fe3ebe",
+        "nn1_cos": 0.3920867443084717
+      },
+      {
+        "id": "5ae54a1415e2d3f854291646c032f71463b00150",
+        "nn1_cos": 0.39225196838378906
+      },
+      {
+        "id": "2c3b2115b1693632f24fc3b03b3f91f014e63bee",
+        "nn1_cos": 0.3930671215057373
+      },
+      {
+        "id": "4ad2578634c50b456d9aa31ac3427d7091714bc3",
+        "nn1_cos": 0.39328455924987793
+      },
+      {
+        "id": "a93b34974ed4ee7b27b03a3319d1ef4e8f9d2a3e",
+        "nn1_cos": 0.3933369517326355
+      },
+      {
+        "id": "a472945955474bf9de3ffb462b739a8a220982cb",
+        "nn1_cos": 0.3933384418487549
+      },
+      {
+        "id": "a3774fd2d79bc3b0a4fef2ade5aa1e9458ae03f8",
+        "nn1_cos": 0.3934786319732666
+      },
+      {
+        "id": "98821d5e9fa32a4ed26476f2458ca21870fc4da0",
+        "nn1_cos": 0.3935456871986389
+      },
+      {
+        "id": "19c8e071eafa86508bb03b7acdd5d6de919b9ad9",
+        "nn1_cos": 0.3935663104057312
+      },
+      {
+        "id": "77b27436a56d384173d9599fd323edda8550320c",
+        "nn1_cos": 0.3946901559829712
+      },
+      {
+        "id": "a4b80fa61f04180d42fa25c663f0a49441c79196",
+        "nn1_cos": 0.3948151469230652
+      },
+      {
+        "id": "303c8f09c68bc21c26b4d1bf2e5df9994ae0013f",
+        "nn1_cos": 0.39499181509017944
+      },
+      {
+        "id": "05dd6e5f28b925e22d48573a3bdf19598ed75e16",
+        "nn1_cos": 0.39559298753738403
+      },
+      {
+        "id": "067dce42a2ee530363d458c82afad6e8f5c53e85",
+        "nn1_cos": 0.3968806862831116
+      },
+      {
+        "id": "94d847b0dba00abc70f6e5aecef785df6c5312d8",
+        "nn1_cos": 0.39713239669799805
+      },
+      {
+        "id": "11ef1ca402db0da867f521fe02b306636c434592",
+        "nn1_cos": 0.39713650941848755
+      },
+      {
+        "id": "5132749af6a5a9269988807a6743b2c1d74d92be",
+        "nn1_cos": 0.39716172218322754
+      },
+      {
+        "id": "943201cf4314fd0cbd64b9b54b72e1bfacbc4ecf",
+        "nn1_cos": 0.39883482456207275
+      },
+      {
+        "id": "996daa3b669722f7bb79f8abe1730870fa5a848f",
+        "nn1_cos": 0.40045982599258423
+      },
+      {
+        "id": "a34fcd08802ef3be77a6c06e660db6f7e92046fa",
+        "nn1_cos": 0.4007270932197571
+      },
+      {
+        "id": "a29514ebbd5fc00c0637621c85ab7496b21db4c3",
+        "nn1_cos": 0.40106165409088135
+      },
+      {
+        "id": "2a8b5817c9745f65d5044bf2a96d00d413d1c645",
+        "nn1_cos": 0.4012485146522522
+      },
+      {
+        "id": "92645c216016e79e3f8f6a1c2bac1ccb8443f214",
+        "nn1_cos": 0.40169382095336914
+      },
+      {
+        "id": "45086d51147fca5fb6b8791526ebdb5c094498f2",
+        "nn1_cos": 0.40198493003845215
+      },
+      {
+        "id": "909cf487199bcea865f4d4cb20faef7903c4ffb6",
+        "nn1_cos": 0.40241795778274536
+      },
+      {
+        "id": "0619b848aebc377d7e848c44a0d8376ba21534b5",
+        "nn1_cos": 0.4025329351425171
+      },
+      {
+        "id": "8d75527647cb31f0f6a7fcf7f87fd3e6e50b42bc",
+        "nn1_cos": 0.40256136655807495
+      },
+      {
+        "id": "6453021dca21c4e8c6ef9e6127c226122a22c57b",
+        "nn1_cos": 0.4027343988418579
+      },
+      {
+        "id": "1b5d7309fc5c41f53805ec5c17571da57aaa55fe",
+        "nn1_cos": 0.40303629636764526
+      },
+      {
+        "id": "07e829b1243f8b3cf430de903a0dd5c24376f2c9",
+        "nn1_cos": 0.4031742811203003
+      },
+      {
+        "id": "218e96a21f884279efe70daa02f8fa25d75d1ce6",
+        "nn1_cos": 0.4033299684524536
+      },
+      {
+        "id": "97c7bd17a229d619258d46dad6a57d2fb60cd87c",
+        "nn1_cos": 0.4034233093261719
+      },
+      {
+        "id": "3ff61a6305c531c4ca7f1554f7aa838c8c43d608",
+        "nn1_cos": 0.40398263931274414
+      },
+      {
+        "id": "192b3f3fd61342f28da2d405c93642b31cff77c1",
+        "nn1_cos": 0.40516793727874756
+      },
+      {
+        "id": "622381edfc94b7a29a114f4e99dfbe5504980e88",
+        "nn1_cos": 0.4058767557144165
+      },
+      {
+        "id": "a76e67a7d62dd2a0b02ac015b0e5ec598b2a267e",
+        "nn1_cos": 0.406042218208313
+      },
+      {
+        "id": "89442b328d0cde35463fbe76b7f9a9794422e3db",
+        "nn1_cos": 0.40628886222839355
+      },
+      {
+        "id": "0720a2566cf7c499b52f3feb2ea2609d5db88909",
+        "nn1_cos": 0.40634685754776
+      },
+      {
+        "id": "0812fe7fcb17a263cd6a8c473be04fc7d7ce2aed",
+        "nn1_cos": 0.40658295154571533
+      },
+      {
+        "id": "115a9903bafeb8d180d65761cb7441265c1e4e3c",
+        "nn1_cos": 0.4066627621650696
+      }
+    ],
+    "outlier_label_top10": {
+      "dataset": {
+        "nvidia/Nemotron-Math-v2": 154
+      },
+      "mix_group": {
+        "reasoning": 154
+      },
+      "meta_domain": {
+        "math": 154
+      },
+      "meta_difficulty_bin": {
+        "high": 154
+      }
+    }
+  },
+  "full_counts": {
+    "dataset": {
+      "nvidia/Nemotron-Math-Proofs-v1": 72,
+      "nvidia/Nemotron-Math-v2": 154796
+    },
+    "mix_group": {
+      "reasoning": 154868
+    },
+    "meta_domain": {
+      "proof": 72,
+      "math": 154796
+    },
+    "difficulty_bin": {
+      "unknown": 72,
+      "high": 154796
+    },
+    "len_bucket": {
+      "1024_1280": 1225,
+      "1792_2048": 150323,
+      "1280_1536": 1471,
+      "1536_1792": 1849
+    }
+  }
+}

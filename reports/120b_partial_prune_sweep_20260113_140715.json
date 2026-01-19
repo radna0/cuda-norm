@@ -1,0 +1,807 @@
+{
+  "download_gib": 60.76776719093323,
+  "download_s": 173.8159511089325,
+  "groups": [
+    {
+      "layers": [
+        26
+      ],
+      "shards": [
+        "model-00000-of-00014.safetensors"
+      ]
+    },
+    {
+      "layers": [
+        27
+      ],
+      "shards": [
+        "model-00000-of-00014.safetensors",
+        "model-00001-of-00014.safetensors"
+      ]
+    },
+    {
+      "layers": [
+        25
+      ],
+      "shards": [
+        "model-00000-of-00014.safetensors",
+        "model-00004-of-00014.safetensors"
+      ]
+    },
+    {
+      "layers": [
+        28,
+        29
+      ],
+      "shards": [
+        "model-00001-of-00014.safetensors"
+      ]
+    },
+    {
+      "layers": [
+        3
+      ],
+      "shards": [
+        "model-00001-of-00014.safetensors",
+        "model-00002-of-00014.safetensors"
+      ]
+    },
+    {
+      "layers": [
+        20
+      ],
+      "shards": [
+        "model-00002-of-00014.safetensors",
+        "model-00003-of-00014.safetensors"
+      ]
+    },
+    {
+      "layers": [
+        2
+      ],
+      "shards": [
+        "model-00002-of-00014.safetensors",
+        "model-00009-of-00014.safetensors"
+      ]
+    },
+    {
+      "layers": [
+        30
+      ],
+      "shards": [
+        "model-00002-of-00014.safetensors",
+        "model-00012-of-00014.safetensors"
+      ]
+    },
+    {
+      "layers": [
+        21,
+        22
+      ],
+      "shards": [
+        "model-00003-of-00014.safetensors"
+      ]
+    },
+    {
+      "layers": [
+        23
+      ],
+      "shards": [
+        "model-00003-of-00014.safetensors",
+        "model-00004-of-00014.safetensors"
+      ]
+    },
+    {
+      "layers": [
+        24
+      ],
+      "shards": [
+        "model-00004-of-00014.safetensors"
+      ]
+    },
+    {
+      "layers": [
+        4
+      ],
+      "shards": [
+        "model-00004-of-00014.safetensors",
+        "model-00005-of-00014.safetensors",
+        "model-00014-of-00014.safetensors"
+      ]
+    },
+    {
+      "layers": [
+        5,
+        6
+      ],
+      "shards": [
+        "model-00005-of-00014.safetensors"
+      ]
+    },
+    {
+      "layers": [
+        7
+      ],
+      "shards": [
+        "model-00005-of-00014.safetensors",
+        "model-00006-of-00014.safetensors"
+      ]
+    },
+    {
+      "layers": [
+        8
+      ],
+      "shards": [
+        "model-00006-of-00014.safetensors"
+      ]
+    },
+    {
+      "layers": [
+        9
+      ],
+      "shards": [
+        "model-00006-of-00014.safetensors",
+        "model-00007-of-00014.safetensors"
+      ]
+    },
+    {
+      "layers": [
+        15
+      ],
+      "shards": [
+        "model-00007-of-00014.safetensors"
+      ]
+    },
+    {
+      "layers": [
+        16
+      ],
+      "shards": [
+        "model-00007-of-00014.safetensors",
+        "model-00008-of-00014.safetensors"
+      ]
+    },
+    {
+      "layers": [
+        14
+      ],
+      "shards": [
+        "model-00007-of-00014.safetensors",
+        "model-00011-of-00014.safetensors"
+      ]
+    },
+    {
+      "layers": [
+        17
+      ],
+      "shards": [
+        "model-00008-of-00014.safetensors"
+      ]
+    },
+    {
+      "layers": [
+        18
+      ],
+      "shards": [
+        "model-00008-of-00014.safetensors",
+        "model-00009-of-00014.safetensors"
+      ]
+    },
+    {
+      "layers": [
+        0,
+        19
+      ],
+      "shards": [
+        "model-00009-of-00014.safetensors"
+      ]
+    },
+    {
+      "layers": [
+        1
+      ],
+      "shards": [
+        "model-00009-of-00014.safetensors",
+        "model-00010-of-00014.safetensors"
+      ]
+    },
+    {
+      "layers": [
+        10
+      ],
+      "shards": [
+        "model-00010-of-00014.safetensors"
+      ]
+    },
+    {
+      "layers": [
+        11
+      ],
+      "shards": [
+        "model-00010-of-00014.safetensors",
+        "model-00011-of-00014.safetensors"
+      ]
+    },
+    {
+      "layers": [
+        12,
+        13
+      ],
+      "shards": [
+        "model-00011-of-00014.safetensors"
+      ]
+    },
+    {
+      "layers": [
+        31
+      ],
+      "shards": [
+        "model-00012-of-00014.safetensors",
+        "model-00013-of-00014.safetensors"
+      ]
+    },
+    {
+      "layers": [
+        32
+      ],
+      "shards": [
+        "model-00013-of-00014.safetensors"
+      ]
+    },
+    {
+      "layers": [
+        33
+      ],
+      "shards": [
+        "model-00013-of-00014.safetensors",
+        "model-00014-of-00014.safetensors"
+      ]
+    },
+    {
+      "layers": [
+        34,
+        35
+      ],
+      "shards": [
+        "model-00014-of-00014.safetensors"
+      ]
+    }
+  ],
+  "keep_frac": 0.5,
+  "keep_n": 64,
+  "layers": [
+    0,
+    1,
+    2,
+    3,
+    4,
+    5,
+    6,
+    7,
+    8,
+    9,
+    10,
+    11,
+    12,
+    13,
+    14,
+    15,
+    16,
+    17,
+    18,
+    19,
+    20,
+    21,
+    22,
+    23,
+    24,
+    25,
+    26,
+    27,
+    28,
+    29,
+    30,
+    31,
+    32,
+    33,
+    34,
+    35
+  ],
+  "model_id": "openai/gpt-oss-120b",
+  "num_experts": 128,
+  "num_layers": 36,
+  "out_dir": "/root/data/artifacts/120b_partial_prune_sweep/20260113_140715",
+  "peak_rss_gib": 15.752338409423828,
+  "per_layer": [
+    {
+      "layer": 0,
+      "output_file": "/root/data/artifacts/120b_partial_prune_sweep/20260113_140715/layer0_keep64.safetensors",
+      "output_gib": 0.7893000394105911,
+      "shards": [
+        "model-00009-of-00014.safetensors"
+      ],
+      "timings_s": {
+        "layer_total": 2.597402572631836,
+        "load_slice": 0.13124823570251465,
+        "write": 2.4661543369293213
+      }
+    },
+    {
+      "layer": 1,
+      "output_file": "/root/data/artifacts/120b_partial_prune_sweep/20260113_140715/layer1_keep64.safetensors",
+      "output_gib": 0.7893000394105911,
+      "shards": [
+        "model-00009-of-00014.safetensors",
+        "model-00010-of-00014.safetensors"
+      ],
+      "timings_s": {
+        "layer_total": 1.8305282592773438,
+        "load_slice": 0.18603825569152832,
+        "write": 1.6444900035858154
+      }
+    },
+    {
+      "layer": 2,
+      "output_file": "/root/data/artifacts/120b_partial_prune_sweep/20260113_140715/layer2_keep64.safetensors",
+      "output_gib": 0.7893000394105911,
+      "shards": [
+        "model-00002-of-00014.safetensors",
+        "model-00009-of-00014.safetensors"
+      ],
+      "timings_s": {
+        "layer_total": 1.852513313293457,
+        "load_slice": 0.22763419151306152,
+        "write": 1.6248791217803955
+      }
+    },
+    {
+      "layer": 3,
+      "output_file": "/root/data/artifacts/120b_partial_prune_sweep/20260113_140715/layer3_keep64.safetensors",
+      "output_gib": 0.7893000394105911,
+      "shards": [
+        "model-00001-of-00014.safetensors",
+        "model-00002-of-00014.safetensors"
+      ],
+      "timings_s": {
+        "layer_total": 1.872572898864746,
+        "load_slice": 0.14886999130249023,
+        "write": 1.7237029075622559
+      }
+    },
+    {
+      "layer": 4,
+      "output_file": "/root/data/artifacts/120b_partial_prune_sweep/20260113_140715/layer4_keep64.safetensors",
+      "output_gib": 0.7893000394105911,
+      "shards": [
+        "model-00004-of-00014.safetensors",
+        "model-00005-of-00014.safetensors",
+        "model-00014-of-00014.safetensors"
+      ],
+      "timings_s": {
+        "layer_total": 1.8728601932525635,
+        "load_slice": 0.2187814712524414,
+        "write": 1.654078722000122
+      }
+    },
+    {
+      "layer": 5,
+      "output_file": "/root/data/artifacts/120b_partial_prune_sweep/20260113_140715/layer5_keep64.safetensors",
+      "output_gib": 0.7893000394105911,
+      "shards": [
+        "model-00005-of-00014.safetensors"
+      ],
+      "timings_s": {
+        "layer_total": 1.7678780555725098,
+        "load_slice": 0.13249492645263672,
+        "write": 1.635383129119873
+      }
+    },
+    {
+      "layer": 6,
+      "output_file": "/root/data/artifacts/120b_partial_prune_sweep/20260113_140715/layer6_keep64.safetensors",
+      "output_gib": 0.7893000394105911,
+      "shards": [
+        "model-00005-of-00014.safetensors"
+      ],
+      "timings_s": {
+        "layer_total": 1.9484412670135498,
+        "load_slice": 0.19078898429870605,
+        "write": 1.7576522827148438
+      }
+    },
+    {
+      "layer": 7,
+      "output_file": "/root/data/artifacts/120b_partial_prune_sweep/20260113_140715/layer7_keep64.safetensors",
+      "output_gib": 0.7893000394105911,
+      "shards": [
+        "model-00005-of-00014.safetensors",
+        "model-00006-of-00014.safetensors"
+      ],
+      "timings_s": {
+        "layer_total": 9.071022987365723,
+        "load_slice": 0.17849445343017578,
+        "write": 8.892528533935547
+      }
+    },
+    {
+      "layer": 8,
+      "output_file": "/root/data/artifacts/120b_partial_prune_sweep/20260113_140715/layer8_keep64.safetensors",
+      "output_gib": 0.7893000394105911,
+      "shards": [
+        "model-00006-of-00014.safetensors"
+      ],
+      "timings_s": {
+        "layer_total": 2.8279736042022705,
+        "load_slice": 0.25529932975769043,
+        "write": 2.57267427444458
+      }
+    },
+    {
+      "layer": 9,
+      "output_file": "/root/data/artifacts/120b_partial_prune_sweep/20260113_140715/layer9_keep64.safetensors",
+      "output_gib": 0.7893000394105911,
+      "shards": [
+        "model-00006-of-00014.safetensors",
+        "model-00007-of-00014.safetensors"
+      ],
+      "timings_s": {
+        "layer_total": 2.3768136501312256,
+        "load_slice": 0.20420098304748535,
+        "write": 2.1726126670837402
+      }
+    },
+    {
+      "layer": 10,
+      "output_file": "/root/data/artifacts/120b_partial_prune_sweep/20260113_140715/layer10_keep64.safetensors",
+      "output_gib": 0.7893000468611717,
+      "shards": [
+        "model-00010-of-00014.safetensors"
+      ],
+      "timings_s": {
+        "layer_total": 1.9646086692810059,
+        "load_slice": 0.16090607643127441,
+        "write": 1.8037025928497314
+      }
+    },
+    {
+      "layer": 11,
+      "output_file": "/root/data/artifacts/120b_partial_prune_sweep/20260113_140715/layer11_keep64.safetensors",
+      "output_gib": 0.7893000468611717,
+      "shards": [
+        "model-00010-of-00014.safetensors",
+        "model-00011-of-00014.safetensors"
+      ],
+      "timings_s": {
+        "layer_total": 2.0093047618865967,
+        "load_slice": 0.21477031707763672,
+        "write": 1.79453444480896
+      }
+    },
+    {
+      "layer": 12,
+      "output_file": "/root/data/artifacts/120b_partial_prune_sweep/20260113_140715/layer12_keep64.safetensors",
+      "output_gib": 0.7893000468611717,
+      "shards": [
+        "model-00011-of-00014.safetensors"
+      ],
+      "timings_s": {
+        "layer_total": 1.9171044826507568,
+        "load_slice": 0.15532612800598145,
+        "write": 1.7617783546447754
+      }
+    },
+    {
+      "layer": 13,
+      "output_file": "/root/data/artifacts/120b_partial_prune_sweep/20260113_140715/layer13_keep64.safetensors",
+      "output_gib": 0.7893000468611717,
+      "shards": [
+        "model-00011-of-00014.safetensors"
+      ],
+      "timings_s": {
+        "layer_total": 2.0414178371429443,
+        "load_slice": 0.17382597923278809,
+        "write": 1.8675918579101562
+      }
+    },
+    {
+      "layer": 14,
+      "output_file": "/root/data/artifacts/120b_partial_prune_sweep/20260113_140715/layer14_keep64.safetensors",
+      "output_gib": 0.7893000468611717,
+      "shards": [
+        "model-00007-of-00014.safetensors",
+        "model-00011-of-00014.safetensors"
+      ],
+      "timings_s": {
+        "layer_total": 7.008294343948364,
+        "load_slice": 0.2106306552886963,
+        "write": 6.797663688659668
+      }
+    },
+    {
+      "layer": 15,
+      "output_file": "/root/data/artifacts/120b_partial_prune_sweep/20260113_140715/layer15_keep64.safetensors",
+      "output_gib": 0.7893000468611717,
+      "shards": [
+        "model-00007-of-00014.safetensors"
+      ],
+      "timings_s": {
+        "layer_total": 2.648252487182617,
+        "load_slice": 0.15247654914855957,
+        "write": 2.4957759380340576
+      }
+    },
+    {
+      "layer": 16,
+      "output_file": "/root/data/artifacts/120b_partial_prune_sweep/20260113_140715/layer16_keep64.safetensors",
+      "output_gib": 0.7893000468611717,
+      "shards": [
+        "model-00007-of-00014.safetensors",
+        "model-00008-of-00014.safetensors"
+      ],
+      "timings_s": {
+        "layer_total": 2.35815691947937,
+        "load_slice": 0.1953897476196289,
+        "write": 2.162767171859741
+      }
+    },
+    {
+      "layer": 17,
+      "output_file": "/root/data/artifacts/120b_partial_prune_sweep/20260113_140715/layer17_keep64.safetensors",
+      "output_gib": 0.7893000468611717,
+      "shards": [
+        "model-00008-of-00014.safetensors"
+      ],
+      "timings_s": {
+        "layer_total": 2.409698963165283,
+        "load_slice": 0.2002885341644287,
+        "write": 2.2094104290008545
+      }
+    },
+    {
+      "layer": 18,
+      "output_file": "/root/data/artifacts/120b_partial_prune_sweep/20260113_140715/layer18_keep64.safetensors",
+      "output_gib": 0.7893000468611717,
+      "shards": [
+        "model-00008-of-00014.safetensors",
+        "model-00009-of-00014.safetensors"
+      ],
+      "timings_s": {
+        "layer_total": 2.2430152893066406,
+        "load_slice": 0.22731900215148926,
+        "write": 2.0156962871551514
+      }
+    },
+    {
+      "layer": 19,
+      "output_file": "/root/data/artifacts/120b_partial_prune_sweep/20260113_140715/layer19_keep64.safetensors",
+      "output_gib": 0.7893000468611717,
+      "shards": [
+        "model-00009-of-00014.safetensors"
+      ],
+      "timings_s": {
+        "layer_total": 1.941917896270752,
+        "load_slice": 0.16161870956420898,
+        "write": 1.780299186706543
+      }
+    },
+    {
+      "layer": 20,
+      "output_file": "/root/data/artifacts/120b_partial_prune_sweep/20260113_140715/layer20_keep64.safetensors",
+      "output_gib": 0.7893000468611717,
+      "shards": [
+        "model-00002-of-00014.safetensors",
+        "model-00003-of-00014.safetensors"
+      ],
+      "timings_s": {
+        "layer_total": 2.1226718425750732,
+        "load_slice": 0.20113420486450195,
+        "write": 1.9215376377105713
+      }
+    },
+    {
+      "layer": 21,
+      "output_file": "/root/data/artifacts/120b_partial_prune_sweep/20260113_140715/layer21_keep64.safetensors",
+      "output_gib": 0.7893000468611717,
+      "shards": [
+        "model-00003-of-00014.safetensors"
+      ],
+      "timings_s": {
+        "layer_total": 1.9610018730163574,
+        "load_slice": 0.16210651397705078,
+        "write": 1.7988953590393066
+      }
+    },
+    {
+      "layer": 22,
+      "output_file": "/root/data/artifacts/120b_partial_prune_sweep/20260113_140715/layer22_keep64.safetensors",
+      "output_gib": 0.7893000468611717,
+      "shards": [
+        "model-00003-of-00014.safetensors"
+      ],
+      "timings_s": {
+        "layer_total": 3.765619993209839,
+        "load_slice": 0.19325470924377441,
+        "write": 3.5723652839660645
+      }
+    },
+    {
+      "layer": 23,
+      "output_file": "/root/data/artifacts/120b_partial_prune_sweep/20260113_140715/layer23_keep64.safetensors",
+      "output_gib": 0.7893000468611717,
+      "shards": [
+        "model-00003-of-00014.safetensors",
+        "model-00004-of-00014.safetensors"
+      ],
+      "timings_s": {
+        "layer_total": 2.169388771057129,
+        "load_slice": 0.1990375518798828,
+        "write": 1.970351219177246
+      }
+    },
+    {
+      "layer": 24,
+      "output_file": "/root/data/artifacts/120b_partial_prune_sweep/20260113_140715/layer24_keep64.safetensors",
+      "output_gib": 0.7893000468611717,
+      "shards": [
+        "model-00004-of-00014.safetensors"
+      ],
+      "timings_s": {
+        "layer_total": 2.3395023345947266,
+        "load_slice": 0.2039341926574707,
+        "write": 2.135568141937256
+      }
+    },
+    {
+      "layer": 25,
+      "output_file": "/root/data/artifacts/120b_partial_prune_sweep/20260113_140715/layer25_keep64.safetensors",
+      "output_gib": 0.7893000468611717,
+      "shards": [
+        "model-00000-of-00014.safetensors",
+        "model-00004-of-00014.safetensors"
+      ],
+      "timings_s": {
+        "layer_total": 2.6063904762268066,
+        "load_slice": 0.28185105323791504,
+        "write": 2.3245394229888916
+      }
+    },
+    {
+      "layer": 26,
+      "output_file": "/root/data/artifacts/120b_partial_prune_sweep/20260113_140715/layer26_keep64.safetensors",
+      "output_gib": 0.7893000468611717,
+      "shards": [
+        "model-00000-of-00014.safetensors"
+      ],
+      "timings_s": {
+        "layer_total": 2.3696954250335693,
+        "load_slice": 0.15289902687072754,
+        "write": 2.216796398162842
+      }
+    },
+    {
+      "layer": 27,
+      "output_file": "/root/data/artifacts/120b_partial_prune_sweep/20260113_140715/layer27_keep64.safetensors",
+      "output_gib": 0.7893000468611717,
+      "shards": [
+        "model-00000-of-00014.safetensors",
+        "model-00001-of-00014.safetensors"
+      ],
+      "timings_s": {
+        "layer_total": 2.481905698776245,
+        "load_slice": 0.22729730606079102,
+        "write": 2.254608392715454
+      }
+    },
+    {
+      "layer": 28,
+      "output_file": "/root/data/artifacts/120b_partial_prune_sweep/20260113_140715/layer28_keep64.safetensors",
+      "output_gib": 0.7893000468611717,
+      "shards": [
+        "model-00001-of-00014.safetensors"
+      ],
+      "timings_s": {
+        "layer_total": 1.9698331356048584,
+        "load_slice": 0.1635730266571045,
+        "write": 1.806260108947754
+      }
+    },
+    {
+      "layer": 29,
+      "output_file": "/root/data/artifacts/120b_partial_prune_sweep/20260113_140715/layer29_keep64.safetensors",
+      "output_gib": 0.7893000468611717,
+      "shards": [
+        "model-00001-of-00014.safetensors"
+      ],
+      "timings_s": {
+        "layer_total": 2.008837938308716,
+        "load_slice": 0.19121432304382324,
+        "write": 1.8176236152648926
+      }
+    },
+    {
+      "layer": 30,
+      "output_file": "/root/data/artifacts/120b_partial_prune_sweep/20260113_140715/layer30_keep64.safetensors",
+      "output_gib": 0.7893000468611717,
+      "shards": [
+        "model-00002-of-00014.safetensors",
+        "model-00012-of-00014.safetensors"
+      ],
+      "timings_s": {
+        "layer_total": 8.751878023147583,
+        "load_slice": 0.18580365180969238,
+        "write": 8.56607437133789
+      }
+    },
+    {
+      "layer": 31,
+      "output_file": "/root/data/artifacts/120b_partial_prune_sweep/20260113_140715/layer31_keep64.safetensors",
+      "output_gib": 0.7893000468611717,
+      "shards": [
+        "model-00012-of-00014.safetensors",
+        "model-00013-of-00014.safetensors"
+      ],
+      "timings_s": {
+        "layer_total": 2.207034111022949,
+        "load_slice": 0.19646859169006348,
+        "write": 2.0105655193328857
+      }
+    },
+    {
+      "layer": 32,
+      "output_file": "/root/data/artifacts/120b_partial_prune_sweep/20260113_140715/layer32_keep64.safetensors",
+      "output_gib": 0.7893000468611717,
+      "shards": [
+        "model-00013-of-00014.safetensors"
+      ],
+      "timings_s": {
+        "layer_total": 2.5721635818481445,
+        "load_slice": 0.24583029747009277,
+        "write": 2.3263332843780518
+      }
+    },
+    {
+      "layer": 33,
+      "output_file": "/root/data/artifacts/120b_partial_prune_sweep/20260113_140715/layer33_keep64.safetensors",
+      "output_gib": 0.7893000468611717,
+      "shards": [
+        "model-00013-of-00014.safetensors",
+        "model-00014-of-00014.safetensors"
+      ],
+      "timings_s": {
+        "layer_total": 2.6842567920684814,
+        "load_slice": 0.2090005874633789,
+        "write": 2.4752562046051025
+      }
+    },
+    {
+      "layer": 34,
+      "output_file": "/root/data/artifacts/120b_partial_prune_sweep/20260113_140715/layer34_keep64.safetensors",
+      "output_gib": 0.7893000468611717,
+      "shards": [
+        "model-00014-of-00014.safetensors"
+      ],
+      "timings_s": {
+        "layer_total": 2.4885339736938477,
+        "load_slice": 0.17851901054382324,
+        "write": 2.3100149631500244
+      }
+    },
+    {
+      "layer": 35,
+      "output_file": "/root/data/artifacts/120b_partial_prune_sweep/20260113_140715/layer35_keep64.safetensors",
+      "output_gib": 0.7893000468611717,
+      "shards": [
+        "model-00014-of-00014.safetensors"
+      ],
+      "timings_s": {
+        "layer_total": 2.071930170059204,
+        "load_slice": 0.18572187423706055,
+        "write": 1.8862082958221436
+      }
+    }
+  ],
+  "timings_s": {
+    "total": 290.94744753837585
+  },
+  "unique_shards_downloaded": 15
+}

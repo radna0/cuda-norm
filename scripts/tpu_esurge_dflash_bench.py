@@ -64,6 +64,15 @@ def main() -> None:
         action="store_true",
         help="If set (and --also-run-baseline), compare generated token IDs for dflash vs baseline and report match stats.",
     )
+    ap.add_argument(
+        "--use-lm-head-weight",
+        action="store_true",
+        help=(
+            "Load raw lm_head.weight from the HF snapshot and use it for draft-token argmax.\n"
+            "This is a debug/parity path only; TPU JIT mode disables it automatically to avoid constant-capture issues.\n"
+            "Default: off (use the teacher LM head Module instead)."
+        ),
+    )
     args = ap.parse_args()
 
     repo_root = Path(__file__).resolve().parents[1]
@@ -204,9 +213,9 @@ def main() -> None:
         rope_scaling=cfg.get("rope_scaling"),
         dtype=jnp.bfloat16,
     )
-    # Use the same frozen LM head weights as DFlash training, so draft-token
-    # argmax is comparable to training semantics.
-    lm_w = _load_lm_head_weight(teacher_snapshot)
+    lm_w = None
+    if bool(args.use_lm_head_weight):
+        lm_w = _load_lm_head_weight(teacher_snapshot)
 
     # Draft cfg must match the training run. Load it from run_dir/config.json so
     # we don't silently benchmark with a mismatched architecture (K/layers/etc.).
