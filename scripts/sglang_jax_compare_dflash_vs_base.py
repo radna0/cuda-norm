@@ -184,8 +184,8 @@ def main() -> None:
             if idx >= 0:
                 print(f"  base[{idx}]={base_ids[idx] if idx < len(base_ids) else None}")
                 print(f"  dflash[{idx}]={dflash_ids[idx] if idx < len(dflash_ids) else None}")
-            print(f\"  base[:{print_prefix}]={base_ids[:print_prefix]}\")
-            print(f\"  dflash[:{print_prefix}]={dflash_ids[:print_prefix]}\")
+            print(f"  base[:{print_prefix}]={base_ids[:print_prefix]}")
+            print(f"  dflash[:{print_prefix}]={dflash_ids[:print_prefix]}")
 
     result = CompareResult(total=len(baseline), matched=matched, mismatched=len(baseline) - matched)
     print(

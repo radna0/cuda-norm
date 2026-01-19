@@ -1138,6 +1138,162 @@ def _token_keep_mask(offsets: list[tuple[int, int]], spans: list[tuple[int, int]
     return keep
 
 
+def _sample_sel_flat(
+    sel_flat: "Any",
+    *,
+    max_tokens: int,
+    seed: int,
+    strategy: str = "strided",
+) -> "Any":
+    """
+    Select up to `max_tokens` indices from a 1D sorted index tensor.
+
+    For long-context profiling, taking the *first* N tokens biases heavily toward
+    early positions. We default to deterministic strided sampling across the
+    full selection set.
+    """
+    if max_tokens <= 0:
+        return sel_flat
+    try:
+        n = int(sel_flat.numel())
+    except Exception:
+        return sel_flat
+    if n <= max_tokens:
+        return sel_flat
+    strat = str(strategy or "strided").strip().lower()
+    if strat not in ("strided", "random"):
+        strat = "strided"
+    if strat == "random":
+        try:
+            import torch
+
+            g = torch.Generator(device=sel_flat.device)
+            g.manual_seed(int(seed))
+            perm = torch.randperm(n, generator=g, device=sel_flat.device)[: int(max_tokens)]
+            return sel_flat.index_select(0, perm)
+        except Exception:
+            # fall back to deterministic
+            strat = "strided"
+    # Deterministic stride across sorted indices.
+    try:
+        import torch
+
+        step = float(n) / float(max_tokens)
+        idx = (torch.arange(int(max_tokens), device=sel_flat.device, dtype=torch.float32) * step).to(
+            torch.int64
+        )
+        idx = torch.clamp(idx, 0, n - 1)
+        return sel_flat.index_select(0, idx)
+    except Exception:
+        return sel_flat[: int(max_tokens)]
+
+
+def _pack_rows_to_fixed_blocks(
+    *,
+    rows: list[dict[str, Any]],
+    tokenizer: Any,
+    block_size: int,
+    row_token_max: int,
+    seed: int,
+    require_full_blocks: bool = True,
+    max_blocks: int = 0,
+) -> list[dict[str, Any]]:
+    """
+    Pack many short Harmony rows into fixed-length token blocks for long-context
+    profiling. This mirrors our evaluation harness: concat rows + EOS, then chunk.
+
+    Returns a list of dicts:
+      {"input_ids": list[int] (len=block_size), "keep_mask": list[bool] (len=block_size)}
+    """
+    import math
+
+    texts = [str(r.get("text") or "") for r in rows]
+    if not texts:
+        raise ValueError("No rows to pack.")
+    if int(block_size) <= 0:
+        raise ValueError("block_size must be > 0")
+    if int(row_token_max) <= 0:
+        raise ValueError("row_token_max must be > 0")
+
+    eos_id = getattr(tokenizer, "eos_token_id", None)
+    if eos_id is None:
+        try:
+            eos_id = int(getattr(tokenizer, "eos_token", None) or 0)
+        except Exception:
+            eos_id = 0
+    eos_id = int(eos_id)
+
+    # Batch tokenize (variable lengths) with offsets so we can compute assistant keep masks.
+    tok = tokenizer(
+        texts,
+        add_special_tokens=False,
+        truncation=True,
+        max_length=int(min(int(row_token_max), int(block_size))),
+        padding=False,
+        return_offsets_mapping=True,
+    )
+    input_ids_list = tok.get("input_ids")
+    offsets_list = tok.get("offset_mapping")
+    if not isinstance(input_ids_list, list) or not isinstance(offsets_list, list):
+        raise RuntimeError("Tokenizer did not return expected lists for packing.")
+    if len(input_ids_list) != len(rows) or len(offsets_list) != len(rows):
+        raise RuntimeError("Tokenizer output length mismatch for packing.")
+
+    blocks: list[dict[str, Any]] = []
+    cur_ids: list[int] = []
+    cur_keep: list[bool] = []
+
+    def _flush() -> None:
+        nonlocal cur_ids, cur_keep
+        if len(cur_ids) != int(block_size) or len(cur_keep) != int(block_size):
+            return
+        blocks.append({"input_ids": cur_ids, "keep_mask": cur_keep})
+        cur_ids = []
+        cur_keep = []
+
+    for text, ids, offsets in zip(texts, input_ids_list, offsets_list, strict=True):
+        if not ids:
+            continue
+        spans = _assistant_content_spans(text)
+        # offsets is list[tuple[int,int]] (fast tokenizer)
+        keep = _token_keep_mask([(int(a), int(b)) for a, b in offsets], spans)
+        if len(keep) != len(ids):
+            raise RuntimeError("keep mask length mismatch during packing.")
+        ids2 = [int(x) for x in ids] + [eos_id]
+        keep2 = [bool(x) for x in keep] + [False]
+
+        # Greedy pack.
+        i = 0
+        while i < len(ids2):
+            need = int(block_size) - len(cur_ids)
+            take = min(need, len(ids2) - i)
+            cur_ids.extend(ids2[i : i + take])
+            cur_keep.extend(keep2[i : i + take])
+            i += take
+            if len(cur_ids) == int(block_size):
+                _flush()
+                if int(max_blocks) > 0 and len(blocks) >= int(max_blocks):
+                    return blocks
+
+    if not require_full_blocks:
+        # Pad the final block to full length so downstream code can use a dense tensor.
+        if cur_ids and len(cur_ids) < int(block_size):
+            pad = int(block_size) - len(cur_ids)
+            cur_ids.extend([eos_id] * pad)
+            cur_keep.extend([False] * pad)
+            _flush()
+
+    if require_full_blocks and not blocks:
+        # Helpful error for long-context: not enough tokens to form a single full block.
+        total_tokens = sum(len(x) for x in input_ids_list)
+        approx_blocks = int(math.floor(float(total_tokens) / float(block_size)))
+        raise RuntimeError(
+            f"Not enough tokens to build a full block_size={int(block_size)} "
+            f"(total_tokens={int(total_tokens)} approx_full_blocks={approx_blocks})."
+        )
+    return blocks
+
+
 @dataclass(frozen=True)
 class ProfileArgs:
     model_id: str
@@ -1686,6 +1842,11 @@ def profile_20b_reap_saliency(
     max_seq_length: int,
     batch_size: int,
     rows_jsonl_path: str = "",
+    pack_to_max_seq_length: bool = False,
+    max_blocks: int = 0,
+    row_token_max: int = 8192,
+    seed: int = 3407,
+    token_sample_strategy: str = "strided",
 ) -> dict[str, Any]:
     """
     REAP-lite saliency profiling for GPT-OSS MoE (Transformers).
@@ -1784,8 +1945,9 @@ def profile_20b_reap_saliency(
     except Exception:
         raise
 
-    # Global per-batch token mask used by hooks (CUDA bool [batch, seq]).
-    current_keep_mask = {"mask": None}
+    # Global per-batch token mask + sampled token indices used by hooks.
+    current_keep_mask = {"mask": None}  # CUDA bool [bs, seq]
+    current_sel_flat = {"sel": None}  # CUDA int64 [n_sel]
 
     # GPU accumulators (small).
     count = torch.zeros((num_layers, num_experts), dtype=torch.int64, device="cuda")
@@ -1813,20 +1975,16 @@ def profile_20b_reap_saliency(
                 return
             if keep_mask.shape[:2] != hidden.shape[:2]:
                 return
+            sel_flat = current_sel_flat.get("sel")
+            if sel_flat is None or not torch.is_tensor(sel_flat):
+                return
 
             hs = hidden  # [bs, seq, hidden]
             bs, seq, hd = hs.shape
             hs2 = hs.reshape(-1, int(hd))
-            keep2 = keep_mask.reshape(-1)
-            if int(keep2.sum().item()) == 0:
+            if int(sel_flat.numel()) == 0:
                 return
-            hs_sel = hs2[keep2]
-
-            # Cap tokens per batch to keep profiling cheap and avoid OOM from
-            # computing per-expert outputs for all experts.
-            max_tokens = int(os.environ.get("REAP_MAX_TOKENS_PER_BATCH", "128"))
-            if max_tokens > 0 and int(hs_sel.shape[0]) > max_tokens:
-                hs_sel = hs_sel[:max_tokens]
+            hs_sel = hs2.index_select(0, sel_flat.to(torch.int64))
 
             out = router(hs_sel)
             if not isinstance(out, (tuple, list)) or len(out) != 2:
@@ -1962,48 +2120,90 @@ def profile_20b_reap_saliency(
     total_tokens = 0
     total_kept_tokens = 0
 
+    use_pack = bool(pack_to_max_seq_length) or int(max_seq_length) >= 65536
+    examples: list[dict[str, Any]]
+    if use_pack:
+        examples = _pack_rows_to_fixed_blocks(
+            rows=rows,
+            tokenizer=tokenizer,
+            block_size=int(max_seq_length),
+            row_token_max=int(row_token_max),
+            seed=int(seed),
+            require_full_blocks=True,
+            max_blocks=int(max_blocks),
+        )
+        if int(batch_size) <= 0:
+            batch_size = 1
+    else:
+        examples = rows
+
+    max_tokens_env = os.environ.get("REAP_MAX_TOKENS_PER_BATCH", "").strip()
+    if max_tokens_env:
+        max_tokens = int(max_tokens_env)
+    else:
+        max_tokens = 4096 if int(max_seq_length) >= 65536 else 128
+
+    log_every = 1 if use_pack or int(len(examples)) <= 12 else 10
     try:
-        for batch_i, start in enumerate(range(0, len(rows), max(1, int(batch_size))), start=1):
-            batch = rows[start : start + int(batch_size)]
-            texts = [r["text"] for r in batch]
+        for batch_i, start in enumerate(range(0, len(examples), max(1, int(batch_size))), start=1):
+            batch = examples[start : start + int(batch_size)]
 
-            tok = tokenizer(
-                texts,
-                return_tensors="pt",
-                truncation=True,
-                padding=True,
-                max_length=int(max_seq_length),
-                return_offsets_mapping=True,
-            )
-            offsets = tok.pop("offset_mapping")  # [bs, seq, 2] on CPU
+            if use_pack:
+                ids = torch.tensor([b["input_ids"] for b in batch], dtype=torch.int64, device="cuda")
+                attn = torch.ones_like(ids, dtype=torch.int64, device="cuda")
+                enc = {"input_ids": ids, "attention_mask": attn}
+                keep = torch.tensor([b["keep_mask"] for b in batch], dtype=torch.bool, device="cuda")
+            else:
+                texts = [r["text"] for r in batch]
+                tok = tokenizer(
+                    texts,
+                    return_tensors="pt",
+                    truncation=True,
+                    padding=True,
+                    max_length=int(max_seq_length),
+                    return_offsets_mapping=True,
+                )
+                offsets = tok.pop("offset_mapping")  # [bs, seq, 2] on CPU
 
-            keep_masks: list[list[bool]] = []
-            for row_i, text in enumerate(texts):
-                spans = _assistant_content_spans(text)
-                keep = _token_keep_mask(offsets[row_i].tolist(), spans)
-                keep_masks.append(keep)
+                keep_masks: list[list[bool]] = []
+                for row_i, text in enumerate(texts):
+                    spans = _assistant_content_spans(text)
+                    keep_masks.append(_token_keep_mask(offsets[row_i].tolist(), spans))
 
-            enc = {k: v.to("cuda") for k, v in tok.items()}
-            attn = enc.get("attention_mask")
-            keep = torch.tensor(keep_masks, dtype=torch.bool, device="cuda")
-            if attn is not None and torch.is_tensor(attn):
-                keep = keep & attn.to(torch.bool)
+                enc = {k: v.to("cuda") for k, v in tok.items()}
+                attn = enc.get("attention_mask")
+                keep = torch.tensor(keep_masks, dtype=torch.bool, device="cuda")
+                if attn is not None and torch.is_tensor(attn):
+                    keep = keep & attn.to(torch.bool)
+
             current_keep_mask["mask"] = keep
+
+            keep_flat = keep.reshape(-1)
+            sel_all = torch.nonzero(keep_flat, as_tuple=False).squeeze(-1)
+            sel_flat = _sample_sel_flat(
+                sel_all,
+                max_tokens=int(max_tokens),
+                seed=int(seed) + int(batch_i),
+                strategy=str(token_sample_strategy),
+            ).to(torch.int64)
+            current_sel_flat["sel"] = sel_flat
 
             with torch.inference_mode():
                 _ = model(**enc, use_cache=False, return_dict=False)
 
             total_tokens += int(enc["input_ids"].numel())
             total_kept_tokens += int(keep.sum().item())
-            if batch_i % 10 == 0:
+            if batch_i % int(log_every) == 0:
                 dt_i = max(1e-9, time.time() - t0)
                 print(
-                    f"[*] profile_20b_reap_saliency batches={batch_i} rows={min(len(rows), start+int(batch_size))}/{len(rows)} "
-                    f"tokens={total_tokens} kept={total_kept_tokens} tok/s={total_tokens/dt_i:.0f}",
+                    f"[*] profile_20b_reap_saliency batches={batch_i} "
+                    f"{'blocks' if use_pack else 'rows'}={min(len(examples), start+int(batch_size))}/{len(examples)} "
+                    f"tokens={total_tokens} kept={total_kept_tokens} tok/s={total_tokens/dt_i:.0f} sel={int(sel_flat.numel())}",
                     flush=True,
                 )
     finally:
         current_keep_mask["mask"] = None
+        current_sel_flat["sel"] = None
         for h in hooks:
             try:
                 h.remove()
@@ -2121,6 +2321,11 @@ def profile_20b_eaftreap_saliency(
     w_uncertain: float = 0.25,
     w_conflict: float = -2.0,
     rows_jsonl_path: str = "",
+    pack_to_max_seq_length: bool = False,
+    max_blocks: int = 0,
+    row_token_max: int = 8192,
+    seed: int = 3407,
+    token_sample_strategy: str = "strided",
 ) -> dict[str, Any]:
     """
     EAFT-REAP (correctness-aware) saliency profiling for GPT-OSS MoE (Transformers).
@@ -2153,6 +2358,7 @@ def profile_20b_eaftreap_saliency(
     import pyarrow as pa
     import pyarrow.parquet as pq
     from transformers import AutoModelForCausalLM, AutoTokenizer, Mxfp4Config
+    from transformers.cache_utils import DynamicCache
 
     _ensure_hf_env()
 
@@ -2187,6 +2393,47 @@ def profile_20b_eaftreap_saliency(
     tokenizer.padding_side = "right"
     tokenizer.truncation_side = "left"
 
+    # Long-context attention implementation (Kaggle/Transformers 4.56.2):
+    #
+    # - `flex_attention` is currently broken on Kaggle torch==2.8.0 for
+    #   GPT-OSS (TorchInductor "wrong ndim" during compilation).
+    # - `eager` will OOM at 131K (dense attention weights).
+    # - GPT-OSS SDPA is disabled in Transformers, but the attention itself is
+    #   standard; we can safely *enable* SDPA dispatch via a local monkeypatch
+    #   and then rely on PyTorch's Flash-SDP kernels for long context.
+    attn_impl = os.environ.get("EAFT_ATTN_IMPL", "").strip()
+    if not attn_impl:
+        attn_impl = "sdpa" if int(max_seq_length) >= 16384 else "eager"
+    if attn_impl not in ("sdpa", "eager", "flash_attention_2", "flex_attention"):
+        raise ValueError(f"Unsupported EAFT_ATTN_IMPL={attn_impl!r}")
+    if str(attn_impl) != "flex_attention":
+        os.environ.setdefault("TORCHDYNAMO_DISABLE", "1")
+
+    if str(attn_impl) == "sdpa":
+        # Prefer fast SDPA kernels when available.
+        try:
+            torch.backends.cuda.enable_flash_sdp(True)
+            torch.backends.cuda.enable_mem_efficient_sdp(True)
+            torch.backends.cuda.enable_math_sdp(False)
+        except Exception:
+            pass
+
+        # Transformers blocks SDPA for GPT-OSS (not implemented flag), but
+        # PyTorch SDPA works fine for this architecture. Force-enable it.
+        try:
+            import transformers.models.gpt_oss.modeling_gpt_oss as gpt_oss_mod
+
+            for cls_name in (
+                "GptOssPreTrainedModel",
+                "GptOssModel",
+                "GptOssForCausalLM",
+            ):
+                cls = getattr(gpt_oss_mod, cls_name, None)
+                if cls is not None:
+                    setattr(cls, "_supports_sdpa", True)
+        except Exception:
+            pass
+
     # EAFT-REAP needs access to the experts' projection weights as real PyTorch
     # tensors (we do per-expert matmuls to estimate ||f_j(x)||_2). When loading
     # MXFP4 with kernels/triton enabled, Transformers can replace expert weights
@@ -2199,7 +2446,15 @@ def profile_20b_eaftreap_saliency(
         device_map={"": 0},
         trust_remote_code=True,
         quantization_config=qconfig,
+        attn_implementation=str(attn_impl),
     )
+    try:
+        # Be extra explicit in case Transformers doesn't plumb it through.
+        model.config._attn_implementation = str(attn_impl)  # type: ignore[attr-defined]
+        if hasattr(model, "model") and hasattr(model.model, "config"):
+            model.model.config._attn_implementation = str(attn_impl)  # type: ignore[attr-defined]
+    except Exception:
+        pass
     model.eval()
 
     layers = _iter_gpt_oss_layers(model)
@@ -2228,13 +2483,42 @@ def profile_20b_eaftreap_saliency(
     except Exception:
         raise
 
-    # We only compute p/H/weights for the same sampled token subset that REAP-lite
-    # uses for expert-norm computation (first N kept tokens), for efficiency.
-    max_tokens = int(os.environ.get("REAP_MAX_TOKENS_PER_BATCH", "128"))
+    # We only compute p/H/weights for the same sampled token subset that the
+    # REAP/EAFT-REAP hook uses for expert-norm computation, for efficiency.
+    #
+    # For long-context profiling, do NOT default to 128 (that produces unstable
+    # rankings dominated by early tokens). If not explicitly overridden, raise
+    # the default for >=64K contexts.
+    max_tokens_env = os.environ.get("REAP_MAX_TOKENS_PER_BATCH", "").strip()
+    if max_tokens_env:
+        max_tokens = int(max_tokens_env)
+    else:
+        max_tokens = 4096 if int(max_seq_length) >= 65536 else 128
     max_tokens = int(max_tokens) if int(max_tokens) > 0 else 0
     entropy_topk = int(entropy_topk)
     if entropy_topk <= 1:
         raise ValueError("entropy_topk must be >= 2")
+
+    # Packed blocks: for true max-context calibration, we concat rows + EOS and
+    # chunk into fixed-length blocks. This is required for 131K "pruning at max
+    # context"; otherwise we only ever see per-row (short) contexts.
+    use_pack = bool(pack_to_max_seq_length) or int(max_seq_length) >= 65536
+    flex_full_forward = bool(use_pack) and str(attn_impl) == "flex_attention"
+    examples: list[dict[str, Any]]
+    if use_pack:
+        examples = _pack_rows_to_fixed_blocks(
+            rows=rows,
+            tokenizer=tokenizer,
+            block_size=int(max_seq_length),
+            row_token_max=int(row_token_max),
+            seed=int(seed),
+            require_full_blocks=True,
+            max_blocks=int(max_blocks),
+        )
+        if int(batch_size) <= 0:
+            batch_size = 1
+    else:
+        examples = rows
 
     # ---- Pass 1: collect p_t and H_t samples (and store per-batch) ------------
     p_all: list[float] = []
@@ -2244,95 +2528,181 @@ def profile_20b_eaftreap_saliency(
     total_tokens = 0
     total_kept_tokens = 0
     t0 = time.time()
+    log_every = 1 if use_pack or int(len(examples)) <= 12 else 25
 
-    for batch_i, start in enumerate(range(0, len(rows), max(1, int(batch_size))), start=1):
-        batch = rows[start : start + int(batch_size)]
-        texts = [r["text"] for r in batch]
+    # Use chunked prefill with KV cache for long contexts to avoid allocating
+    # O(seq^2) masks or O(seq*vocab) logits. We only compute logits for the
+    # selected predictor positions (t-1) needed for EAFT p/H.
+    chunk_size = int(os.environ.get("EAFT_CHUNK_SIZE", "2048"))
+    chunk_size = max(128, chunk_size)
 
-        tok = tokenizer(
-            texts,
-            return_tensors="pt",
-            truncation=True,
-            padding=True,
-            max_length=int(max_seq_length),
-            return_offsets_mapping=True,
-        )
-        offsets = tok.pop("offset_mapping")  # CPU
+    for batch_i, start in enumerate(range(0, len(examples), max(1, int(batch_size))), start=1):
+        batch = examples[start : start + int(batch_size)]
+        if len(batch) != 1:
+            raise RuntimeError("EAFT-REAP packed long-context currently requires batch_size=1.")
 
-        keep_masks: list[list[bool]] = []
-        for row_i, text in enumerate(texts):
-            spans = _assistant_content_spans(text)
-            keep = _token_keep_mask(offsets[row_i].tolist(), spans)
-            keep_masks.append(keep)
-
-        enc = {k: v.to("cuda") for k, v in tok.items()}
-        attn = enc.get("attention_mask")
-        keep = torch.tensor(keep_masks, dtype=torch.bool, device="cuda")
-        if attn is not None and torch.is_tensor(attn):
-            keep = keep & attn.to(torch.bool)
+        if use_pack:
+            ids_full = torch.tensor(batch[0]["input_ids"], dtype=torch.int64, device="cuda").unsqueeze(0)
+            keep = torch.tensor(batch[0]["keep_mask"], dtype=torch.bool, device="cuda").unsqueeze(0)
+        else:
+            texts = [batch[0]["text"]]
+            tok = tokenizer(
+                texts,
+                return_tensors="pt",
+                truncation=True,
+                padding=True,
+                max_length=int(max_seq_length),
+                return_offsets_mapping=True,
+            )
+            offsets = tok.pop("offset_mapping")  # CPU
+            spans = _assistant_content_spans(texts[0])
+            keep_mask = _token_keep_mask(offsets[0].tolist(), spans)
+            ids_full = tok["input_ids"].to("cuda")
+            keep = torch.tensor(keep_mask, dtype=torch.bool, device="cuda").unsqueeze(0)
+            attn = tok.get("attention_mask")
+            if attn is not None and torch.is_tensor(attn):
+                keep = keep & attn.to("cuda").to(torch.bool)
 
         bs, seq = keep.shape
-        keep_flat = keep.reshape(-1)
-        sel_flat = torch.nonzero(keep_flat, as_tuple=False).squeeze(-1)
-        if max_tokens and int(sel_flat.numel()) > max_tokens:
-            sel_flat = sel_flat[:max_tokens]
+        if bs != 1:
+            raise RuntimeError("EAFT-REAP long-context expects batch_size=1.")
 
-        # Placeholder lists aligned to `sel_flat` order; pos==0 has no prediction.
+        keep_flat = keep.reshape(-1)
+        sel_all = torch.nonzero(keep_flat, as_tuple=False).squeeze(-1)
+        sel_flat = _sample_sel_flat(
+            sel_all,
+            max_tokens=int(max_tokens),
+            seed=int(seed) + int(batch_i),
+            strategy=str(token_sample_strategy),
+        ).to(torch.int64)
+        sel_flat_list = sel_flat.detach().to("cpu").tolist()
+
         p_list: list[float | None] = [None] * int(sel_flat.numel())
         h_list: list[float | None] = [None] * int(sel_flat.numel())
 
         if int(sel_flat.numel()) > 0:
-            with torch.inference_mode():
-                out = model(**enc, use_cache=False, return_dict=True)
-            logits = out.logits  # [bs, seq, vocab]
-
-            sel_b = (sel_flat // int(seq)).to(torch.int64)
-            sel_t = (sel_flat % int(seq)).to(torch.int64)
+            sel_t = (sel_flat % int(seq)).to(torch.int64)  # [n_sel]
+            # We need logits at pred_pos = t-1 to score token t.
             pred_mask = sel_t > 0
-            if bool(pred_mask.any().item()):
-                b = sel_b[pred_mask]
-                t = sel_t[pred_mask]
-                logits_sel = logits[b, t - 1, :]  # predicts token at t
-                tgt = enc["input_ids"][b, t].to(torch.int64)
+            pred_pos = (sel_t[pred_mask] - 1).detach().to("cpu").tolist()
+            tgt_pos = sel_t[pred_mask].detach().to("cpu").tolist()
+            tgt_ids = ids_full[0].detach().to("cpu").tolist()
 
-                logits_sel_f = logits_sel.float()
-                logit_ref = logits_sel_f.gather(1, tgt.unsqueeze(-1)).squeeze(-1)
-                lse = torch.logsumexp(logits_sel_f, dim=-1)
-                p = torch.exp((logit_ref - lse).clamp(min=-50.0, max=0.0)).clamp(min=0.0, max=1.0)
+            # Map from selected index i -> (pred_pos, tgt_token_id).
+            pred_rows: list[tuple[int, int, int]] = []
+            it = 0
+            for i, ok in enumerate(pred_mask.detach().to("cpu").tolist()):
+                if not ok:
+                    continue
+                pp = int(pred_pos[it])
+                tp = int(tgt_pos[it])
+                pred_rows.append((i, pp, int(tgt_ids[tp])))
+                it += 1
 
-                topk_vals = torch.topk(logits_sel_f, k=int(entropy_topk), dim=-1).values
-                topk_p = torch.softmax(topk_vals, dim=-1)
-                ent = -(topk_p * torch.log(topk_p.clamp_min(1e-12))).sum(dim=-1) / math.log(float(entropy_topk))
-                ent = ent.clamp(min=0.0, max=1.0)
-
-                p_cpu = p.detach().to("cpu").tolist()
-                h_cpu = ent.detach().to("cpu").tolist()
-                pred_mask_cpu = pred_mask.detach().to("cpu").tolist()
-                it = 0
-                for i, ok in enumerate(pred_mask_cpu):
-                    if not ok:
-                        continue
-                    pv = float(p_cpu[it])
-                    hv = float(h_cpu[it])
-                    p_list[i] = pv
-                    h_list[i] = hv
+            if flex_full_forward:
+                # Flex-attn + KV-cache chunking is unstable on Kaggle/torch 2.8;
+                # do one full-sequence forward and keep only the predictor logits.
+                pred_rows.sort(key=lambda t: t[1])  # sort by pred_pos
+                pred_rel = torch.tensor(
+                    [pp for (_i, pp, _tgt) in pred_rows],
+                    dtype=torch.int64,
+                    device="cuda",
+                )
+                with torch.inference_mode():
+                    out = model(
+                        input_ids=ids_full,
+                        attention_mask=None,
+                        use_cache=False,
+                        return_dict=True,
+                        logits_to_keep=pred_rel,
+                    )
+                logits = out.logits  # [1, n_keep, vocab] (bf16/fp16)
+                for row_j, (i_sel, _pp, tgt) in enumerate(pred_rows):
+                    logit_row = logits[0, row_j, :].float()
+                    lse = torch.logsumexp(logit_row, dim=-1)
+                    p_ref = torch.exp((logit_row[int(tgt)] - lse).clamp(min=-50.0, max=0.0)).clamp(0.0, 1.0)
+                    topk_vals = torch.topk(logit_row, k=int(entropy_topk), dim=-1).values
+                    topk_p = torch.softmax(topk_vals, dim=-1)
+                    ent = -(topk_p * torch.log(topk_p.clamp_min(1e-12))).sum(dim=-1) / math.log(float(entropy_topk))
+                    ent = ent.clamp(0.0, 1.0)
+                    pv = float(p_ref.detach().cpu().item())
+                    hv = float(ent.detach().cpu().item())
+                    p_list[i_sel] = pv
+                    h_list[i_sel] = hv
                     p_all.append(pv)
                     h_all.append(hv)
-                    it += 1
+                total_tokens += int(ids_full.numel())
+            else:
+                cache: DynamicCache | None = None
+                # Chunked prefill.
+                for chunk_start in range(0, int(seq), int(chunk_size)):
+                    chunk_end = min(int(seq), chunk_start + int(chunk_size))
+                    ids_chunk = ids_full[:, chunk_start:chunk_end]
 
-            # Free logits ASAP.
-            del logits
-            del out
+                    # Which predictor positions fall into this chunk?
+                    idxs = [(i, pp, tgt) for (i, pp, tgt) in pred_rows if chunk_start <= pp < chunk_end]
+                    if not idxs:
+                        # Still need to advance KV cache to preserve positions.
+                        with torch.inference_mode():
+                            out = model.model(
+                                input_ids=ids_chunk,
+                                attention_mask=None,
+                                past_key_values=cache,
+                                use_cache=True,
+                                return_dict=True,
+                            )
+                        cache = out.past_key_values
+                        total_tokens += int(ids_chunk.numel())
+                        continue
 
-        batch_samples.append({"n_sel": int(sel_flat.numel()), "p": p_list, "h": h_list})
-        total_tokens += int(enc["input_ids"].numel())
+                    pred_rel = torch.tensor(
+                        [pp - chunk_start for (_i, pp, _tgt) in idxs],
+                        dtype=torch.int64,
+                        device="cuda",
+                    )
+                    with torch.inference_mode():
+                        out = model(
+                            input_ids=ids_chunk,
+                            attention_mask=None,
+                            past_key_values=cache,
+                            use_cache=True,
+                            return_dict=True,
+                            logits_to_keep=pred_rel,
+                        )
+                    cache = out.past_key_values
+                    logits = out.logits  # [1, n_keep, vocab] (bf16/fp16)
+                    # Compute p_t and top-k entropy for each requested row.
+                    for row_j, (i_sel, _pp, tgt) in enumerate(idxs):
+                        logit_row = logits[0, row_j, :].float()
+                        # p(reference)
+                        lse = torch.logsumexp(logit_row, dim=-1)
+                        p_ref = torch.exp((logit_row[int(tgt)] - lse).clamp(min=-50.0, max=0.0)).clamp(0.0, 1.0)
+                        # entropy top-k
+                        topk_vals = torch.topk(logit_row, k=int(entropy_topk), dim=-1).values
+                        topk_p = torch.softmax(topk_vals, dim=-1)
+                        ent = -(topk_p * torch.log(topk_p.clamp_min(1e-12))).sum(dim=-1) / math.log(float(entropy_topk))
+                        ent = ent.clamp(0.0, 1.0)
+                        pv = float(p_ref.detach().cpu().item())
+                        hv = float(ent.detach().cpu().item())
+                        p_list[i_sel] = pv
+                        h_list[i_sel] = hv
+                        p_all.append(pv)
+                        h_all.append(hv)
+
+                    total_tokens += int(ids_chunk.numel())
+
+        batch_samples.append(
+            {"n_sel": int(sel_flat.numel()), "sel_flat": sel_flat_list, "p": p_list, "h": h_list}
+        )
         total_kept_tokens += int(keep.sum().item())
 
-        if batch_i % 25 == 0:
+        if batch_i % int(log_every) == 0:
             dt_i = max(1e-9, time.time() - t0)
             print(
-                f"[*] eaftreap pass1 batches={batch_i} rows={min(len(rows), start+int(batch_size))}/{len(rows)} "
-                f"tokens={total_tokens} kept={total_kept_tokens} tok/s={total_tokens/dt_i:.0f} p_samples={len(p_all)}",
+                f"[*] eaftreap pass1 batches={batch_i} "
+                f"{'blocks' if use_pack else 'rows'}={min(len(examples), start+int(batch_size))}/{len(examples)} "
+                f"tokens={total_tokens} kept={total_kept_tokens} tok/s={total_tokens/dt_i:.0f} "
+                f"sel={int(sel_flat.numel())} p_samples={len(p_all)}",
                 flush=True,
             )
 
@@ -2372,6 +2742,7 @@ def profile_20b_eaftreap_saliency(
     # ---- Pass 2: run REAP-lite hooks with w_t weighting ------------------------
     current_keep_mask = {"mask": None}
     current_token_weights = {"weights": None}
+    current_sel_flat = {"sel": None}  # CUDA int64 [n_sel]
 
     count = torch.zeros((num_layers, num_experts), dtype=torch.int64, device="cuda")
     gate_sum = torch.zeros((num_layers, num_experts), dtype=torch.float32, device="cuda")
@@ -2408,34 +2779,18 @@ def profile_20b_eaftreap_saliency(
             hs = hidden  # [bs, seq, hidden]
             bs, seq, hd = hs.shape
             hs2 = hs.reshape(-1, int(hd))
-            keep2 = keep_mask.reshape(-1)
-            if int(keep2.sum().item()) == 0:
+            sel_flat = current_sel_flat.get("sel")
+            if sel_flat is None or not torch.is_tensor(sel_flat):
                 return
-            hs_sel = hs2[keep2]
-            w2 = w_mask.reshape(-1)[keep2].to(torch.float32)
-
-            if max_tokens > 0 and int(hs_sel.shape[0]) > max_tokens:
-                hs_sel = hs_sel[:max_tokens]
-                w2 = w2[:max_tokens]
-
-            out = router(hs_sel)
-            if not isinstance(out, (tuple, list)) or len(out) != 2:
-                return
-            router_scores, router_idx = out
-            if not torch.is_tensor(router_scores) or not torch.is_tensor(router_idx):
-                return
-            if router_scores.dim() != 2 or int(router_scores.shape[1]) != int(num_experts):
-                return
-            if router_idx.dim() != 2:
-                return
-            kk = int(router_idx.shape[1])
-            if kk <= 0:
+            sel_flat = sel_flat.to(torch.int64)
+            if int(sel_flat.numel()) == 0:
                 return
 
-            router_idx = router_idx.to(torch.int64)
-            topk_w = router_scores.gather(1, router_idx).to(torch.float32)
-            denom = topk_w.sum(dim=-1, keepdim=True).clamp_min(1e-9)
-            topk_w = topk_w / denom
+            # When scoring many tokens (e.g., full 131072-token blocks), avoid
+            # materializing `hs_sel` for the entire selection at once.
+            token_chunk = int(os.environ.get("REAP_TOKEN_CHUNK_SIZE", "1024"))
+            token_chunk = max(1, int(token_chunk))
+            w_mask_flat = w_mask.reshape(-1)
 
             gate_up_proj = getattr(experts, "gate_up_proj", None)
             down_proj = getattr(experts, "down_proj", None)
@@ -2457,74 +2812,101 @@ def profile_20b_eaftreap_saliency(
             alpha = float(getattr(experts, "alpha", 1.702))
             limit = float(getattr(experts, "limit", 7.0))
 
-            # Build per-expert norm for the selected top-k experts.
-            n_tokens = int(hs_sel.shape[0])
-            expert_ids = router_idx.reshape(-1)
-            token_ids = (
-                torch.arange(n_tokens, device=expert_ids.device, dtype=torch.int64)
-                .unsqueeze(1)
-                .expand(n_tokens, kk)
-                .reshape(-1)
-            )
-            perm = torch.argsort(expert_ids)
-            expert_ids_sorted = expert_ids[perm]
-            token_ids_sorted = token_ids[perm]
-            w_sorted = topk_w.reshape(-1)[perm]
-            n_sorted = torch.empty_like(w_sorted, dtype=torch.float32)
+            for off in range(0, int(sel_flat.numel()), int(token_chunk)):
+                sel_chunk = sel_flat[off : off + int(token_chunk)]
+                if int(sel_chunk.numel()) == 0:
+                    continue
 
-            unique_e, counts_e = torch.unique_consecutive(expert_ids_sorted, return_counts=True)
-            offset = 0
-            for e_t, c_t in zip(unique_e.tolist(), counts_e.tolist()):
-                e = int(e_t)
-                c = int(c_t)
-                tok = token_ids_sorted[offset : offset + c]
-                x = hs_sel.index_select(0, tok)
+                hs_sel = hs2.index_select(0, sel_chunk)
+                w2 = w_mask_flat.index_select(0, sel_chunk).to(torch.float32)
 
-                W_gu = gate_up_proj[e]
-                W_down = down_proj[e]
-                b_gu = gate_up_proj_bias[e] if gate_up_proj_bias is not None else None
-                b_down = down_proj_bias[e] if down_proj_bias is not None else None
+                out = router(hs_sel)
+                if not isinstance(out, (tuple, list)) or len(out) != 2:
+                    return
+                router_scores, router_idx = out
+                if not torch.is_tensor(router_scores) or not torch.is_tensor(router_idx):
+                    return
+                if router_scores.dim() != 2 or int(router_scores.shape[1]) != int(num_experts):
+                    return
+                if router_idx.dim() != 2:
+                    return
+                kk = int(router_idx.shape[1])
+                if kk <= 0:
+                    return
 
-                gate_up = torch.matmul(x, W_gu)
-                if b_gu is not None:
-                    gate_up = gate_up + b_gu
+                router_idx = router_idx.to(torch.int64)
+                topk_w = router_scores.gather(1, router_idx).to(torch.float32)
+                denom = topk_w.sum(dim=-1, keepdim=True).clamp_min(1e-9)
+                topk_w = topk_w / denom
 
-                gate, up = gate_up[..., ::2], gate_up[..., 1::2]
-                gate = gate.clamp(max=limit)
-                up = up.clamp(min=-limit, max=limit)
-                glu = gate * torch.sigmoid(gate * alpha)
-                act = (up + 1) * glu
+                # Build per-expert norm for the selected top-k experts.
+                n_tokens = int(hs_sel.shape[0])
+                expert_ids = router_idx.reshape(-1)
+                token_ids = (
+                    torch.arange(n_tokens, device=expert_ids.device, dtype=torch.int64)
+                    .unsqueeze(1)
+                    .expand(n_tokens, kk)
+                    .reshape(-1)
+                )
+                perm = torch.argsort(expert_ids)
+                expert_ids_sorted = expert_ids[perm]
+                token_ids_sorted = token_ids[perm]
+                w_sorted = topk_w.reshape(-1)[perm]
+                n_sorted = torch.empty_like(w_sorted, dtype=torch.float32)
 
-                out_e = torch.matmul(act, W_down)
-                if b_down is not None:
-                    out_e = out_e + b_down
-                n_sorted[offset : offset + c] = torch.linalg.norm(out_e.float(), dim=-1)
-                offset += c
+                unique_e, counts_e = torch.unique_consecutive(expert_ids_sorted, return_counts=True)
+                offset = 0
+                for e_t, c_t in zip(unique_e.tolist(), counts_e.tolist()):
+                    e = int(e_t)
+                    c = int(c_t)
+                    tok = token_ids_sorted[offset : offset + c]
+                    x = hs_sel.index_select(0, tok)
 
-            norms_flat = torch.empty_like(n_sorted)
-            norms_flat[perm] = n_sorted
-            norms_sel = norms_flat.reshape(n_tokens, kk)
-            flat_e = router_idx.reshape(-1)
-            flat_w = topk_w.reshape(-1)
-            flat_n = norms_sel.reshape(-1)
+                    W_gu = gate_up_proj[e]
+                    W_down = down_proj[e]
+                    b_gu = gate_up_proj_bias[e] if gate_up_proj_bias is not None else None
+                    b_down = down_proj_bias[e] if down_proj_bias is not None else None
 
-            w_rep = w2.unsqueeze(1).expand(n_tokens, kk).reshape(-1).to(torch.float32)
+                    gate_up = torch.matmul(x, W_gu)
+                    if b_gu is not None:
+                        gate_up = gate_up + b_gu
 
-            ones = torch.ones_like(flat_e, dtype=torch.int64)
-            count[layer_idx].index_add_(0, flat_e, ones)
-            gate_sum[layer_idx].index_add_(0, flat_e, flat_w)
-            norm_sum[layer_idx].index_add_(0, flat_e, flat_n)
+                    gate, up = gate_up[..., ::2], gate_up[..., 1::2]
+                    gate = gate.clamp(max=limit)
+                    up = up.clamp(min=-limit, max=limit)
+                    glu = gate * torch.sigmoid(gate * alpha)
+                    act = (up + 1) * glu
 
-            gate_norm = flat_w * flat_n
-            gate_norm_sum[layer_idx].index_add_(0, flat_e, gate_norm)
-            gate_norm_sum_weighted[layer_idx].index_add_(0, flat_e, gate_norm * w_rep)
+                    out_e = torch.matmul(act, W_down)
+                    if b_down is not None:
+                        out_e = out_e + b_down
+                    n_sorted[offset : offset + c] = torch.linalg.norm(out_e.float(), dim=-1)
+                    offset += c
 
-            pos_m = (w_rep > 0).to(torch.float32)
-            neg_m = (w_rep < 0).to(torch.float32)
-            pos_count[layer_idx].index_add_(0, flat_e, pos_m.to(torch.int64))
-            neg_count[layer_idx].index_add_(0, flat_e, neg_m.to(torch.int64))
-            pos_gate_norm_sum[layer_idx].index_add_(0, flat_e, gate_norm * pos_m)
-            neg_gate_norm_sum[layer_idx].index_add_(0, flat_e, gate_norm * neg_m)
+                norms_flat = torch.empty_like(n_sorted)
+                norms_flat[perm] = n_sorted
+                norms_sel = norms_flat.reshape(n_tokens, kk)
+                flat_e = router_idx.reshape(-1)
+                flat_w = topk_w.reshape(-1)
+                flat_n = norms_sel.reshape(-1)
+
+                w_rep = w2.unsqueeze(1).expand(n_tokens, kk).reshape(-1).to(torch.float32)
+
+                ones = torch.ones_like(flat_e, dtype=torch.int64)
+                count[layer_idx].index_add_(0, flat_e, ones)
+                gate_sum[layer_idx].index_add_(0, flat_e, flat_w)
+                norm_sum[layer_idx].index_add_(0, flat_e, flat_n)
+
+                gate_norm = flat_w * flat_n
+                gate_norm_sum[layer_idx].index_add_(0, flat_e, gate_norm)
+                gate_norm_sum_weighted[layer_idx].index_add_(0, flat_e, gate_norm * w_rep)
+
+                pos_m = (w_rep > 0).to(torch.float32)
+                neg_m = (w_rep < 0).to(torch.float32)
+                pos_count[layer_idx].index_add_(0, flat_e, pos_m.to(torch.int64))
+                neg_count[layer_idx].index_add_(0, flat_e, neg_m.to(torch.int64))
+                pos_gate_norm_sum[layer_idx].index_add_(0, flat_e, gate_norm * pos_m)
+                neg_gate_norm_sum[layer_idx].index_add_(0, flat_e, gate_norm * neg_m)
 
         return _hook
 
@@ -2534,67 +2916,111 @@ def profile_20b_eaftreap_saliency(
     t1 = time.time()
     total_tokens_pass2 = 0
     total_kept_tokens_pass2 = 0
+    log_every = 1 if use_pack or int(len(examples)) <= 12 else 25
 
     try:
-        for batch_i, start in enumerate(range(0, len(rows), max(1, int(batch_size))), start=1):
-            batch = rows[start : start + int(batch_size)]
-            texts = [r["text"] for r in batch]
+        for batch_i, start in enumerate(range(0, len(examples), max(1, int(batch_size))), start=1):
+            batch = examples[start : start + int(batch_size)]
+            if len(batch) != 1:
+                raise RuntimeError("EAFT-REAP long-context currently requires batch_size=1.")
 
-            tok = tokenizer(
-                texts,
-                return_tensors="pt",
-                truncation=True,
-                padding=True,
-                max_length=int(max_seq_length),
-                return_offsets_mapping=True,
-            )
-            offsets = tok.pop("offset_mapping")  # CPU
+            if use_pack:
+                ids_full = torch.tensor(batch[0]["input_ids"], dtype=torch.int64, device="cuda").unsqueeze(0)
+                _ = batch[0].get("keep_mask")  # informational; selection comes from sel_flat
+            else:
+                texts = [batch[0]["text"]]
+                tok = tokenizer(
+                    texts,
+                    return_tensors="pt",
+                    truncation=True,
+                    padding=True,
+                    max_length=int(max_seq_length),
+                    return_offsets_mapping=True,
+                )
+                ids_full = tok["input_ids"].to("cuda")
 
-            keep_masks = []
-            for row_i, text in enumerate(texts):
-                spans = _assistant_content_spans(text)
-                keep_masks.append(_token_keep_mask(offsets[row_i].tolist(), spans))
-
-            enc = {k: v.to("cuda") for k, v in tok.items()}
-            attn = enc.get("attention_mask")
-            keep = torch.tensor(keep_masks, dtype=torch.bool, device="cuda")
-            if attn is not None and torch.is_tensor(attn):
-                keep = keep & attn.to(torch.bool)
-
-            bs, seq = keep.shape
-            keep_flat = keep.reshape(-1)
-            sel_flat = torch.nonzero(keep_flat, as_tuple=False).squeeze(-1)
-            if max_tokens and int(sel_flat.numel()) > max_tokens:
-                sel_flat = sel_flat[:max_tokens]
-
+            sel_list = list(batch_samples[batch_i - 1].get("sel_flat") or [])
             ws = weights_by_batch[batch_i - 1]
-            if int(sel_flat.numel()) != len(ws):
+            if len(sel_list) != len(ws):
                 raise RuntimeError(
                     f"EAFT-REAP selection mismatch at batch {batch_i}: "
-                    f"sel={int(sel_flat.numel())} stored={len(ws)}"
+                    f"sel={len(sel_list)} stored={len(ws)}"
                 )
 
-            w_full = torch.zeros((bs, seq), dtype=torch.float32, device="cuda")
-            if int(sel_flat.numel()) > 0:
-                w_full.reshape(-1)[sel_flat] = torch.tensor(ws, dtype=torch.float32, device="cuda")
+            seq = int(ids_full.shape[1])
+            w_by_pos: dict[int, float] = {}
+            for pos, wv in zip(sel_list, ws, strict=True):
+                p = int(pos) % seq
+                w_by_pos[p] = float(wv)
 
-            current_keep_mask["mask"] = keep
-            current_token_weights["weights"] = w_full
-            with torch.inference_mode():
-                _ = model(**enc, use_cache=False, return_dict=False)
+            if flex_full_forward:
+                sel_pos = sorted(w_by_pos.keys())
+                sel_flat = torch.tensor(sel_pos, dtype=torch.int64, device="cuda")
+                w_full = torch.zeros((1, int(seq)), dtype=torch.float32, device="cuda")
+                if sel_pos:
+                    w_full[0, sel_flat] = torch.tensor([w_by_pos[p] for p in sel_pos], dtype=torch.float32, device="cuda")
+                current_keep_mask["mask"] = torch.ones((1, int(seq)), dtype=torch.bool, device="cuda")
+                current_token_weights["weights"] = w_full
+                current_sel_flat["sel"] = sel_flat
+                with torch.inference_mode():
+                    _ = model.model(
+                        input_ids=ids_full,
+                        attention_mask=None,
+                        use_cache=False,
+                        return_dict=True,
+                    )
+                total_tokens_pass2 += int(ids_full.numel())
+                total_kept_tokens_pass2 += int(sel_flat.numel())
+            else:
+                cache: DynamicCache | None = None
+                for chunk_start in range(0, int(seq), int(chunk_size)):
+                    chunk_end = min(int(seq), chunk_start + int(chunk_size))
+                    ids_chunk = ids_full[:, chunk_start:chunk_end]
+                    q_len = int(ids_chunk.shape[1])
 
-            total_tokens_pass2 += int(enc["input_ids"].numel())
-            total_kept_tokens_pass2 += int(keep.sum().item())
-            if batch_i % 25 == 0:
+                    rel_pos = [p - chunk_start for p in w_by_pos.keys() if chunk_start <= p < chunk_end]
+                    if rel_pos:
+                        rel_pos.sort()
+                        sel_flat = torch.tensor(rel_pos, dtype=torch.int64, device="cuda")
+                        w_full = torch.zeros((1, q_len), dtype=torch.float32, device="cuda")
+                        w_full[0, sel_flat] = torch.tensor(
+                            [w_by_pos[p + chunk_start] for p in rel_pos],
+                            dtype=torch.float32,
+                            device="cuda",
+                        )
+                    else:
+                        sel_flat = torch.zeros((0,), dtype=torch.int64, device="cuda")
+                        w_full = torch.zeros((1, q_len), dtype=torch.float32, device="cuda")
+
+                    keep_chunk = torch.ones((1, q_len), dtype=torch.bool, device="cuda")
+                    current_keep_mask["mask"] = keep_chunk
+                    current_token_weights["weights"] = w_full
+                    current_sel_flat["sel"] = sel_flat
+
+                    with torch.inference_mode():
+                        out = model.model(
+                            input_ids=ids_chunk,
+                            attention_mask=None,
+                            past_key_values=cache,
+                            use_cache=True,
+                            return_dict=True,
+                        )
+                    cache = out.past_key_values
+                    total_tokens_pass2 += int(ids_chunk.numel())
+                    total_kept_tokens_pass2 += int(sel_flat.numel())
+
+            if batch_i % int(log_every) == 0:
                 dt_i = max(1e-9, time.time() - t1)
                 print(
-                    f"[*] eaftreap pass2 batches={batch_i} rows={min(len(rows), start+int(batch_size))}/{len(rows)} "
+                    f"[*] eaftreap pass2 batches={batch_i} "
+                    f"{'blocks' if use_pack else 'rows'}={min(len(examples), start+int(batch_size))}/{len(examples)} "
                     f"tok/s={total_tokens_pass2/dt_i:.0f}",
                     flush=True,
                 )
     finally:
         current_keep_mask["mask"] = None
         current_token_weights["weights"] = None
+        current_sel_flat["sel"] = None
         for h in hooks:
             try:
                 h.remove()
@@ -3616,6 +4042,9 @@ def main(
     max_keep_per_layer: int = 32,
     core_pos_top_m: int = 4,
     core_count_top_m: int = 0,
+    reap_row_token_max: int = 8192,
+    reap_max_blocks: int = 0,
+    reap_token_sample_strategy: str = "strided",
 ):
     """
     Pruning-track tasks:
@@ -4911,6 +5340,10 @@ def main(
             w_good=float(eaft_w_good),
             w_uncertain=float(eaft_w_uncertain),
             w_conflict=float(eaft_w_conflict),
+            row_token_max=int(reap_row_token_max),
+            max_blocks=int(reap_max_blocks),
+            seed=int(seed),
+            token_sample_strategy=str(reap_token_sample_strategy),
         )
         math_prof = _invoke(
             profile_20b_eaftreap_saliency,
@@ -4928,6 +5361,10 @@ def main(
             w_good=float(eaft_w_good),
             w_uncertain=float(eaft_w_uncertain),
             w_conflict=float(eaft_w_conflict),
+            row_token_max=int(reap_row_token_max),
+            max_blocks=int(reap_max_blocks),
+            seed=int(seed),
+            token_sample_strategy=str(reap_token_sample_strategy),
         )
 
         general_rank = general_prof["ranking_by_layer"]
@@ -5105,6 +5542,10 @@ def main(
             w_uncertain=float(eaft_w_uncertain),
             w_conflict=float(eaft_w_conflict),
             rows_jsonl_path=str(sample["rows_jsonl_path"]),
+            row_token_max=int(reap_row_token_max),
+            max_blocks=int(reap_max_blocks),
+            seed=int(seed),
+            token_sample_strategy=str(reap_token_sample_strategy),
         )
 
         ranking = prof["ranking_by_layer"]

@@ -77,6 +77,7 @@ def main() -> None:
     anchor_ids = np.load(cache_dir / "anchor_ids.npy", mmap_mode="r")
     target_ids = np.load(cache_dir / "target_ids.npy", mmap_mode="r")
     ctx_feat_u16 = np.load(cache_dir / "context_features_u16.npy", mmap_mode="r")
+    anchor_emb_u16 = np.load(cache_dir / "anchor_embedding_u16.npy", mmap_mode="r")
     ctx_ids = np.asarray(ctx_token_ids[i]).astype(np.int32)
     anchor_id = int(np.asarray(anchor_ids[i]))
     cached_targets = np.asarray(target_ids[i]).astype(np.int32)
@@ -221,6 +222,28 @@ def main() -> None:
         import ml_dtypes
     except Exception:
         ml_dtypes = None  # type: ignore[assignment]
+
+    # Anchor embedding parity: the cache stores the teacher embedding for the
+    # "current token" (anchor). If this drifts, draft proposals will never match.
+    anchor_emb_mae = None
+    anchor_emb_max_abs = None
+    anchor_emb_cos = None
+    try:
+        cached_anchor = jax.lax.bitcast_convert_type(jnp.asarray(anchor_emb_u16[i]).astype(jnp.uint16), jnp.bfloat16)
+        with mesh:
+            online_anchor = teacher.get_embedding()(jnp.asarray([[anchor_id]], dtype=jnp.int32))[:, 0, :]
+            online_anchor = jax.block_until_ready(online_anchor)
+        online_anchor = np.asarray(jax.device_get(online_anchor[0]), dtype=np.float32)
+        cached_anchor = np.asarray(jax.device_get(cached_anchor), dtype=np.float32)
+        diff = online_anchor - cached_anchor
+        anchor_emb_mae = float(np.mean(np.abs(diff)))
+        anchor_emb_max_abs = float(np.max(np.abs(diff)))
+        denom = (np.linalg.norm(online_anchor) * np.linalg.norm(cached_anchor)) + 1e-12
+        anchor_emb_cos = float(np.dot(online_anchor, cached_anchor) / denom)
+    except Exception:
+        anchor_emb_mae = None
+        anchor_emb_max_abs = None
+        anchor_emb_cos = None
 
     sel_idx = [
         0,
@@ -611,6 +634,9 @@ def main() -> None:
                     cached_targets.shape[0] == (int(args.block_size) - 1)
                     and np.all(cached_targets == greedy_block[: int(args.block_size) - 1])
                 ),
+                "anchor_emb_mae": anchor_emb_mae,
+                "anchor_emb_max_abs": anchor_emb_max_abs,
+                "anchor_emb_cos": anchor_emb_cos,
                 "prefill_ctx_feat_sel_idx": sel_idx,
                 "prefill_ctx_feat_sel_mae": ctx_feat_sel_mae,
                 "prefill_ctx_feat_sel_max_abs": ctx_feat_sel_max_abs,

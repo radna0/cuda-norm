@@ -69,7 +69,7 @@ fi
         # Avoid pkill/pgrep patterns which can kill the cleanup command itself
         # (because the pattern appears in the current process cmdline). Instead,
         # find target PIDs via `ps` and kill explicitly, excluding our own PID.
-        remote_script += r"""
+        remote_script += "\n" + r"""
 echo "[cleanup] aggressive: killing leaked Versa modal_run python processes..."
 python - <<'PY'
 import os
@@ -109,14 +109,14 @@ for pid in targets:
     except Exception:
         pass
 PY
-"""
+""".strip()
 
-    remote_script += r"""
+    remote_script += "\n" + r"""
 sleep 2
 echo "[cleanup] after"
 nvidia-smi || true
 pulse_ps
-""".strip()
+""".strip() + "\n"
 
     cmd = [
         sys.executable,

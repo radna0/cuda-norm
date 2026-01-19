@@ -184,8 +184,8 @@ bash -lc "
     --bootstrap-cmd \"python -m pip install -U pip\" \
     --bootstrap-cmd \"python -m pip install -q modal datasets transformers==4.56.2 tokenizers safetensors pyarrow pandas accelerate huggingface-hub hf_transfer\" \
     --bootstrap-cmd \"python -m pip uninstall -y torchvision || true\" \
-    --bootstrap-cmd \"python -m pip install -q triton==${TRITON_VERSION} kernels==${KERNELS_VERSION}\" \
-    --bootstrap-cmd \"python -c \\\"import triton, kernels; ver=tuple(int(x) for x in triton.__version__.split('.')[:2]); assert ver >= (3,4), f'triton too old: {triton.__version__}'; print('[bootstrap] triton', triton.__version__, 'kernels OK')\\\"\" \
+    --bootstrap-cmd \"python -m pip install -q triton==${TRITON_VERSION}\" \
+    --bootstrap-cmd \"python -m pip uninstall -y kernels || true\" \
     --bootstrap-cmd \"python -c 'import torch; print(torch.__version__)' || python -m pip install -q torch --index-url ${TORCH_INDEX_URL}\" \
     --env-file \"${ENV_TMP}\" \
     --env \"PYTHONFAULTHANDLER=1\" \
@@ -198,6 +198,10 @@ bash -lc "
     --env \"PRUNING_HF_HOME=/kaggle/working/pruning_cache/hf_cache\" \
     --env \"PRUNING_ARTIFACTS_DIR=/kaggle/working/artifacts/harmony_cuda_norm\" \
     --env \"PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True\" \
+    ${EAFT_ATTN_IMPL:+--env \"EAFT_ATTN_IMPL=${EAFT_ATTN_IMPL}\"} \
+    ${EAFT_CHUNK_SIZE:+--env \"EAFT_CHUNK_SIZE=${EAFT_CHUNK_SIZE}\"} \
+    ${REAP_MAX_TOKENS_PER_BATCH:+--env \"REAP_MAX_TOKENS_PER_BATCH=${REAP_MAX_TOKENS_PER_BATCH}\"} \
+    ${REAP_TOKEN_CHUNK_SIZE:+--env \"REAP_TOKEN_CHUNK_SIZE=${REAP_TOKEN_CHUNK_SIZE}\"} \
     --env \"MODEL_DIR_20B=/kaggle/input/gpt-oss-20b/transformers/default/1\" \
     modal/gpt_oss_pruning_track.py::main -- \
       --task \"${TASK}\" \

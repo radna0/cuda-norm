@@ -25,6 +25,7 @@ TS="$(date +%Y%m%d_%H%M%S)"
 RUN_NAME="${RUN_NAME:-sglang_jax_dflash_vs_base_${TS}}"
 SKIP_BASELINE="${SKIP_BASELINE:-0}"
 SKIP_DFLASH="${SKIP_DFLASH:-0}"
+TPU_LOCK_PATH="${TPU_LOCK_PATH:-/dev/shm/tpu.lock}"
 
 MODEL_PATH="${MODEL_PATH:-}"
 DRAFT_PATH="${DRAFT_PATH:-}"
@@ -38,6 +39,14 @@ SEED="${SEED:-1}"
 MEM_FRACTION_STATIC="${MEM_FRACTION_STATIC:-0.70}"
 CONTEXT_LENGTH="${CONTEXT_LENGTH:-4096}"
 MAX_TOTAL_TOKENS="${MAX_TOTAL_TOKENS:-}"
+MAX_RUNNING_REQUESTS="${MAX_RUNNING_REQUESTS:-}"
+MAX_SEQ_LEN="${MAX_SEQ_LEN:-}"
+CHUNKED_PREFILL_SIZE="${CHUNKED_PREFILL_SIZE:-}"
+
+# Optional: override JAX precompile buckets to avoid huge compile/OOM during
+# speculative decoding. Space- or comma-separated lists.
+PRECOMPILE_BS_PADDINGS="${PRECOMPILE_BS_PADDINGS:-}"
+PRECOMPILE_TOKEN_PADDINGS="${PRECOMPILE_TOKEN_PADDINGS:-}"
 
 # TPU-first default (override if needed).
 export JAX_PLATFORMS="${JAX_PLATFORMS:-tpu}"
@@ -73,6 +82,12 @@ if [[ -z "${SGLJAX_PY}" ]]; then
   SGLJAX_PY="python"
 fi
 
+# Serialize TPU work across all launchers on this machine. We intentionally hold
+# the lock for the whole script so baseline and DFLASH runs cannot interleave
+# with other TPU jobs (which would trigger recompiles + OOM + confusing metrics).
+exec 9>"${TPU_LOCK_PATH}"
+flock -x 9
+
 COMMON_ARGS=(
   --model-path "${MODEL_PATH}"
   --tokenizer-path "${MODEL_PATH}"
@@ -81,6 +96,8 @@ COMMON_ARGS=(
   --page-size 1
   --mem-fraction-static "${MEM_FRACTION_STATIC}"
   --context-length "${CONTEXT_LENGTH}"
+  ${MAX_SEQ_LEN:+--max-seq-len} ${MAX_SEQ_LEN:+"${MAX_SEQ_LEN}"}
+  ${CHUNKED_PREFILL_SIZE:+--chunked-prefill-size} ${CHUNKED_PREFILL_SIZE:+"${CHUNKED_PREFILL_SIZE}"}
   --disable-overlap-schedule
   --skip-server-warmup
   --dataset-name random
@@ -91,6 +108,26 @@ COMMON_ARGS=(
 )
 if [[ -n "${MAX_TOTAL_TOKENS}" ]]; then
   COMMON_ARGS+=(--max-total-tokens "${MAX_TOTAL_TOKENS}")
+fi
+if [[ -n "${MAX_RUNNING_REQUESTS}" ]]; then
+  COMMON_ARGS+=(--max-running-requests "${MAX_RUNNING_REQUESTS}")
+fi
+
+_split_list() {
+  local s="${1}"
+  s="${s//,/ }"
+  # shellcheck disable=SC2206
+  echo ${s}
+}
+if [[ -n "${PRECOMPILE_BS_PADDINGS}" ]]; then
+  # shellcheck disable=SC2207
+  BS_LIST=($(_split_list "${PRECOMPILE_BS_PADDINGS}"))
+  COMMON_ARGS+=(--precompile-bs-paddings "${BS_LIST[@]}")
+fi
+if [[ -n "${PRECOMPILE_TOKEN_PADDINGS}" ]]; then
+  # shellcheck disable=SC2207
+  TOK_LIST=($(_split_list "${PRECOMPILE_TOKEN_PADDINGS}"))
+  COMMON_ARGS+=(--precompile-token-paddings "${TOK_LIST[@]}")
 fi
 
 if [[ "${SKIP_BASELINE}" != "1" ]]; then

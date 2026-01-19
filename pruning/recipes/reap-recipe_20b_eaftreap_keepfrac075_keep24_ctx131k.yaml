@@ -1,0 +1,75 @@
+schema_version: 1
+kind: reap_recipe
+
+name: eaftreap_gptoss20b_keepfrac075_keep24_ctx131k
+description: >
+  EAFT‑REAP structural prune recipe for GPT‑OSS‑20B at keep_frac=0.75
+  (uniform keep_n=24/32), calibrated on true max-context packed blocks
+  (131072 tokens). No finetune; top_k unchanged (=4).
+
+model:
+  base_model_id: openai/gpt-oss-20b
+  pruned_model_label: calib_union_keep24of32_k75_eaftreap_ctx131k
+  keep_frac_requested: 0.75
+  keep_n: 24
+  num_experts: 32
+  uniform_keep_n_across_layers: true
+  top_k_unchanged: true
+  notes:
+    - "GPT‑OSS requires uniform keep_n across all MoE layers."
+    - "This recipe calibrates on packed 131072-token blocks (concat rows + EOS, then chunk)."
+
+scoring:
+  method: eaftreap
+  top_k: 4
+  entropy_topk: 20
+  cc_quantile: 0.15
+  uncertain_quantile: 0.85
+  weights:
+    w_good: 1.0
+    w_uncertain: 0.25
+    w_conflict: -2.0
+  score_key: eaft_gate_norm_sum
+
+profiling_data:
+  dataset_repo: radna0/harmony-qwen3-calib-packs-v2-20260113
+  pack_files:
+    - packs/reasoning_style_10k_v2/reasoning_style_10k_v2.parquet
+    - tool_agentic_10k_v6.parquet
+    - packs/calib_prompt_10000_v2/calib_prompt_10000_v2.parquet
+  sampling:
+    strategy: per_file
+    num_rows: 2000
+    seed: 3407
+  packing:
+    enabled: true
+    block_size: 131072
+    row_token_max: 8192
+    require_full_blocks: true
+    max_blocks: 0 # 0 = no limit (all full blocks formed from the sampled rows)
+  token_sampling:
+    reap_max_tokens_per_batch_default_if_ctx_ge_64k: 4096
+    strategy: strided # deterministic, avoids "first-128 token" bias
+
+selection_constraints:
+  keep_n_multiple_of: 4
+  core_experts:
+    core_pos_top_m: 4
+    core_count_top_m: 0
+
+structural_rewrite:
+  writer: safetensors
+  max_shard_size_gb: 5.0
+  mapping_file_in_model_dir: expert_mapping.json
+
+execution:
+  kaggle_versa:
+    commands:
+      - >-
+        bash harmony/cuda-norm/scripts/versa_run_pruning_track_kaggle.sh
+        --task build_pruned_20b_eaftreap_keepfrac
+        --keep-fracs-csv 0.75
+        --min-keep-per-layer 24 --max-keep-per-layer 24
+        --num-rows 2000 --max-seq-length 131072 --batch-size 1
+        --core-pos-top-m 4 --core-count-top-m 0
+
